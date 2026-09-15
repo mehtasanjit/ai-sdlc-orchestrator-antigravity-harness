@@ -1,0 +1,144 @@
+# WIRING-PROOF variant of antigravity-flash38-plus-opus5.yaml: identical routing,
+# with Claude Haiku 4.5 in the judgment slot and a 5 USD cap. Use it to prove
+# the agy -> bridge -> claude-cli -> Anthropic path end to end before spending
+# Opus money on it. Not a study policy: nothing measured under it is comparable
+# to an Opus 5 run.
+#
+# Haiku 4.5 rejects the effort parameter, so the entry carries no reasoning
+# block and the claude-cli adapter passes no --effort for it.
+version: 1
+name: antigravity-flash38-plus-haiku45
+
+# The driver pin. agy is the conductor; it authors no shipped content and is
+# never dispatched through the bridge, so it is not a `models:` entry (preflight
+# would try to build an adapter for it). plugin/agy/run.mjs reads this block,
+# asserts it against the invocation it is about to make, and the event reader
+# prices the driver's own turns from `pricing` as `provenance: "modeled"`.
+# Pinned in docs/verification/p1-agy-runtime.md ("Pins chosen"). Fallback if
+# Flash cannot conduct, decided once: gemini-3.1-pro at high.
+driver:
+  runtime: agy
+  model_name: gemini-3.8-flash
+  # agy bakes effort into the slug (`gemini-3.8-flash-high`); the launcher
+  # derives the slug from these two fields and passes no separate --effort.
+  reasoning: { effort: high }
+  # Gemini 3.8 Flash introductory card, 2 Sep – 31 Dec 2026 (see prices.ts).
+  # Thinking tokens bill at the output rate; cache_read at input_cached.
+  pricing: { input: 0.75, input_cached: 0.075, output: 3.75 }
+  pricing_source: https://ai.google.dev/gemini-api/docs/pricing
+  pricing_last_verified: 2026-09-14
+  # seat: Google-account quota, cost is modeled and labeled so.
+  # gemini-api-key: metered on GEMINI_API_KEY via modelProvider=gemini.
+  billing_mode: seat
+
+models:
+  - id: opus
+    adapter: claude-cli
+    model_name: claude-haiku-4-5
+    # Haiku 4.5 list card: input 1.00 / cached 0.10 / output 5.00 per 1M (prices.ts).
+    pricing: { input: 1.00, input_cached: 0.10, output: 5.00 }
+    pricing_source: https://platform.claude.com/docs/en/about-claude/pricing
+    pricing_last_verified: 2026-09-14
+    max_output_tokens_absolute: 32000
+
+  # Gemini 3.8 Flash as a MODEL. One completion call per packet. Works on
+  # GEMINI_API_KEY (AI Studio) or, unset, Vertex ADC at the same rates.
+  - id: flash-completion
+    adapter: mcp:model-dispatch
+    model_name: gemini-3.8-flash
+    display_name: gemini-3.8-flash
+    # Gemini 3.8 Flash introductory card, in force 2 Sep 2026 – 31 Dec 2026. From
+    # 1 Jan 2027 the price list bills 1.50 / 0.15 / 7.50; test/prices.test.mjs
+    # fails until this block is changed to match.
+    pricing: { input: 0.75, input_cached: 0.075, output: 3.75 }
+    pricing_source: https://ai.google.dev/gemini-api/docs/pricing (AI Studio + Vertex global); https://cloud.google.com/vertex-ai/generative-ai/pricing (regional +10%)
+    pricing_last_verified: 2026-09-14
+    auth: { env: GEMINI_API_KEY }
+    max_output_tokens_absolute: 8192
+
+  # The SAME model reached as an AGENT (Antigravity SDK session). Vertex ADC
+  # only — no API-key door — so it cannot run while the GCP project is
+  # suspended. Carried so the slot below keeps both doors selectable.
+  - id: flash-agsdk-worker
+    adapter: antigravity-worker
+    model_name: gemini-3.8-flash
+    display_name: gemini-3.8-flash (Antigravity agent)
+    pricing: { input: 0.75, input_cached: 0.075, output: 3.75 }
+    pricing_source: https://ai.google.dev/gemini-api/docs/pricing (AI Studio + Vertex global); https://cloud.google.com/vertex-ai/generative-ai/pricing (regional +10%)
+    pricing_last_verified: 2026-09-14
+    worker_timeout_sec: 540
+
+select:
+  gemini-flash:
+    default: flash-completion
+    options:
+      - flash-completion
+      - flash-agsdk-worker
+    reason: "How the mechanical tier reaches Gemini 3.8: one completion call (cheap, predictable) or an agent session with tools and a workspace (costlier per packet, does its own reading and editing). Pick one per study and pin it."
+
+rules:
+  - when: { phase: requirements_analysis }
+    use: opus
+    reason: "Judgment-heavy, low volume"
+  - when: { phase: architecture_design }
+    use: opus
+    reason: "Foundational, decision-bearing"
+  - when: { phase: plan_task_packets }
+    use: opus
+    reason: "Needs full context to slice work cleanly"
+  - when: { phase: senior_code_review }
+    use: opus
+    reason: "Cross-file reasoning + judgment"
+  - when: { phase: security_review }
+    use: opus
+    reason: "Risk-bearing, low volume"
+
+  # Brownfield-mode phases — both premium.
+  - when: { phase: discovery }
+    use: opus
+    reason: "Judgment: understanding an unknown repo is high-stakes"
+  - when: { phase: change_plan }
+    use: opus
+    reason: "Judgment: delta design for feature-extend / refactor / deps"
+
+  - when:
+      phase: codegen
+      task_type:
+        - controller_handler
+        - service_method
+        - dto
+        - module_wiring
+        - migration
+        - seed_data
+        - entity
+        - guard
+        - interceptor
+        - filter
+        - react_component
+        - react_page
+        - api_client
+        - frontend_util
+        - frontend_config
+        - frontend_html
+    use: gemini-flash
+    reason: "Schema-driven boilerplate"
+  - when: { phase: tests }
+    use: gemini-flash
+    reason: "Scaffold-heavy, pattern-based"
+  - when: { phase: docs }
+    use: gemini-flash
+    reason: "Volume work"
+
+  # Escalate to Opus after 2 mechanical-tier retries.
+  - when: { phase: debug, retry_count: { gte: 2 } }
+    use: opus
+    reason: "Escalation: 2 mechanical-tier attempts failed"
+  - when: { phase: debug }
+    use: gemini-flash
+    reason: "Most debugs have clear cause"
+
+  - default: opus
+    reason: "Unrecognized task — fail safe to premium"
+
+# Hard per-run cost cap.
+hard_cost_cap_usd: 5

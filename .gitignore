@@ -1,0 +1,28 @@
+# Node
+node_modules/
+npm-debug.log*
+
+# Environment
+.env
+.env.local
+.env.*.local
+
+# Build output for the bundled MCP server
+plugin/mcp/model-dispatch/dist/
+
+# Run outputs. Greenfield/brownfield runs write to ./src and ./.sdlc in
+# whatever directory they were started from.
+/src/
+/.sdlc/
+examples/*/passes/*/
+
+# Per-run agy customization roots that run.mjs materialises with secrets
+# inlined when ${VAR} interpolation is unavailable (p1-agy-runtime.md check 5).
+.agents/run-*/
+
+# OS / editor
+.DS_Store
+Thumbs.db
+*.swp
+.idea/
+.vscode/

@@ -1,0 +1,11 @@
+{
+  "$schema": "https://antigravity.google/schemas/v1/plugin.json",
+  "name": "mmo",
+  "version": "0.1.0",
+  "description": "Multi-model AI-SDLC pipeline for the Antigravity CLI: Gemini conductor, Opus 5 judgment via the Claude Agent SDK, Gemini Flash mechanical tier, with per-phase cost attribution.",
+  "author": { "name": "Tilicho Labs" },
+  "license": "MIT",
+  "homepage": "https://github.com/tl-ai-labs/ai-sdlc-orchestrator-antigravity-harness",
+  "repository": "https://github.com/tl-ai-labs/ai-sdlc-orchestrator-antigravity-harness",
+  "keywords": ["sdlc", "multi-model", "orchestration", "antigravity", "agy", "cost-attribution"]
+}
