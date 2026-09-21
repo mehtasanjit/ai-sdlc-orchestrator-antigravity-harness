@@ -24,6 +24,8 @@ skill](../plugin/skills/greenfield/SKILL.md).
 ## The 20-second version
 
 Type `/mmo:brownfield` in a session opened in your project directory. Six steps run in order.
+Type the job after it — `/mmo:brownfield add per-lane WIP limit to Board` — and step 4 proposes
+the job type from the wording and asks you to confirm it before the interview.
 Already know the job type? Seven aliases skip step 4's job-type question — `/mmo:bugfix`,
 `/mmo:docs`, `/mmo:feature-extend`, `/mmo:feature-new`, `/mmo:refactor`, `/mmo:test`,
 `/mmo:deps` — each optionally taking the task description as free text, e.g.
@@ -35,7 +37,7 @@ re-confirms scope either way; these are shortcuts into the same manual, not a se
 | 1 | Session-hydrate | Shows prior runs, checks for resume state. |
 | 2 | Pipeline pre-check | First time in this repo (or when the baseline is stale) — six offline smoke checks: Node, git, tests, credentials, MCP server build, policy pick. |
 | 3 | Discovery | Reads the repo. Tier 1 (~10s) for shipped stacks; Tier 2b adaptive when the stack is custom. |
-| 4 | Intent brief interview | Pick one of the seven job types and describe the task. Or supply a pre-written brief. |
+| 4 | Intent brief interview | Pick one of the seven job types — proposed from your wording when you typed the job after the command — and describe the task. Or supply a pre-written brief. |
 | 5 | Gate 0 | One confirmation screen: stack, test command, off-limits, intent, scope. |
 | 6 | Pipeline | Requirements → (architecture) → packet plan → execute → review → tests → security → report. |
 

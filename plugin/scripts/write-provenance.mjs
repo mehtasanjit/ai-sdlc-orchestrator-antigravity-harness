@@ -4,7 +4,7 @@
  *
  * The orchestrator calls this around every Write/Edit in a brownfield run so the
  * revert command can restore the pre-run state. Schema matches the reader in
- * plugin/commands/revert.md — never drift.
+ * plugin/skills/revert/SKILL.md — never drift.
  *
  * Contract:
  *   --init      — start a fresh provenance.json for a run (captures git_head_before)

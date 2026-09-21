@@ -24,6 +24,10 @@
  *                [--resume=<conversation-id>] [--max-turns=<n>] \
  *                [--agy-bin=<path>] [--prompt-file=<path>] [--print-timeout=6h] \
  *                [--inline-env] [--keep-run-root] [--allow-unverified-pin] [--dry-run]
+ *
+ * --seed without --intent on a brownfield run resolves the job type at launch
+ * (scripts/infer-intent.mjs) and records it as inferred; an ambiguous seed
+ * refuses to launch rather than leave the choice to the model.
  */
 
 import { copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
@@ -36,6 +40,7 @@ import { conversationIdFrom, modeledDriverCostEvents, parseEventStream } from ".
 import { assertPinnedInvocation, driverSlug, findPinRejection, pendingPinChecks, readPin } from "./telemetry/fairnessPin.mjs";
 import { defaultRunRoot, materialiseRunRoot, removeRunRoot } from "./runRoot.mjs";
 import { buildHarnessManifest, agyVersion } from "./manifest.mjs";
+import { inferIntent } from "../scripts/infer-intent.mjs";
 
 const AGY_DIR = dirname(fileURLToPath(import.meta.url));
 export const PLUGIN_ROOT = dirname(AGY_DIR);
@@ -96,10 +101,11 @@ export function validIntents(pluginRoot = PLUGIN_ROOT) {
   return (Array.isArray(raw) ? raw : (raw.intents ?? [])).map((i) => i.id);
 }
 
-export function renderHandover({ mode, intent, seed } = {}) {
+export function renderHandover({ mode, intent, seed, intentSource } = {}) {
   const lines = [];
   if (mode) lines.push(`mode: ${mode}`);
   if (intent) lines.push(`intent: ${intent}`);
+  if (intent && intentSource === "inferred") lines.push("intent_source: inferred");
   if (seed) lines.push(`seed_description: ${String(seed).replace(/\s+/g, " ").trim()}`);
   if (lines.length === 0) return "";
   return [
@@ -274,6 +280,17 @@ async function main(args) {
     if (!allowed.includes(intent)) throw new Error(`run: --intent=${intent} is not one of ${allowed.join(", ")}.`);
     if (mode === "greenfield") throw new Error("run: --intent applies to brownfield runs; --mode=greenfield takes none.");
   }
+  let resolvedIntent = intent ?? null;
+  let intentSource = intent ? "flag" : null;
+  if (!intent && args.seed && mode === "brownfield") {
+    const inferred = inferIntent(String(args.seed));
+    if (!inferred.intent) {
+      const why = inferred.candidates.length ? `candidates: ${inferred.candidates.map((c) => c.id).join(", ")}` : "no cue matched";
+      throw new Error(`run: --seed did not resolve to one job type (${why}); pass --intent=<${validIntents().join("|")}>.`);
+    }
+    resolvedIntent = inferred.intent;
+    intentSource = "inferred";
+  }
   const maxTurns = Number(args["max-turns"] ?? DEFAULT_MAX_TURNS);
   if (!Number.isInteger(maxTurns) || maxTurns < 1) {
     throw new Error(`run: --max-turns=${args["max-turns"]} must be a positive integer.`);
@@ -289,7 +306,7 @@ async function main(args) {
     POLICY: policyName,
     RUN_ID: runId,
     GATE_INSTRUCTION: GATE_MODES[gateMode],
-    HANDOVER: renderHandover({ mode, intent, seed: args.seed }),
+    HANDOVER: renderHandover({ mode, intent: resolvedIntent, seed: args.seed, intentSource }),
   };
   const promptText = renderPrompt(readFileSync(promptPath, "utf-8"), renderValues);
 
@@ -312,6 +329,8 @@ async function main(args) {
           policy: policyName,
           pin: { ...pin, slug, verified: pinVerified, pending_checks: pending },
           run_id: runId,
+          mode: mode ?? null,
+          intent: resolvedIntent ? { resolved: resolvedIntent, source: intentSource } : null,
           output_dir: outputDir,
           cwd,
           inline_env: inlineEnv,
@@ -390,6 +409,8 @@ async function main(args) {
       run_id: runId,
       policy: policyName,
       gates: gateMode,
+      mode: mode ?? null,
+      intent: resolvedIntent ? { resolved: resolvedIntent, source: intentSource } : null,
       pin: { model: pin.model, effort: pin.effort, slug, billing_mode: pin.billing_mode, verified: pinVerified, pending_checks: pending },
       conversation_id: conversationId,
       started_at: started,

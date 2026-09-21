@@ -1,6 +1,6 @@
 ---
 name: brownfield-guide
-description: "The shared seven-step brownfield operating manual. Every brownfield entry point — `/mmo:brownfield` and the seven per-job commands (`/mmo:bugfix`, `/mmo:docs`, `/mmo:test`, `/mmo:refactor`, `/mmo:deps`, `/mmo:feature-new`, `/mmo:feature-extend`) — points here. Step 4 branches on an optional handover the invoking command supplies: intent (job type already chosen) and seed_description (the user's own words for the job)."
+description: "The shared seven-step brownfield operating manual. Every brownfield entry point — `/mmo:brownfield` and the seven per-job commands (`/mmo:bugfix`, `/mmo:docs`, `/mmo:test`, `/mmo:refactor`, `/mmo:deps`, `/mmo:feature-new`, `/mmo:feature-extend`) — points here. Step 4 branches on an optional handover the invoking command supplies: intent (job type already chosen), seed_description (the user's own words for the job), and intent_from_seed (propose the job type from seed_description)."
 ---
 
 You are the conductor, following this operating manual. Work through the steps in order. Do not skip
@@ -19,8 +19,15 @@ setup is one-time per machine and happens separately.
 - `seed_description:` present and non-empty — the user's own words for the job, typed after the
   command. Step 4b treats this as the answer to the interview's first question and asks only the
   remaining ones.
-- Neither present (the plain ``/mmo:brownfield`` case) — step 4 runs exactly as written below: ask
-  which job type, then run the full interview.
+- `intent_from_seed: true` with a non-empty `seed_description` (the ``/mmo:brownfield <text>``
+  case) — propose the job type from the wording at step 4a, confirm it with one question, then
+  continue as if `intent: <id>` had been supplied. With an empty `seed_description` this line
+  is inert.
+- `intent_source: inferred` next to `intent: <id>` (headless launches only) — the launcher
+  already ran step 4a's inference on `seed_description`. Treat `intent` as chosen; say on Gate
+  0's Intent line that it was proposed from the wording.
+- Neither `intent` nor a usable `intent_from_seed` (the plain ``/mmo:brownfield`` case) — step
+  4 runs exactly as written below: ask which job type, then run the full interview.
 
 ---
 
@@ -118,7 +125,25 @@ Two things to collect from the user. Both go into `.sdlc/runs/<run-id>/intent_br
 - **Handover carries `intent: <id>`** — already chosen. Skip the question; read `title`,
   `summary`, and `interview` for `<id>` from
   [plugin/config/intents.json](/plugin/config/intents.json) and continue to step 4b.
-- **No handover** — ask which job type. Show the seven options with one-line examples, drawn
+- **Handover carries `intent_from_seed: true` and a non-empty `seed_description`** — propose
+  the job type before asking for it. Run:
+
+  ```bash
+  node "${MMO_PLUGIN_ROOT}/scripts/infer-intent.mjs" --json "<seed_description>"
+  ```
+
+  Read `intent` from the JSON. When it is an id, read that intent's `title` and `summary` from
+  `intents.json` and ask one question:
+
+  > This reads as a **<title>** job — <summary> Right? (`yes` / name another: docs, bugfix,
+  > feature-extend, feature-new, refactor, test, deps)
+
+  `yes` takes the proposal; a named id takes that instead. On an unattended run (gates set to
+  auto-approve) take the proposal without asking and record that in the gate log. When
+  `intent` is null, say why — the `candidates` that collided, or that nothing matched — and
+  fall through to the seven-option question below. Either way, continue to step 4b with
+  `seed_description` as the first answer.
+- **Neither** — ask which job type. Show the seven options with one-line examples, drawn
   from `intents.json`'s `title` and `example` fields, so the choice is meaningful:
 
   - `docs` — write API docs, README, ADRs, docstrings for the auth module
@@ -267,4 +292,4 @@ Do not propose a follow-up run.
 --refresh-profile                              (force stack-profile re-scan)
 ```
 
-See [plugin/commands/pass.md](/plugin/commands/pass.md) for the full flag contract.
+See [plugin/skills/pass/SKILL.md](/plugin/skills/pass/SKILL.md) for the full flag contract.

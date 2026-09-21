@@ -218,7 +218,7 @@ Fifteen skills, split by purpose. All are declared under [plugin/skills/](plugin
 | Skill | What it does | When to use it |
 |---|---|---|
 | [`/mmo:greenfield`](plugin/skills/greenfield/SKILL.md) | Runs the greenfield pipeline. Interviews you for the brief (or reads one you point at), confirms the output path, shows the routing plan, then starts spending. Takes no arguments. | Empty folder + a project brief. Generates a whole new app into `./src/`. |
-| [`/mmo:brownfield`](plugin/skills/brownfield/SKILL.md) | Runs the brownfield pipeline. Hydrates prior state, runs discovery (or resumes), asks for the intent and brief, freezes scope at Gate 0, then executes. Takes no arguments. | Existing repo. Extends the code you already have. |
+| [`/mmo:brownfield`](plugin/skills/brownfield/SKILL.md) | Runs the brownfield pipeline. Hydrates prior state, runs discovery (or resumes), asks for the intent and brief, freezes scope at Gate 0, then executes. Optional free text describes the job — `/mmo:brownfield add per-lane WIP limit to Board` — and the job type is proposed from the wording, confirmed by you before the interview and again at Gate 0. | Existing repo. Extends the code you already have. |
 | [`/mmo:pass`](plugin/skills/pass/SKILL.md) | Headless twin of the above. Every setting a flag: `--auth=vendor` (the only value this runtime accepts), `--policy`, `--study`, `--run-id`, `--mode=greenfield\|brownfield`, `--intent`, `--gates`, and more. | CI, scripted replays, batch runs. Measured runs use [plugin/agy/run.mjs](plugin/agy/run.mjs), which wraps the same pipeline in the pinned `agy` invocation. |
 
 ### Run a specific brownfield job
@@ -235,7 +235,7 @@ Seven aliases into `/mmo:brownfield`, each with the job type pre-selected — on
 | [`/mmo:test`](plugin/skills/test/SKILL.md) | `test` | backfill unit tests for src/payments to reach 80% line coverage |
 | [`/mmo:deps`](plugin/skills/deps/SKILL.md) | `deps` | upgrade jest 28 → 29 (and adapt breaking changes) |
 
-These and `pass` start a full billable run; invoke them, never expect them to fire from a matching phrase.
+These and `pass` start a full billable run; invoke them, never expect them to fire from a matching phrase. `/mmo:brownfield <text>` does the same without naming the job type; the aliases skip the proposal step.
 
 ### Setup and configuration
 

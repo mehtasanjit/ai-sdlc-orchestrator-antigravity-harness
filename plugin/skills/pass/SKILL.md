@@ -94,7 +94,7 @@ flags:
 - The pipeline pre-check (§7.4) must have passed or been skipped-with-user-consent for this
   run's inputs.
 
-See [plugin/commands/brownfield.md](brownfield.md) for the interactive equivalent
+See [plugin/skills/brownfield/SKILL.md](../brownfield/SKILL.md) for the interactive equivalent
 of these flags (the 7-step operating manual Claude follows in the interactive flow).
 
 Begin now.

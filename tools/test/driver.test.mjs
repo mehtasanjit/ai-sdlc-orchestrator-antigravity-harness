@@ -191,6 +191,16 @@ test("renderHandover emits nothing when no job was supplied, and the keys the gu
   assert.match(block, /^seed_description: line one line two$/m);
 });
 
+test("renderHandover marks an inferred intent, and only an inferred one", () => {
+  const inferred = renderHandover({ mode: "brownfield", intent: "docs", seed: "x", intentSource: "inferred" });
+  assert.match(inferred, /^intent: docs$/m);
+  assert.match(inferred, /^intent_source: inferred$/m);
+  for (const intentSource of ["flag", undefined]) {
+    const block = renderHandover({ mode: "brownfield", intent: "docs", seed: "x", intentSource });
+    assert.ok(!/intent_source/.test(block), `intentSource=${intentSource} must not mark the handover`);
+  }
+});
+
 test("an empty handover leaves no stray placeholder in the rendered prompt", () => {
   const template = readFileSync(join(ROOT, "plugin", "agy", "prompts", "conductor.md"), "utf8");
   assert.match(template, /\{\{HANDOVER\}\}/);
@@ -271,6 +281,56 @@ test("run.mjs --dry-run prints the pinned invocation without spawning agy, secre
     assert.equal(out.env_present.ANTHROPIC_API_KEY, true);
     assert.ok(!r.stdout.includes("should-not-print"));
     assert.ok(!existsSync(join(dir, "out")), "a dry run writes nothing");
+  } finally { cleanup(dir); }
+});
+
+function dryRun(dir, ...flags) {
+  return spawnSync(process.execPath, [RUN, "--dry-run", `--project-root=${dir}`, `--output-dir=${join(dir, "out")}`, "--run-id=t", ...flags], { encoding: "utf8" });
+}
+
+test("a brownfield --seed with no --intent resolves the job type at launch and records how", () => {
+  const dir = tmp();
+  try {
+    writeFileSync(join(dir, "brief.md"), "# brief\n");
+    const r = dryRun(dir, "--mode=brownfield", '--seed=add README section "Board features" documenting the WIP limit');
+    assert.equal(r.status, 0, r.stderr);
+    const out = JSON.parse(r.stdout);
+    assert.equal(out.mode, "brownfield");
+    assert.deepEqual(out.intent, { resolved: "docs", source: "inferred" });
+  } finally { cleanup(dir); }
+});
+
+test("an explicit --intent is recorded as the flag, even beside a seed that reads differently", () => {
+  const dir = tmp();
+  try {
+    writeFileSync(join(dir, "brief.md"), "# brief\n");
+    const r = dryRun(dir, "--mode=brownfield", "--intent=bugfix", "--seed=extract LaneHeader component from Lane");
+    assert.equal(r.status, 0, r.stderr);
+    assert.deepEqual(JSON.parse(r.stdout).intent, { resolved: "bugfix", source: "flag" });
+  } finally { cleanup(dir); }
+});
+
+test("an ambiguous seed refuses to launch and names the colliding job types", () => {
+  const dir = tmp();
+  try {
+    writeFileSync(join(dir, "brief.md"), "# brief\n");
+    const r = dryRun(dir, "--mode=brownfield", "--seed=fix the 500 and add a regression test");
+    assert.equal(r.status, 1);
+    assert.match(r.stderr, /did not resolve to one job type/);
+    assert.match(r.stderr, /candidates: bugfix, test/);
+    assert.match(r.stderr, /--intent=</);
+  } finally { cleanup(dir); }
+});
+
+test("a seed on a greenfield run is passed through and infers nothing", () => {
+  const dir = tmp();
+  try {
+    writeFileSync(join(dir, "brief.md"), "# brief\n");
+    const r = dryRun(dir, "--seed=extract LaneHeader component from Lane");
+    assert.equal(r.status, 0, r.stderr);
+    const out = JSON.parse(r.stdout);
+    assert.equal(out.mode, null);
+    assert.equal(out.intent, null);
   } finally { cleanup(dir); }
 });
 
