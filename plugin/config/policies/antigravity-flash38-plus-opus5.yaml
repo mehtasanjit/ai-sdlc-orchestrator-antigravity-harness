@@ -1,7 +1,8 @@
 # The official antigravity harness policy: Gemini 3.8 Flash conducts on agy,
 # Opus 5 answers the judgment phases through the Claude Agent SDK (`claude -p`),
 # Gemini 3.8 Flash answers the mechanical phases. Same rule grammar, select
-# slots and cost cap as opus-plus-flash-v38.yaml, which this is modeled on.
+# slots and cost cap as the Claude harness's opus-plus-flash-v38.yaml, which this is
+# modeled on (kept as a bridge test fixture, not shipped here).
 #
 # Arm A (Anthropic key) and arm B (Vertex) run THIS SAME FILE. The arm is the
 # bridge's environment, not a policy field: arm A sets ANTHROPIC_API_KEY; arm B

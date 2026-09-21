@@ -27,6 +27,6 @@ Out of scope:
 
 ## Handling of user credentials
 
-Nothing in this repository transmits, uploads, or persists your API keys anywhere except your own local environment. The setup wizard reads keys from your shell environment; it does not write them to disk. Individual pass runs use the keys via the Codex CLI and the local MCP server — the keys never leave your machine except in the form of authenticated API calls to OpenAI and Google. No Anthropic credential is requested or used anywhere in this harness.
+Nothing in this repository transmits, uploads, or persists your API keys anywhere except your own local environment. The setup wizard reads keys from your shell environment; it does not write them to disk. Individual pass runs use the keys via the Antigravity CLI (`agy`), Claude Code (`claude -p`, spawned by the bridge) and the local MCP server — the keys never leave your machine except in the form of authenticated API calls to Anthropic (or Google Cloud on the Vertex arm) and Google. `agy` itself signs in with your Google account through its own browser flow; this repository never reads or stores that token.
 
 If you observe behavior that contradicts the above, treat it as a security issue and report accordingly.

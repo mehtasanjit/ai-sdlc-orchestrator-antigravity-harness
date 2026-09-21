@@ -17,7 +17,7 @@ import { parse as parseYaml } from "yaml";
 import type { Policy, ModelConfig } from "./types.js";
 import { KNOWN_ADAPTER_IDS } from "./adapters/index.js";
 
-const PLUGIN_POLICY_DIR = resolve(
+const SHIPPED_POLICY_DIR = resolve(
   dirname(new URL(import.meta.url).pathname),
   "..",
   "..",
@@ -26,8 +26,19 @@ const PLUGIN_POLICY_DIR = resolve(
   "policies"
 );
 
+/**
+ * Where named presets are read from. MMO_POLICY_DIR overrides the shipped
+ * directory so the bridge's own tests can load the carried Claude-harness
+ * policies from test/fixtures/policies/ without this harness shipping them.
+ */
+function policyDir(): string {
+  return process.env.MMO_POLICY_DIR ? resolve(process.env.MMO_POLICY_DIR) : SHIPPED_POLICY_DIR;
+}
+
+export const DEFAULT_POLICY_NAME = "antigravity-flash38-plus-opus5";
+
 export function loadPolicy(opts: {
-  policyName?: string;          // e.g. "opus-only"
+  policyName?: string;          // e.g. "antigravity-flash38-plus-opus5"
   projectRoot?: string;         // for project-level override
 }): Policy {
   // 1. Project override
@@ -38,7 +49,8 @@ export function loadPolicy(opts: {
     }
   }
   // 2. Named preset
-  const name = opts.policyName ?? "opus-only";
+  const name = opts.policyName ?? DEFAULT_POLICY_NAME;
+  const PLUGIN_POLICY_DIR = policyDir();
   const presetPath = join(PLUGIN_POLICY_DIR, `${name}.yaml`);
   if (!existsSync(presetPath)) {
     throw new Error(
@@ -61,13 +73,14 @@ export function loadPolicy(opts: {
  */
 function shippedPresetNames(): string {
   try {
+    const PLUGIN_POLICY_DIR = policyDir();
     const names = readdirSync(PLUGIN_POLICY_DIR)
       .filter((f) => f.endsWith(".yaml"))
       .map((f) => f.slice(0, -".yaml".length))
       .sort();
     return names.length > 0 ? names.join(", ") : `(none found in ${PLUGIN_POLICY_DIR})`;
   } catch {
-    return `(could not list ${PLUGIN_POLICY_DIR})`;
+    return `(could not list ${policyDir()})`;
   }
 }
 

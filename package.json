@@ -7,9 +7,14 @@
     "node": ">=20"
   },
   "scripts": {
+    "setup": "node tools/setup.mjs",
     "build": "npm --prefix plugin/mcp/model-dispatch ci && npm --prefix plugin/mcp/model-dispatch run build",
+    "verify": "node plugin/agy/verify-setup.mjs",
+    "run": "node plugin/agy/run.mjs",
     "report": "node tools/report.mjs",
-    "test": "node --test tools/test/*.test.mjs && node tools/test-mcp.mjs"
+    "test": "node --test tools/test/*.test.mjs && node tools/test-mcp.mjs",
+    "smoke": "node plugin/agy/run.mjs --gates=auto-approve --policy=antigravity-flash38-plus-opus5 --agy-bin=tools/test/fixtures/fake-agy/agy",
+    "console": "node plugin/policy-console/policy-server.mjs --port 3000"
   },
   "license": "MIT",
   "repository": {

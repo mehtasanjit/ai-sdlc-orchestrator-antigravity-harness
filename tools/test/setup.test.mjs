@@ -1,0 +1,65 @@
+/**
+ * tools/setup.mjs — the script prompt 1 drives. The pure pieces (argv,
+ * project registration) are unit-tested; the whole wizard runs once
+ * non-interactively against an empty project with dummy credentials.
+ */
+import { test } from "node:test";
+import assert from "node:assert/strict";
+import { mkdtempSync, rmSync, readFileSync, existsSync, writeFileSync, mkdirSync, lstatSync, readlinkSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import { tmpdir } from "node:os";
+import { dirname, join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
+
+import { parseArgs, mountPlan, registerProject, MOUNT_FILES, MOUNT_DIRS } from "../setup.mjs";
+
+const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
+
+test("parseArgs takes --key=value, --key value for the two path flags, and bare flags", () => {
+  assert.deepEqual(parseArgs(["--project-root", "/p", "--policy=x", "--yes", "--no-agent"]), { "project-root": "/p", policy: "x", yes: true, "no-agent": true });
+});
+
+test("a project outside the clone gets absolute links into the clone's plugin/; the clone itself is left to its committed mount", () => {
+  const plan = mountPlan("/some/project", "/h");
+  assert.equal(plan.mount, "/some/project/.agents/plugins/mmo");
+  assert.equal(plan.inside, false);
+  assert.equal(plan.links.find((l) => l.name === "skills").target, "/h/plugin/skills");
+  assert.deepEqual(plan.links.map((l) => l.name), [...MOUNT_FILES, ...MOUNT_DIRS]);
+  assert.equal(mountPlan(ROOT, ROOT).inside, true);
+  const committed = join(ROOT, ".agents", "plugins", "mmo");
+  for (const { name, target } of mountPlan(ROOT, ROOT).links) assert.equal(readlinkSync(join(committed, name)), target, name);
+});
+
+test("registerProject creates the mount once, reports no change the second time, and repairs a wrong link", () => {
+  const dir = mkdtempSync(join(tmpdir(), "agy-setup-"));
+  try {
+    const first = registerProject(dir, ROOT);
+    assert.equal(first.changed, true);
+    const skills = join(dir, ".agents", "plugins", "mmo", "skills");
+    assert.ok(lstatSync(skills).isSymbolicLink());
+    assert.equal(readlinkSync(skills), join(ROOT, "plugin", "skills"));
+    assert.ok(existsSync(join(skills, "greenfield", "SKILL.md")), "the link resolves into the clone");
+    assert.equal(registerProject(dir, ROOT).changed, false);
+    rmSync(skills); writeFileSync(skills, "not a link");
+    assert.equal(registerProject(dir, ROOT).changed, true);
+    assert.ok(lstatSync(skills).isSymbolicLink());
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test("the wizard runs non-interactively against an empty project and leaves it registered with a policy", () => {
+  const dir = mkdtempSync(join(tmpdir(), "agy-setup-run-"));
+  try {
+    const r = spawnSync(process.execPath, [join(ROOT, "tools", "setup.mjs"), `--project-root=${dir}`, "--yes", "--no-agent", "--policy=antigravity-flash38-plus-opus5"], {
+      encoding: "utf8", timeout: 120_000,
+      env: { ...process.env, ANTHROPIC_API_KEY: "sk-ant-dummy", GEMINI_API_KEY: "AIza-dummy" },
+    });
+    const out = r.stdout.replace(/\x1b\[[0-9;]*m/g, "");
+    assert.ok(existsSync(join(dir, ".agents", "plugins", "mmo", "plugin.json")), out);
+    assert.equal(JSON.parse(readFileSync(join(dir, ".sdlc", "project.json"), "utf8")).default_policy, "antigravity-flash38-plus-opus5");
+    assert.match(out, /Mount the plugin in this project/);
+    assert.match(out, /Arm A: ANTHROPIC_API_KEY is set/);
+    assert.match(out, /Start a NEW agy session|Setup incomplete/);
+    assert.ok(!/plugin install/.test(out.replace(/Do not run `agy plugin install`/g, "")), "never tells anyone to install globally");
+    assert.ok(!out.includes("sk-ant-dummy"), "never prints a key");
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});

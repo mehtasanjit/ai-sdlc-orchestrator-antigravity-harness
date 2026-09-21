@@ -1491,6 +1491,11 @@ for (const closingKey of ["finished_at", "ended_at"]) {
 
 import { manifestPolicyName, manifestPassId } from "../../../scripts/collect-orchestrator-usage.mjs";
 
+// The carried Claude-harness policies are bridge test fixtures, not shipped
+// presets of this harness (plugin/config/policies/ holds the two antigravity
+// policies). Point the loader at them for this file's process.
+process.env.MMO_POLICY_DIR = new URL("./fixtures/policies/", import.meta.url).pathname;
+
 // The three fields the model can misplace all resolve the same way: the manifest's
 // own top-level spellings first — so no run this script has already priced can move
 // — then the call log, which is machine-written and cannot drift. These assert the

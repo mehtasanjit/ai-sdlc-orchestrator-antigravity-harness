@@ -1,0 +1,66 @@
+#!/usr/bin/env node
+/**
+ * A stand-in `agy` for the offline smoke run. Speaks the stream-json shapes
+ * recorded in docs/verification/p1-agy-runtime.md (check 8), refuses the
+ * flags a real headless run must not carry, and behaves like a conductor
+ * that needs two invocations: the first ends without SUMMARY.md, the second
+ * (resumed with --conversation) dispatches a zero-cost event through the
+ * real bridge via plugin/agy/dispatch.mjs and finishes the run.
+ *
+ * It never contacts a vendor. Every number it emits is made up and labeled.
+ */
+import { existsSync, mkdirSync, writeFileSync, appendFileSync, readFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { spawnSync } from "node:child_process";
+import { dirname, join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
+
+const argv = process.argv.slice(2);
+if (argv[0] === "--version") { console.log("1.2.3"); process.exit(0); }
+
+const flag = (name) => { const i = argv.indexOf(name); return i === -1 ? null : argv[i + 1]; };
+const prompt = flag("--print") ?? "";
+const model = flag("--model");
+const conversation = flag("--conversation");
+const emit = (o) => process.stdout.write(JSON.stringify(o) + "\n");
+const fail = (error) => { emit({ event: "result", result: { conversation_id: "", status: "ERROR", response: "", error, duration_seconds: 0, num_turns: 0, usage: { input_tokens: 0, output_tokens: 0, thinking_tokens: 0, cache_read_tokens: 0, total_tokens: 0 } } }); process.exit(1); };
+
+if (flag("--output-format") !== "stream-json") fail("fake agy: --output-format stream-json required");
+if (!argv.includes("--dangerously-skip-permissions")) fail("fake agy: tool calls would be soft-denied without --dangerously-skip-permissions");
+if (argv.includes("--sandbox")) fail("fake agy: --sandbox kills the bridge subprocess");
+if (!argv.includes("--add-dir")) fail("fake agy: --add-dir is mandatory");
+if (model !== "gemini-3.8-flash-high") fail(`unknown model: ${model}`);
+
+const conversationId = conversation ?? `fake-conv-${process.pid}`;
+// A real session keeps the conductor prompt in context across a resume; the
+// stub keeps the one fact it needs from it in a per-conversation memo.
+const memo = join(tmpdir(), `${conversationId}.memo`);
+const outputDir = conversation
+  ? (existsSync(memo) ? readFileSync(memo, "utf8").trim() : null)
+  : (/([^\s`]+)\/skills\/pipeline\.md/.exec(prompt)?.[1] ?? null);
+if (outputDir && !conversation) writeFileSync(memo, outputDir);
+if (!outputDir) fail("fake agy: no output directory known for this conversation");
+emit({ event: "init", conversation_id: conversationId, model });
+
+if (!conversation) {
+  // First invocation: reads the brief, records gate 1, then "runs out".
+  emit({ event: "step_update", step: { tool_call: { name: "view_file" }, step_idx: 1 } });
+  if (outputDir) {
+    mkdirSync(outputDir, { recursive: true });
+    appendFileSync(join(outputDir, "gates.jsonl"), JSON.stringify({ gate: 1, artifact: "requirements.md", decision: "auto-approved", note: "stub" }) + "\n");
+  }
+  emit({ event: "result", result: { conversation_id: conversationId, status: "OK", response: "context ceiling", duration_seconds: 1, num_turns: 2,
+    usage: { input_tokens: 1000, output_tokens: 200, thinking_tokens: 50, cache_read_tokens: 400, total_tokens: 1250 } } });
+  process.exit(0);
+}
+
+// Resumed: one real bridge call through the dispatch fallback (log_telemetry, $0), then finish.
+const dispatch = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..", "..", "..", "plugin", "agy", "dispatch.mjs");
+emit({ event: "step_update", step: { tool_call: { name: "run_command" }, step_idx: 3 } });
+const cwd = process.cwd();
+const r = spawnSync(process.execPath, [dispatch, "--log-phase=security_review", "--task-type=in_session", `--telemetry=${join(outputDir, "telemetry.jsonl")}`, `--out=${join(outputDir, "receipt.json")}`, "--policy=antigravity-flash38-plus-opus5", `--project-root=${cwd}`], { encoding: "utf8" });
+if (r.status !== 0) fail(`dispatch failed: ${r.stderr}`);
+writeFileSync(join(outputDir, "SUMMARY.md"), "# stub run\n\nDispatch route: fallback (dispatch.mjs). No shipped content was authored.\n");
+// Cumulative counters: this result includes the first invocation's tokens.
+emit({ event: "result", result: { conversation_id: conversationId, status: "OK", response: "done", duration_seconds: 1, num_turns: 4,
+  usage: { input_tokens: 2500, output_tokens: 500, thinking_tokens: 80, cache_read_tokens: 1200, total_tokens: 3080 } } });

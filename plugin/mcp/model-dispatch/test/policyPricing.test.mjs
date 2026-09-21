@@ -32,6 +32,11 @@ import { BuiltinAnthropicAdapter } from "../dist/adapters/BuiltinAnthropicAdapte
 import { simulatePolicyCost } from "../dist/routing.js";
 import { computeCostUsd } from "../dist/pricing.js";
 
+// The carried Claude-harness policies are bridge test fixtures, not shipped
+// presets of this harness (plugin/config/policies/ holds the two antigravity
+// policies). Point the loader at them for this file's process.
+process.env.MMO_POLICY_DIR = new URL("./fixtures/policies/", import.meta.url).pathname;
+
 const HERE = dirname(fileURLToPath(import.meta.url));
 const DAY = "2026-09-14";
 const SONNET_5_LIST = { input: 2, input_cached: 0.2, output: 10, input_cache_write: 2.5, input_cache_write_1h: 4 };

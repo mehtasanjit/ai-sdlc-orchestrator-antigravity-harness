@@ -1,71 +1,100 @@
 ---
 name: pipeline
-description: The end-to-end AI-SDLC workflow definition consumed by the orchestrator subagent. Defines the state machine, TaskPacket schema, HITL gates, telemetry contract, and the prompts/templates for each phase. The orchestrator reads this skill to know exactly what to do at each step.
+description: The end-to-end AI-SDLC workflow definition consumed by the conductor. Defines the state machine, TaskPacket schema, HITL gates, telemetry contract, and the prompts/templates for each phase. The conductor reads this skill to know exactly what to do at each step.
 ---
 
-# AI-SDLC Workflow — Orchestrator Playbook
+# AI-SDLC Workflow — Conductor Playbook
 
-This skill is the source of truth for the orchestrator. When invoked under `/mmo:pass`, the orchestrator follows the state machine below.
+This skill is the source of truth for the conductor. Whether you arrived here from `/mmo:greenfield`, `/mmo:brownfield` (or one of its seven per-job aliases), `/mmo:pass`, or the headless conductor prompt `plugin/agy/run.mjs` renders, you follow the state machine below.
 
 ---
 
 ## State machine
 
 ```
--1. preflight_dispatch              → prove every model this run dispatches to is reachable (free, no API call)
+-1. preflight                       → prove every model this run dispatches to is reachable (free, no API call)
 0. read_brief
 1. requirements_analysis           → requirements.md
    ── GATE 1 ─────────────────────────────────────
-2. architecture_design (subagent: architect) → design.md
+2. architecture_design             → design.md
    ── GATE 2 ─────────────────────────────────────
 3. (mixed policy only) cache_project_header  → prime the mechanical-tier model's cache
 4. plan_task_packets                  → packets.json (list of TaskPackets)
 5. execute_packets                    → for each: route → execute → validate → integrate → retry on failure
-6. senior_code_review (subagent: senior-reviewer) → review.json + refinement packets
+6. senior_code_review                 → review.json + refinement packets
    re-execute refinement packets
 7. test_run                           → npm install && npm test; debug failures (route via policy)
-8. security_review (subagent: security-reviewer) → security_review.md
+8. security_review                    → security_review.md
    ── GATE 3 ─────────────────────────────────────
-9. generate_final_report              → updates manifest.json with artifacts + rollups,
-                                        then collect-orchestrator-usage.mjs → true total (fail-open)
+9. generate_final_report              → SUMMARY.md; manifest.json is written by code
    ── GATE 4 (final acceptance) ───────────────────
 ```
 
 ---
 
-## Phase -1 — preflight_dispatch (MANDATORY, before anything else)
+## How you dispatch
 
-Call `preflight_dispatch` with the run's `auth_mode` and the same `policy_name` / `project_root` /
-`policy_path` you will use for the run, and **read the result before doing anything else**.
+Every model call in this playbook is a TaskPacket handed to the `model-dispatch` bridge. The bridge
+routes it per policy, runs it, prices it and appends the telemetry row; you never choose the model
+and never write the content yourself. There are two ways to hand a packet over, and which one you
+have depends on how this session was started:
 
-`auth_mode` is required and is the mode already resolved for this run (rule 6) — do not omit it, do not
-guess it. It changes the answer: it is what tells pre-flight which models this run actually dispatches
-through the server.
+**Headless (`plugin/agy/run.mjs`, the measured runs).** The Antigravity CLI loads no plugin, MCP
+server or hook in print mode (p1-agy-runtime.md check 1), so the bridge is *not* in your toolset.
+Write the TaskPacket to a JSON file and run:
+
+```
+node "${MMO_PLUGIN_ROOT}/agy/dispatch.mjs" \
+  --packet=<path-to-packet.json> \
+  --out=<path-for-result.json> \
+  --policy=<policy> \
+  --project-root="<project_root>" \
+  --telemetry="<output_dir>/telemetry.jsonl"
+```
+
+Then **read the result from the `--out` file**. Stdout carries only a one-line summary — do not
+parse it for anything beyond a quick success check. A non-zero exit means the dispatch failed.
+Keep the quotes around paths: they can contain spaces, and an unquoted one splits into separate
+arguments. The script speaks MCP to the same bridge an interactive session calls directly.
+
+**Interactive (`agy` in the workspace, plugin loaded).** The bridge's tools are reachable through
+`call_mcp_tool` with the server name `mmo_model-dispatch` (agy prefixes a plugin's server with the
+plugin name; the bare `model-dispatch` is refused): `execute_with_model` (the packet, plus
+`policy_name`, `project_root` and `telemetry_path`), `preflight_dispatch`, `load_policy`,
+`simulate_policy` and `log_telemetry`. Same tools, same TaskPacket, same result shape. If no
+`mmo_model-dispatch` server is connected in the session, or `call_mcp_tool` is not in your
+toolset, fall back to the command above.
+
+The rest of this playbook says "dispatch a packet" and shows the command form; read it as either
+route. Every phase's real work goes through one of them — a phase that silently becomes your own
+prose is invisible to the cost record and defeats the measurement this harness exists for.
+
+---
+
+## Phase -1 — preflight (MANDATORY, before anything else)
+
+```
+node "${MMO_PLUGIN_ROOT}/agy/dispatch.mjs" --preflight --auth-mode=vendor \
+  --policy=<policy> --project-root="<project_root>" --out="<output_dir>/preflight.json"
+```
+
+Interactive: call `preflight_dispatch` with `auth_mode: "vendor"`, `policy_name` and
+`project_root` instead. Either way, **read the result before doing anything else** and write it to
+`<output_dir>/preflight.json`.
 
 **If `ok` is false, STOP.** Print the `halt_reason` verbatim, print the failing model's `error`, and end
 the run. Do not read the brief, do not start phase 1, do not "try the mechanical tier and see". A policy
 whose cheap tier cannot be reached does not degrade into a slightly-more-expensive run — every packet
 falls back to the premium tier, and the result costs *more* than a single-model baseline while appearing
-to succeed. That is the one outcome this plugin exists to disprove, so it is worth refusing to start.
+to succeed. That is the one outcome this harness exists to disprove, so it is worth refusing to start.
 
 **If `warnings` is non-empty, print each one and keep going.** A warning is a model this run will not
-dispatch to, so its failure cannot affect this run — under `estimated` that is the direct tier, which
-runs inside your own session and never touches the server or its credentials. Print them because they
-are true and the operator should know the same policy would not start in `vendor` mode. Do not treat a
-warning as a halt: refusing to start a viable run is not the safe error, it is the one that teaches the
-operator to override a gate that exists to protect them.
-
-**`ok: false` can also be about price.** Stop exactly as for a credential failure when `halt_reason`
-says `Cannot price N of M models`: a model this run can route to has no price on the dated price list
-for today, so work sent to it would be refused at dispatch, and your own estimates for it would have
-no rate (rule 6).
-
-**If `price_warnings` is non-empty, print each one and keep going.** Each names a policy `pricing:`
-block that differs from the dated price list. The server bills the list, not the block, so the run's
-numbers stay right; the fix belongs in the policy file, not in this run.
+dispatch to, so its failure cannot affect this run. Print them because they are true and the operator
+should know. Do not treat a warning as a halt: refusing to start a viable run is not the safe error, it
+is the one that teaches the operator to override a gate that exists to protect them.
 
 **`not_selected` is not a warning and not a problem.** A policy may hold more than one way of reaching a
-tier — `opus-plus-flash` reaches its mechanical tier either as a Gemini model call or as an Antigravity
+tier — `antigravity-flash38-plus-opus5` reaches its mechanical tier either as a Gemini model call or as an Antigravity
 agent — and only the one this install selected can be dispatched to. The other is listed here, unchecked,
 because its prerequisites are irrelevant to a run that will never call it. Do not report it as a failure,
 do not try to "fix" it, and do not offer to install anything on its behalf.
@@ -80,20 +109,23 @@ unusable credential throws. It makes no model call and costs nothing. It exists 
 construction used to happen lazily at the first mechanical packet — phase 4 of 9, after the premium
 phases were already billed — which is the worst possible moment to discover a setup problem.
 
-**Escalation to the direct tier under `estimated` stays in-session.** `opus-plus-flash` escalates a
-`debug` packet to the premium model after two mechanical-tier retries (`retry_count: { gte: 2 }`). In
-`estimated` mode that escalated packet is yours to handle in your own conversation, with char-count
-estimation and `provenance: "estimated"`, exactly like every other direct-tier phase — do not dispatch
-it via `execute_with_model`, and do not conclude from a pre-flight warning about that model that the
-escalation path is broken. The routing decision is unchanged; only the transport differs.
+`--auth-mode=vendor` is not optional and is not a choice this run makes: every model call, including
+judgment work, routes through the bridge so per-phase cost attribution survives. There is no in-session
+mode. The bridge still requires the argument, so pass it.
 
 ---
 
 ## Phase-by-phase prompts
 
+Every phase below produces its artifact by dispatching a TaskPacket. You write the packet, run the
+dispatch command, read the result file, and write the returned content to the artifact path. You do
+not author the content yourself — a phase that silently becomes your own prose is invisible to the
+cost record and defeats the measurement this harness exists for.
+
 ### Phase 1 — requirements_analysis
 
-Read `<brief.md>` (passed in $ARGUMENTS) and produce `<output_dir>/requirements.md` with sections:
+Dispatch a packet (`phase: "requirements_analysis"`, `task_type: "requirements"`) whose inputs carry
+`<brief.md>`. Write the result to `<output_dir>/requirements.md` with sections:
 
 - **In scope** (numbered, testable)
 - **Out of scope** (numbered)
@@ -104,9 +136,17 @@ Read `<brief.md>` (passed in $ARGUMENTS) and produce `<output_dir>/requirements.
 - **Acceptance criteria** (numbered, executable)
 - **Open questions for HITL** (if any)
 
-### Phase 2 — architecture_design (delegated to `architect` subagent)
+### Phase 2 — architecture_design
 
-The orchestrator invokes the `architect` subagent passing `<output_dir>/requirements.md`. Architect writes `<output_dir>/design.md` (see architect.md for content spec).
+Dispatch a packet (`phase: "architecture_design"`, `task_type: "design"`) whose inputs carry
+`<output_dir>/requirements.md`. The packet's `instruction` carries the architect role: produce a
+design document covering module boundaries, the data model, the API contract, and the key
+cross-cutting decisions with ADR-style rationale. Write the result to `<output_dir>/design.md`.
+
+**Use [`roles/architect.md`](roles/architect.md) verbatim as the `instruction` body.** It carries
+the full deliverable list — including the environment-variable contract that codegen turns into a
+validation schema, `.env.example`, and `.env.test` — and the brownfield variant that produces
+`change_plan.md` instead. Do not paraphrase it; the checklist is the value.
 
 ### Phase 4 — plan_task_packets
 
@@ -135,7 +175,7 @@ Suggested packet types and one packet per:
 | `env_docs` | `.env.example` — every required environment variable from `design.md` §6, no values |
 | `env_test_fixture` | `.env.test` — every required environment variable with a value that satisfies the schema declared in `design.md` §6 (e.g., a 32-char string where the schema demands `min(32)`, `file:./test.db` for the DB URL, a hex-encoded fake KEK). This file is what the test runner copies to `.env` before `npm test`. |
 
-When the app uses a validating `ConfigModule` (or Joi / Zod / envalid equivalent), packets for `env_docs` and `env_test_fixture` are **required** — omitting either is a senior-reviewer blocker. The two files must be internally consistent: every key listed in `.env.example` must appear in `.env.test` with a schema-valid value.
+When the app uses a validating `ConfigModule` (or Joi / Zod / envalid equivalent), packets for `env_docs` and `env_test_fixture` are **required** — omitting either is a senior-review blocker. The two files must be internally consistent: every key listed in `.env.example` must appear in `.env.test` with a schema-valid value.
 
 ### Brownfield-mode task types (v1)
 
@@ -186,26 +226,42 @@ Every attempt emits its own TelemetryEvent with `attempt_number`, `ceiling_used`
 
 ### Phase 5 — execute_packets
 
-Emit `phase.start` before the first packet and `phase.end` after the last — see "Run logging" in
-orchestrator.md. This is the phase with the most silence between pre-flight and Gate 1 otherwise:
-every dispatch inside the loop below already logs itself via the MCP server (`route.decide`,
-`dispatch.start`/`.end`), but nothing marks the loop's own boundaries without this call.
+Say when the loop starts and when it ends, with the packet count. Every dispatch inside it logs
+itself through the bridge (`route.decide`, `dispatch.start`/`.end` on the `MMO:` log stream), but
+nothing marks the loop's own boundaries unless you do.
 
 For each packet, in dependency order:
 
-**Direct-tier work (subagent handles it, no MCP dispatch):** the orchestrator (Opus) writes the file directly. Estimate tokens via `chars/3.8` heuristic for both inputs and outputs; take pricing constants from this model's `effective_price.rates` in the `load_policy` result (the dated price list's card for the day, or the policy's block only under `pricing_override: true`: the price the server and the post-run collector bill at; see orchestrator rule 6); log a TelemetryEvent via `log_telemetry`.
-
-**Mechanical-tier work (routed to another model):** call `execute_with_model` with the packet, `policy_name`, `project_root: $(pwd)`, and `cache_context`. The server routes per policy. Pass `project_root` on every dispatch, exactly as pre-flight received it: it is what lets the loader prefer a repo-local `routing-policy.yaml` over the shipped preset, and omitting it is the historical bug — the preview named the user's policy while the billed calls quietly routed under a different one. Validate the returned structured output against the schema; if invalid, construct a *refined* packet (new id, `retry_count+1`, with the validation error appended to instruction) and re-dispatch. After 2 mechanical-tier retries fail, the policy escalates to the subagent's own tier automatically (rule with `retry_count: { gte: 2 }`).
+Dispatch it with the command above. The bridge routes per policy — you do not choose the model.
+Validate the returned structured output against the schema; if invalid, construct a *refined*
+packet (new id, `retry_count+1`, with the validation error appended to instruction) and
+re-dispatch. After 2 mechanical-tier retries fail, the policy escalates to the premium tier
+automatically (rule with `retry_count: { gte: 2 }`) — the routing decision is the policy's, and
+the escalated packet dispatches exactly like every other one.
 
 Write the returned file content to disk at the packet's stated `artifact_path`.
 
 ### Phase 6 — senior_code_review
 
-Invoke `senior-reviewer` subagent for each module. Collect refinement packets. Re-dispatch them via Phase 5 mechanics.
+Dispatch one packet per module (`phase: "senior_code_review"`, `task_type: "review"`) whose inputs
+carry the module's generated files. The packet's `instruction` carries the senior-reviewer role:
+read the code module by module and emit a structured review, with a refinement TaskPacket for any
+defect found. Collect the refinement packets from the results and re-dispatch them via Phase 5
+mechanics. Write the collected review to `<output_dir>/review.json`.
+
+**Use [`roles/senior-reviewer.md`](roles/senior-reviewer.md) verbatim as the `instruction` body.**
+It carries the eight review criteria and the output schema.
+
+Two obligations on this phase specifically, both spelled out in that file. **Attach whole files,
+not slices** — a review packet is the one place where under-filling `inputs` yields a confidently
+wrong answer instead of an obviously incomplete one, because every criterion is a search for an
+absence and the worker has no tools to go looking. And when a result comes back with a non-empty
+`not_verifiable` array, **widen those inputs and re-dispatch that module** before treating its
+verdict as final.
 
 ### Phase 7 — test_run
 
-**Greenfield mode.** Bootstrap the env fixture first — this is required for any app whose codegen produced a validating `ConfigModule` (or equivalent) at boot. The codegen phase is contractually required (see Phase 5 acceptance criteria and the senior-reviewer's env-fixture check) to emit `.env.example` (docs) and `.env.test` (fixture values that satisfy the declared schema).
+**Greenfield mode.** Bootstrap the env fixture first — this is required for any app whose codegen produced a validating `ConfigModule` (or equivalent) at boot. The codegen phase is contractually required (see Phase 5 acceptance criteria and the senior review's env-fixture check) to emit `.env.example` (docs) and `.env.test` (fixture values that satisfy the declared schema).
 
 ```bash
 cd <output_dir>
@@ -232,26 +288,45 @@ The test command in brownfield is `baseline.test_command` (confirmed at Gate 0),
 **Both modes:**
 
 On failure:
-- If the error is `Config validation error: "X" is required` or equivalent → the codegen phase missed keys. In greenfield build a debug TaskPacket routed to codegen to add the missing keys with schema-valid values. In brownfield, ask the user via the mini-gate above; do NOT patch `.env` from the plugin.
-- Any other failure → parse the output, build a `debug` TaskPacket with the failing test name + error + relevant source slice. Route via policy. Retry up to 2 cost-efficient tier attempts; escalate to Opus.
+- If the error is `Config validation error: "X" is required` or equivalent → the codegen phase missed keys. In greenfield build a debug TaskPacket routed to codegen to add the missing keys with schema-valid values. In brownfield, ask the user via the mini-gate above; do NOT patch `.env` from the harness.
+- Any other failure → parse the output, build a `debug` TaskPacket with the failing test name + error + relevant source slice. Route via policy. Retry up to 2 cost-efficient tier attempts; the policy escalates to the premium tier from there.
 
 **Test-command probe (optional Phase 0.5 in brownfield).** The pipeline pre-check (§7.4) already ran the discovered test command with `--collect-only` / `--dry-run` at prompt 1 to prove deps are installed. If pre-check step 2 failed for this run, Phase 7 halts with the recorded error rather than attempting the real run.
 
 ### Phase 8 — security_review
 
-Invoke `security-reviewer` subagent. Writes `<output_dir>/security_review.md`.
+Dispatch a packet (`phase: "security_review"`, `task_type: "security_review"`) whose inputs carry the
+generated code. The packet's `instruction` carries the security-reviewer role: a threat-model-style
+pass over PII handling, authorization coverage, audit completeness, secret leakage, and dependency
+risk. Write the result to `<output_dir>/security_review.md`.
+
+**Use [`roles/security-reviewer.md`](roles/security-reviewer.md) verbatim as the `instruction`
+body.** It carries the full checklist and the report format.
+
+The dependency-risk check is a shell command, and the dispatched worker cannot run one. **Run the
+stack's production-dependency audit yourself and attach its output as a file slice in `inputs`.**
+If you do not, that check comes back under `## Could not verify` rather than passing — which is
+correct, and is the point: the reviewer is instructed never to pass a check it could not run, and
+never to report an absence it could not confirm. Attach whole files here for the same reason as
+Phase 6.
 
 ### Phase 9 — generate_final_report
 
-Read all events in `<telemetry_path>`. Build rollup manifest using the `buildManifest` shape (see `plugin/mcp/model-dispatch/src/telemetry.ts`). Write `<output_dir>/manifest.json`. Also write a brief `<output_dir>/SUMMARY.md` with: total cost, breakdown, links to key artifacts.
+Write `<output_dir>/SUMMARY.md`: total dispatched cost, the per-phase and per-model breakdown read
+from `<output_dir>/telemetry.jsonl`, and links to the key artifacts. Quote every figure from the
+telemetry rows; never compute one from memory.
 
-Then, **after** the manifest is on disk, run the orchestrator-overhead collector — telemetry holds dispatched work only, and this session's own loop is invisible to it in both auth modes:
+**`manifest.json` is written by code, never by you.** Headless, `run.mjs` builds it from
+`telemetry.jsonl` and the driver's own modeled events after you finish. Interactive, run it
+yourself as the last step and report what it printed:
 
 ```
-node "${CLAUDE_PLUGIN_ROOT}/scripts/collect-orchestrator-usage.mjs" <output_dir> --project-root "$(pwd)"
+node "${MMO_PLUGIN_ROOT}/agy/manifest.mjs" "<output_dir>" --policy=<policy> --run-id=<run_id>
 ```
 
-`--project-root` must be the same directory the run's `mmo-log.mjs` calls used: the collector reads this run's `run.start` and `run.end` lines from `<project-root>/.sdlc/runs/<run-id>/orchestrator.log` to find the run's own command turn in the session transcript, which is where its window opens (the manifest's `started_at` is only the first dispatched event, after the driver's own setup work; without the log the window is approximate and labelled so). On success it appends one `tier: "orchestrator"` event and patches the manifest with `orchestrator_overhead` + `true_total_cost_usd`; quote the **true total** in SUMMARY.md and label the dispatched figure as such. The figure is **provisional** — you run the collector from inside a session that has not ended, so it misses this session's own tail. Print the command with `<output_dir>` and `$(pwd)` resolved to real paths, in your final message and in SUMMARY.md, under **Provisional — re-run after closing this session**. On failure (non-zero exit), do not block the run: label every cost in SUMMARY.md *dispatched work only — excludes orchestrator overhead* and note the collector command. Never blend the two figures. Keep the run's `claude -p --output-format json` result beside the manifest as `claude-session.json` when you have it: the collector checks itself against it model by model, books the receipt's token counts at the price list when the window is provably the invocation the receipt billed (reporting the share Claude Code billed but never logged), and exits 3 (nothing written) otherwise.
+It stamps `harness: antigravity`, the driver pin, `auth_mode`, and the three cost lines — dispatched
+cash, Opus wallet, driver modeled — each labeled. Your own loop cost is among them and is recorded
+for you (see the telemetry contract below); do not try to account for it yourself.
 
 ---
 
@@ -310,29 +385,29 @@ fitting known behavior in v1, with intent-specific prompt overrides landing in v
 v1 ships all seven intents (surface-complete) with the last three at ~70% of full-specialized
 quality; v1.5 tightens them.
 
-**How the orchestrator branches.** After Gate 0 approval (which sets `intent` on the run
-context), the orchestrator consults this table before each phase to decide: SKIP the phase, run
+**How the conductor branches.** After Gate 0 approval (which sets `intent` on the run
+context), the conductor consults this table before each phase to decide: SKIP the phase, run
 its default form, or run its intent-specific form. Skipped phases still emit a TelemetryEvent
 with `phase: <name>, task_type: "skipped"` so downstream summaries stay complete.
 
 **Skip semantics.**
 - SKIP means the phase does not run at all — no packet dispatched, no artifact written, no gate
   fires for that phase. The gate immediately after a skipped phase is also skipped.
-- Docs intent example: Phase 2 (architecture) skips → Gate 2 also skips → orchestrator goes
+- Docs intent example: Phase 2 (architecture) skips → Gate 2 also skips → conductor goes
   straight from Gate 1 (requirements) to Phase 4 (packet planning).
 
 ---
 
 ## HITL gate prompt templates
 
-**Subagent → main-loop bubble-up (all gates).** The orchestrator is a Claude Code subagent —
-subagents don't run interactive dialogs. Every gate is delivered by the subagent returning a
-message shaped as a fenced `> ⏸ **HITL Gate <N> — <Title>**` block (see templates below) that the
-main-loop Claude Code session displays verbatim and waits for user input on. The user's reply
-comes back to the subagent as a `{ gate_response: "approved" | "revise: <text>" | "abort" }`
-argument on the next invocation. **Persist the gate-pending state to `.sdlc/local/state.json`
-before emitting the message** — if the session dies mid-gate, session-hydrate detects a
-non-terminal state and re-prompts on next `/mmo:brownfield` invocation. No new command needed.
+**Gate delivery.** Interactive, you print the gate block yourself and wait for the user's reply.
+Every gate is a fenced `> ⏸ **HITL Gate <N> — <Title>**` block (templates below), printed
+verbatim. Headless, the conductor prompt names the gate mode (`auto-approve` or `auto-abort`):
+print the block anyway, apply the mode's decision, and append the line to `<output_dir>/gates.jsonl`
+that the conductor prompt specifies — a run whose gates were not reviewed by a person must say so. **Persist
+the gate-pending state to `.sdlc/local/state.json` before printing** — if the session dies
+mid-gate, session-hydrate detects a non-terminal state and re-prompts on the next
+`/mmo:brownfield` invocation. No new command needed.
 
 ### Gate 0 — Brownfield only, before Gate 1
 
@@ -343,8 +418,8 @@ non-terminal state and re-prompts on next `/mmo:brownfield` invocation. No new c
 > - **Stack:** `<top-detected stacks>` — correct? add/override?
 > - **Test command:** `<detected>` — enter to accept, or paste the command.
 > - **Policy:** `<the default_policy field setup wrote to .sdlc/project.json>` — accept, or
->   name another on-disk policy for this run only (e.g. `opus-only`). To change the project's
->   persistent default, re-run setup (`node "${CLAUDE_PLUGIN_ROOT}/scripts/setup-policy.mjs"`
+>   name another on-disk policy for this run only (one saved from the policy console). To change the project's
+>   persistent default, re-run setup (`node "${MMO_PLUGIN_ROOT}/scripts/setup-policy.mjs"`
 >   — this is the one command that opens a browser; every other setup step is terminal-only).
 > - **Existing AI setup:** `<verbatim list from Tier 1 group 6>` — is any of this
 >   authoritative and off-limits? **(default: OFF-LIMITS, do not touch)**
@@ -352,8 +427,8 @@ non-terminal state and re-prompts on next `/mmo:brownfield` invocation. No new c
 > - **File scope:**
 >   - allowlist: `<paths proposed by the intent brief>` — accept / edit
 >   - off-limits: **project defaults from `.sdlc/project.json.off_limits_default`** apply
->     (`.env*`, `.mcp.json`, `node_modules/**`, `.cursor/rules/**`, `.claude/settings.local.json`,
->     `dist/**`, `.sdlc/**`, `.git/**`) — add anything else this ticket must not touch
+>     (`.env*`, `.mcp.json`, `node_modules/**`, `.cursor/rules/**`, other AI tools'
+>     settings files, `dist/**`, `.sdlc/**`, `.git/**`) — add anything else this ticket must not touch
 >   - AI configs detected in the repo are added on top (see previous bullet)
 > - **Repo-state risks (if any):** `<LFS / submodules / failing tests / encrypted secrets>`
 > - **Regulated-repo warning (when `baseline.regulated_repo_warning_required`):** *"This repo appears regulated (signals: `<kinds>`). Confirm the active policy uses only compliant endpoints, and that off-limits protects your regulated data folders."*
@@ -370,10 +445,10 @@ off_limits}`). Build `off_limits` by concatenating `.sdlc/project.json.off_limit
 with the AI-configs from `baseline.ai_configs_detected` and any ticket-specific paths the user
 added at Gate 0. The PreToolUse hook and the packet validator both read the merged list — the
 UX shrinks (Gate 0 doesn't re-ask about constants each ticket), the enforcement is unchanged.
-See `plugin/scripts/write-contract-check.mjs` for the hook.
+See `plugin/agy/hooks/write-contract-check.mjs` for the hook.
 
 **Default the AI-coexistence answer to OFF-LIMITS.** A user who hits `approved` without reading
-must not accidentally authorize the plugin to rewrite their `.cursor/rules` or their custom
+must not accidentally authorize the harness to rewrite their `.cursor/rules` or their custom
 `routing-policy.yaml`. If the user wants a competing AI config in scope, they must move it
 explicitly.
 
@@ -402,7 +477,18 @@ explicitly.
 
 ## Telemetry contract (every LLM call)
 
-Log via `log_telemetry` with `telemetry_path` = `<output_dir>/telemetry.jsonl`. Event shape:
+Every dispatched call writes its own event to `<output_dir>/telemetry.jsonl` — the bridge does
+this when you pass `--telemetry`, so you never hand-write a telemetry event.
+
+**Always pass `<output_dir>/telemetry.jsonl`, and nowhere else.** The path is not just where
+events land: the agent-worker path anchors its delegation evidence to the same directory,
+resolving it as `<dirname of telemetry_path>/delegation` (`AntigravityWorkerAdapter`). Pointing
+telemetry somewhere else silently separates each delegation's brief, sidecar and receipt from the
+run they document, and the run report then cannot find them. This bites only when the mechanical
+tier routes to the agent worker (`--enable-agent`, or a policy selecting `flash-agsdk-worker`),
+which is exactly when the evidence matters most.
+
+Event shape:
 
 ```json
 {
@@ -413,6 +499,7 @@ Log via `log_telemetry` with `telemetry_path` = `<output_dir>/telemetry.jsonl`. 
   "task_id": "<from packet>",
   "module": "<from packet>",
   "model": "<canonical model_name>",
+  "provenance": "vendor",
   "routed_by": "orchestrator|fallback|manual",
   "routing": { "policy_name": "...", "policy_version": 1, "rule_index": 3, "rule_reason": "..." },
   "input_tokens": 1840,
@@ -426,4 +513,37 @@ Log via `log_telemetry` with `telemetry_path` = `<output_dir>/telemetry.jsonl`. 
 }
 ```
 
-For direct-tier calls (no MCP dispatch), the orchestrator constructs this event itself using the char/3.8 token estimator. **Do not populate `ts` or `latency_ms` for these — `log_telemetry` overwrites both server-side.** You have no clock and no stopwatch, so any value you supply is a guess; the server stamps the real arrival time and records `latency_ms: null`, meaning "not measured". A `0` would be read downstream as "returned instantly", and an invented `ts` corrupts the run duration in the manifest, which is derived by sorting events on `ts`. **Pricing constants come from the current model's `effective_price.rates` in the `load_policy` result — never from a policy file's `pricing:` block, never from the subagent's trained knowledge, never hardcoded.** If that model has no `effective_price.rates`, abort the run (pre-flight already halts a run with a model that has no price). `effective_price` is the price the server bills `execute_with_model` events at (the dated price list, or the block only under `pricing_override: true`), and the post-run collector prices this session's transcript the same way, so estimates and billing use the same numbers; a block is documentation unless `pricing_override` is true.
+**Your own loop cost is recorded for you.** The launcher reads the `agy --print --output-format
+stream-json` event stream after the run and derives the conductor's token usage from its `usage`
+counters, writing those events to `driver-cost-modeled.jsonl` with `provenance: "modeled"` —
+modeled from token counts at the policy's driver card, because a Google-seat driver has no
+per-token invoice (p1-agy-runtime.md check 9). An interactive session has no such stream; its
+manifest carries the driver line as `unmeasured`. Never invent token counts or cost for your own work: a guessed figure
+sitting beside measured ones is worse than no figure.
+
+**But a phase that made no model call must still leave a row.** Two cases produce one:
+
+- the intent's phase table says SKIP, or
+- you completed the phase yourself, in-session, without dispatching a packet — a senior review
+  with no changed modules, a security review over an empty diff.
+
+Record each with a zero-cost event (interactive: `log_telemetry` with `task_type: "skipped"` or
+`"in_session"` and a `reason`), so that a phase missing from `telemetry.jsonl` always means a lost
+event and never an ambiguous one:
+
+```bash
+node "${MMO_PLUGIN_ROOT}/agy/dispatch.mjs" \
+  --log-phase=<state> --task-type=skipped|in_session \
+  --module=<module> --reason='<why in one line>' \
+  --policy=<policy> --telemetry="<output_dir>/telemetry.jsonl" \
+  --out="<output_dir>/<state>-skip-receipt.json"
+```
+
+These carry `provenance: "none"` and all-zero tokens. That is not an estimate — it is the fact
+that no model call was made. Where such a phase did consume tokens, they were yours, and they are
+already counted in the driver-loop events; the `--reason` string is what tells a reader so.
+
+A run that writes `review.json` or `security_review.md` without either dispatching a packet or
+logging one of these is under-reporting itself.
+
+**Pricing constants come from the loaded policy YAML's `pricing:` block for the current model — never from your trained knowledge, never hardcoded.** If the policy's pricing block is missing, abort the run.

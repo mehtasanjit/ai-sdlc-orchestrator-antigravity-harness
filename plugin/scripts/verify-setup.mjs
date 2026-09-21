@@ -216,7 +216,7 @@ export function mcpPaths(pluginRoot) {
 
 /**
  * Agent leaf id + slot. Literal because this runs pre-`npm ci`. Sync by hand
- * with opus-plus-flash.yaml — rename there = rename here, else this check
+ * with antigravity-flash38-plus-opus5.yaml — rename there = rename here, else this check
  * silently stops firing.
  */
 export const AGENT_WORKER_MODEL_ID = "flash-agsdk-worker";

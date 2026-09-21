@@ -52,3 +52,38 @@ test("no plugin/commands directory remains: agy has skills, not commands", () =>
   assert.ok(!existsSync(join(ROOT, "plugin", ".claude-plugin")));
   assert.ok(!existsSync(join(ROOT, "plugin", ".codex-plugin")));
 });
+
+/**
+ * The role prompts port as content, not mechanism (port plan section 3): the
+ * conductor authors nothing, so architect / senior-reviewer / security-reviewer
+ * are the `instruction` body of a bridge dispatch, and discovery is the
+ * conductor's own local read. Nothing in the playbooks may still describe the
+ * Claude Code shape — a subagent, a direct tier, or a plugin/agents directory.
+ */
+const ROLES = ["architect", "senior-reviewer", "security-reviewer"];
+const PLAYBOOKS = ["pipeline/SKILL.md", "brownfield-guide/SKILL.md", "brownfield-guide/discovery.md", ...ROLES.map((r) => `pipeline/roles/${r}.md`)];
+
+test("the role prompts live under the pipeline skill and the pipeline dispatches each one verbatim", () => {
+  const pipeline = readFileSync(join(SKILLS, "pipeline", "SKILL.md"), "utf8");
+  for (const role of ROLES) {
+    const file = join(SKILLS, "pipeline", "roles", `${role}.md`);
+    assert.ok(existsSync(file), `${role}.md missing`);
+    assert.match(readFileSync(file, "utf8"), /`instruction`/, `${role}.md must say it is the packet instruction`);
+    assert.ok(pipeline.includes(`roles/${role}.md`), `pipeline does not reference roles/${role}.md`);
+  }
+  assert.ok(existsSync(join(SKILLS, "brownfield-guide", "discovery.md")));
+  assert.ok(!existsSync(join(ROOT, "plugin", "agents")), "plugin/agents is the Claude Code layout; roles live under skills/");
+});
+
+test("the playbooks describe the conductor shape, never a subagent or a direct tier", () => {
+  for (const rel of PLAYBOOKS) {
+    const text = readFileSync(join(SKILLS, rel), "utf8");
+    for (const banned of ["subagent", "direct tier", "direct-tier", "Claude Code", "${CLAUDE_PLUGIN_ROOT}", "plugin/agents", "$mmo-codex", "codex/dispatch.mjs", "{{"]) {
+      assert.ok(!text.includes(banned), `${rel} still says '${banned}'`);
+    }
+  }
+  const pipeline = readFileSync(join(SKILLS, "pipeline", "SKILL.md"), "utf8");
+  assert.match(pipeline, /agy\/dispatch\.mjs/, "the headless dispatch route");
+  assert.match(pipeline, /call_mcp_tool/, "the interactive dispatch route");
+  assert.match(pipeline, /agy\/manifest\.mjs/, "manifest.json is written by code");
+});

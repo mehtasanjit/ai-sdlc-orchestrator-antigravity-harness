@@ -7,13 +7,13 @@
  *   telemetry.jsonl            — every dispatched model call, vendor-metered
  *                                through the bridge. Real usage, real money.
  *   driver-cost-modeled.jsonl  — the conductor's OWN token usage, derived
- *                                from `codex exec --json` turn counts at the
- *                                policy's pinned rates.
+ *                                from agy stream-json `usage` at the policy's
+ *                                driver card.
  *
- * The second is not measured spend. Codex reports no wallet figures at all
- * (verification doc, section 9), so the driver leg's cost can only ever be
- * modeled — and a driver running on a ChatGPT seat may have cost nothing in
- * actual money while still showing a modeled figure here. Merging the two
+ * The second is not measured spend. A driver on a Google seat has no
+ * per-token invoice (p1-agy-runtime.md check 9), so the driver leg's cost can
+ * only ever be modeled — it may have cost nothing in actual money while
+ * still showing a modeled figure here. Merging the two
  * into one total would produce a number that is neither: not the API bill,
  * not the seat usage. So the modeled line is reported separately, labelled,
  * and excluded from the vendor total. That separation is the point (D4).
@@ -255,10 +255,10 @@ if (asMarkdown) {
     p(`|---:|---|---:|`);
     p(`| ${modeledEvents.length} | ${fmtCompact(driverIn)} / ${fmtCompact(driverOut)} | ${fmtUSD(driverCost)} |`);
     p();
-    p(`> Codex reports no wallet or usage figures, so this is derived from turn token`);
-    p(`> counts at the policy's pinned rates. It is **not** an amount anyone was billed —`);
-    p(`> a driver running on a ChatGPT seat may have cost nothing in money at all. It is`);
-    p(`> reported separately, and excluded from the vendor total above, for that reason.`);
+    p(`> agy reports token counts and no wallet figure, so this is derived from the`);
+    p(`> stream's usage counters at the policy's driver card. It is **not** an amount`);
+    p(`> anyone was billed — a driver on a Google seat may have cost nothing in money at`);
+    p(`> all. It is reported separately, and excluded from the vendor total above.`);
   }
   p();
 } else {
@@ -271,9 +271,9 @@ if (asMarkdown) {
     p(`  ${"Tokens (in / out)".padEnd(24)}${`${fmtCompact(driverIn)} / ${fmtCompact(driverOut)}`.padStart(13)}`);
     p(`  ${"Modeled cost".padEnd(24)}${fmtUSD(driverCost).padStart(13)}`);
     p();
-    p(`  Codex reports no wallet figures, so this is derived from turn token counts`);
-    p(`  at the pinned rates. It is NOT an amount anyone was billed — a driver on a`);
-    p(`  ChatGPT seat may have cost nothing in money. Kept out of the vendor total.`);
+    p(`  agy reports token counts and no wallet figure, so this is derived from the`);
+    p(`  stream's usage at the driver card. It is NOT an amount anyone was billed — a`);
+    p(`  driver on a Google seat may have cost nothing in money. Kept out of the vendor total.`);
   }
   p();
 }

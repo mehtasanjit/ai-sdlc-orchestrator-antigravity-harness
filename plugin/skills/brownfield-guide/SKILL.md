@@ -1,9 +1,9 @@
 ---
 name: brownfield-guide
-description: The shared seven-step brownfield operating manual. Every brownfield entry point — /mmo:brownfield and the seven per-job commands (/mmo:bugfix, /mmo:docs, /mmo:test, /mmo:refactor, /mmo:deps, /mmo:feature-new, /mmo:feature-extend) — points here. Step 4 branches on an optional handover the invoking command supplies: intent (job type already chosen) and seed_description (the user's own words for the job).
+description: "The shared seven-step brownfield operating manual. Every brownfield entry point — `/mmo:brownfield` and the seven per-job commands (`/mmo:bugfix`, `/mmo:docs`, `/mmo:test`, `/mmo:refactor`, `/mmo:deps`, `/mmo:feature-new`, `/mmo:feature-extend`) — points here. Step 4 branches on an optional handover the invoking command supplies: intent (job type already chosen) and seed_description (the user's own words for the job)."
 ---
 
-You are Claude Code, following this operating manual. Work through the steps in order. Do not skip
+You are the conductor, following this operating manual. Work through the steps in order. Do not skip
 a step because the answer seems obvious. Do not begin the pipeline until Gate 0 is approved.
 
 **Prerequisite check:** if the user has not yet run the plugin's setup (`plugin install` + build
@@ -19,7 +19,7 @@ setup is one-time per machine and happens separately.
 - `seed_description:` present and non-empty — the user's own words for the job, typed after the
   command. Step 4b treats this as the answer to the interview's first question and asks only the
   remaining ones.
-- Neither present (the plain `/mmo:brownfield` case) — step 4 runs exactly as written below: ask
+- Neither present (the plain ``/mmo:brownfield`` case) — step 4 runs exactly as written below: ask
   which job type, then run the full interview.
 
 ---
@@ -29,7 +29,7 @@ setup is one-time per machine and happens separately.
 Before anything else, invoke:
 
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/scripts/session-hydrate.mjs" --json
+node "${MMO_PLUGIN_ROOT}/scripts/session-hydrate.mjs" --json
 ```
 
 Read the JSON. Three cases:
@@ -61,25 +61,31 @@ all steps still valid"* and skip to step 3.
 Script-side steps (2, 4, 5, 6) — you invoke via Bash:
 
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/scripts/pre-check.mjs" --run
+node "${MMO_PLUGIN_ROOT}/scripts/pre-check.mjs" --run
 ```
 
 Agent-side steps (1 = discovery smoke, 3 = dispatch smoke) — you run yourself:
 
-1. **Discovery smoke.** Invoke the `discovery` subagent (see [plugin/agents/discovery.md](/plugin/agents/discovery.md))
-   with `mode: first-time` (or `refresh` if a baseline exists). Watch for a non-git-repo refusal
+1. **Discovery smoke.** Run the discovery read yourself (see [discovery.md](discovery.md) — cheap
+   local reading with your own shell and file tools, no dispatch) with `mode: first-time` (or `refresh` if a baseline exists). Watch for a non-git-repo refusal
    or any hard error. On pass, record it:
    ```bash
-   echo '{"note":"Tier 1 completed cleanly"}' | node "${CLAUDE_PLUGIN_ROOT}/scripts/pre-check.mjs" --record discovery pass
+   echo '{"note":"Tier 1 completed cleanly"}' | node "${MMO_PLUGIN_ROOT}/scripts/pre-check.mjs" --record discovery pass
    ```
 
 3. **Dispatch smoke.** Construct a trivial `{ id: "smoke-1", phase: "codegen", task_type:
-   "smoke", instruction: "Return the literal string OK", ... }` TaskPacket and dispatch via
-   `execute_with_model` to each policy tier the current policy uses (typically premium +
-   mechanical for `opus-plus-flash`; just premium for `opus-only`). If both return their expected
-   output within the timeout, record pass:
+   "smoke", instruction: "Return the literal string OK", ... }` TaskPacket, write it to a file,
+   and dispatch it to each policy tier the current policy uses (premium + mechanical for
+   `antigravity-flash38-plus-opus5`) —
+   through `call_mcp_tool` → `mmo_model-dispatch` / `execute_with_model` when the bridge is connected
+   to this session, otherwise:
    ```bash
-   echo '{"tiers_tested":["opus","gemini-flash"]}' | node "${CLAUDE_PLUGIN_ROOT}/scripts/pre-check.mjs" --record dispatch pass
+   node "${MMO_PLUGIN_ROOT}/agy/dispatch.mjs" --packet=<smoke-packet.json> \
+     --out=<smoke-result.json> --policy=<policy> --project-root="$(pwd)"
+   ```
+   If both return their expected output within the timeout, record pass:
+   ```bash
+   echo '{"tiers_tested":["opus","gemini-flash"]}' | node "${MMO_PLUGIN_ROOT}/scripts/pre-check.mjs" --record dispatch pass
    ```
 
 If any pre-check step fails, **do not proceed to Gate 0.** Print the reported remediation and
@@ -90,15 +96,15 @@ fixes.
 
 If not already done during step 2's smoke:
 
-Invoke the `discovery` subagent. It reads the repo (git state, stack manifests, off-limits, monorepo
-signals, submodules, LFS, competing AI configs — see [plugin/agents/discovery.md](/plugin/agents/discovery.md)
-for the full read order) and writes:
+Run the discovery read. It covers the repo (git state, stack manifests, off-limits, monorepo
+signals, submodules, LFS, competing AI configs — see [discovery.md](discovery.md) for the full
+read order) and writes:
 - `.sdlc/runs/<run-id>/discovery.md` (per-run human-readable)
 - `.sdlc/runs/<run-id>/baseline.json` (per-run pointer snapshot)
 - `.sdlc/baseline/current.json` + `.sdlc/baseline/discovery.md` (living project baseline, on
   first-time or full refresh)
 - `.sdlc/baseline/stack-profile.md` (Tier 2b, only when triggered — unknown stack, custom
-  framework in CLAUDE.md, or `--adaptive-profile` passed)
+  framework in AGENTS.md, or `--adaptive-profile` passed)
 
 Wait for discovery to finish. If it refuses (non-git repo), stop here — the shepherd already
 printed the git-init guidance.
@@ -170,21 +176,16 @@ template from [plugin/skills/pipeline/SKILL.md](/plugin/skills/pipeline/SKILL.md
 
 - **Stack** — top-detected from `baseline.stacks`. Ask if it's right; accept overrides.
 - **Test command** — `baseline.test_command_proposed`. Accept an override.
-- **Auth mode** — ask `vendor` (billed via API keys) or `estimated` (Claude Code subscription
-  auth, cost is an estimate). Required — the orchestrator aborts without it. `estimated` also
-  requires `CLAUDE_CODE_SUBAGENT_MODEL` to have been set before `claude` launched (it is what
-  the driver subagents execute on): from a terminal, exported or in the `env` block of the
-  project's `.claude/settings.local.json`; from the desktop app, in the `env` block of
-  `~/.claude/settings.json`, since the app ignores project settings files. The orchestrator's
-  run-start driver-model check stops the run, printing where to set it, when it is unset or
-  disagrees with the policy's driver model.
+- **Auth mode** — `vendor`, the only mode on this runtime: every call is billed through the
+  bridge on the credentials in the shell that launched agy. Required — preflight aborts
+  without it. State it rather than ask; there is no in-session `estimated` mode on this runtime.
 - **Policy** — read `payload.project.default_policy` from the session-hydrate output already
   captured in step 1 of this command. This is what setup wrote to `.sdlc/project.json`. If
   it is null, setup was not completed for this project — abort Gate 0 and tell the user to
-  run setup first (see [SETUP.md](/SETUP.md) §5b — the one setup step that opens a browser
+  run setup first (see [SETUP.md](/SETUP.md) §5 — the one setup step that opens a browser
   for the policy console). Do not silently default and do not launch the console from here.
   Otherwise show the resolved name; accept, or accept an on-disk policy name for this run only
-  (e.g. `opus-only`) — a per-run override does not overwrite the project default.
+  (one saved from the policy console) — a per-run override does not overwrite the project default.
 - **Existing AI setup** — verbatim list from `baseline.ai_configs_detected`. Default is
   **OFF-LIMITS** for all of them. User can move any into the allowlist by naming it explicitly.
 - **Intent** — from step 4a. Re-confirm, even when the handover pre-set it.
@@ -219,33 +220,31 @@ run directory (leave it as a partial record), and stop.
 
 # 6. Run the pipeline
 
-Delegate to the `orchestrator` subagent per [plugin/skills/pipeline/SKILL.md](/plugin/skills/pipeline/SKILL.md).
-Pass:
+Follow [plugin/skills/pipeline/SKILL.md](../pipeline/SKILL.md) with:
 - `mode: brownfield`
 - `intent: <from Gate 0>`
 - `run_id: <YYYYMMDD-HHMMSS-<intent>-<slug>>`
 - `intent_brief_path: .sdlc/runs/<run-id>/intent_brief.md`
 - `baseline_path: .sdlc/baseline/current.json`
 - `policy: <as configured by setup — see the Policy bullet of Gate 0>`
-- `auth_mode: <from the Auth mode bullet of Gate 0>` — required; see
-  [plugin/agents/orchestrator.md](/plugin/agents/orchestrator.md) rule 6. Without it the
-  orchestrator aborts rather than guessing which transport bills the run.
+- `auth_mode: vendor` — the only mode on this runtime (the Auth mode bullet of Gate 0); the
+  bridge's preflight requires it and refuses to guess which transport bills the run.
 - `code_dir: <the project's working directory — the repo root, since edits land across the
   existing tree, not into one generated folder>`
 - `output_dir: .sdlc/runs/<run-id>` — where `requirements.md`, `design.md`,
   `security_review.md`, `packets.json`, `telemetry.jsonl`, `manifest.json`, and the final report
   land for this run.
 
-The orchestrator then drives phases 1 through 9 with gates 1, 2, 3, 4 as usual — but branched by
+You then drive phases 1 through 9 with gates 1, 2, 3, 4 as usual — but branched by
 intent (see the Intent matrix in SKILL.md). At each gate, relay the gate prompt to the user; do
 not answer on their behalf.
 
 # 7. Close out
 
-After the orchestrator emits the final report:
+After the final report:
 
 1. Append a row to `.sdlc/ledger.md` (human-readable) and `.sdlc/ledger.json` (machine mirror).
-2. Update `.sdlc/CLAUDE-SDLC.md` with the latest project fingerprint + a link to the ledger.
+2. Update the project fingerprint record with a link to the ledger.
 3. Clear the write-contract state: set `.sdlc/local/write-contract.json` active:false.
 4. Print the report to the user with cost breakdown, files touched, and (if applicable) the
    `git reset` command the report provides as the escape hatch.
@@ -254,7 +253,7 @@ Do not propose a follow-up run.
 
 # Flag surface (headless / repeat runs)
 
-`/mmo:pass` is the flag-driven twin of every brownfield entry point for scripted / CI invocations:
+``/mmo:pass`` is the flag-driven twin of every brownfield entry point for scripted / CI invocations:
 
 ```
 --mode brownfield --intent <docs|bugfix|feature-extend|feature-new|refactor|test|deps>

@@ -1,38 +1,84 @@
 # SETUP.md
 
-Credentials, arms and the pricing preflight. INSTALL.md gets the plugin discovered; this file gets a run paid for correctly.
+The shepherd's manual for setup, and the reference for credentials, the two Claude arms, the Gemini doors and the pricing preflight. [INSTALL.md](INSTALL.md) is the literal command sequence; this file says what each step means and what to tell the user.
 
-## The two Claude arms
+## 1. What setup produces
 
-Both arms run the same policy file and the same `claude-cli` adapter. The arm is the environment the bridge is launched with.
-
-| | Arm A | Arm B |
+| Where | What | Written by |
 |---|---|---|
-| Wallet | Anthropic API key | GCP project, Google's invoice, Google's published Claude rates |
-| Env | `ANTHROPIC_API_KEY` | `CLAUDE_CODE_USE_VERTEX=1` `ANTHROPIC_VERTEX_PROJECT_ID` `CLOUD_ML_REGION=global` + ADC |
-| Cost of record | `claude -p` result priced from the dated price list (Anthropic card) | tokens from the same result × the Vertex Claude card; the GCP invoice is the receipt |
-| Gate | key present | project active, Claude enabled in Model Garden (24–48 h approval), `roles/aiplatform.user`, quota in region |
+| `<harness>/plugin/mcp/model-dispatch/dist/` | The compiled bridge `plugin/mcp_config.json` points at | `npm run build` |
+| `<project>/.agents/plugins/mmo/` | Symlinks into the clone's `plugin/`, which is how agy discovers the plugin in a trusted workspace | `tools/setup.mjs` |
+| `<project>/.sdlc/project.json` | `default_policy`, the off-limits defaults | `plugin/scripts/setup-policy.mjs` (the policy console) |
+| `<project>/.sdlc/local/mmo-select.json` | `MMO_SELECT` when the agent path is chosen | `tools/setup.mjs --agent` |
+
+Nothing under `~/.gemini/` or `~/.claude/` is written. There is no global install.
+
+## 2. Reading the wizard's result
+
+`node tools/setup.mjs --project-root <project>` prints eight numbered steps. Relay them as they stand:
+
+| Mark | Meaning | What to do |
+|---|---|---|
+| ✓ | Done or already true | Nothing |
+| ! | Advisory — a run works, with a limit named | Say what the limit is |
+| ✗ | Blocking — a run would halt at preflight or the first dispatch | Name the variable or tool and where it goes; do not try to fix credentials yourself |
+
+`npm run verify` runs the same checks with no questions; `--fix` builds the bridge.
+
+## 3. The Claude wallets — two arms and the seat
+
+Every wallet runs the same policy file and the same `claude-cli` adapter (`claude -p`). The wallet is the environment the bridge is launched with — the shell that starts `agy` — or, with nothing exported, Claude Code's own sign-in.
+
+| | Arm A | Arm B | Seat |
+|---|---|---|---|
+| Wallet | Anthropic API key | GCP project, Google's invoice, Google's published Claude rates | A claude.ai subscription (Pro / Max) that Claude Code is signed in to |
+| Env | `ANTHROPIC_API_KEY` | `CLAUDE_CODE_USE_VERTEX=1` `ANTHROPIC_VERTEX_PROJECT_ID` `CLOUD_ML_REGION=global` + ADC | nothing — `claude auth status` shows `authMethod: claude.ai` |
+| Cost of record | `claude -p` result priced from the dated price list (Anthropic card) — cash | tokens from the same result × the Vertex Claude card; the GCP invoice is the receipt — cash | tokens priced at the Anthropic card — **modeled**; no invoice exists |
+| Gate | key present | project active, Claude enabled in Model Garden (24–48 h approval), `roles/aiplatform.user`, quota in region | signed in once with `claude` |
+| Study use | yes | yes | wiring and development runs; a study cost of record on it needs the owner's sign-off |
+
+A key or the Vertex variables win over the seat when both are present. Arm A and arm B set at once is refused by `verify` and by the wizard: the run record could not say which wallet paid. `manifest.json` records the wallet as `harness.arm` (`A`, `B` or `seat`) and, on the seat, moves the Claude line out of `cost.dispatched_cash_usd` into `cost.claude_seat_modeled_usd`.
 
 Re-test arm B with `claude -p --model claude-opus-5 'say ok'` under the arm-B env. A `403` names the project state; a `404 model not found` means Model Garden has not enabled Claude yet.
 
-## Gemini worker doors
+## 4. Gemini doors
 
-| Door | Adapter | Credential |
-|---|---|---|
-| `flash-completion` | `mcp:model-dispatch` | `GEMINI_API_KEY`, or Vertex ADC when unset |
-| `flash-agsdk-worker` | `antigravity-worker` | Vertex ADC only |
+| Door | Adapter | Credential | When |
+|---|---|---|---|
+| `flash-completion` | `mcp:model-dispatch` | `GEMINI_API_KEY`, or Vertex ADC when unset | The default. One completion call per packet |
+| `flash-agsdk-worker` | `antigravity-worker` | Vertex ADC only | An Antigravity SDK session with tools; reads and edits the workspace itself. Needs Python 3.10+ |
 
-Pick one per study with `SDLC_SELECT=gemini-flash=<door>` and pin it in the run record. While the GCP project is suspended only `flash-completion` on `GEMINI_API_KEY` runs.
+The wizard offers the agent path only when a usable Vertex ADC exists; `--agent` / `--no-agent` pre-answer it. The choice lands in `.sdlc/local/mmo-select.json` (read by the dispatch fallback) and must also be exported as `MMO_SELECT=gemini-flash=flash-agsdk-worker` in the shell that launches agy for the MCP route. Pin the door in the run record. While the GCP project is suspended only `flash-completion` on `GEMINI_API_KEY` runs.
 
-## Driver billing
+## 5. Choosing the policy
 
-The conductor runs on your Google seat by default: no invoice exists, so its cost line is **modeled** from agy's `usage` counters at the driver block's card and labeled so. A metered driver (`modelProvider: "gemini"` + `GEMINI_API_KEY`) requires editing `~/.gemini/antigravity-cli/settings.json`, which the standing rules exclude; if a study needs it, record the decision in the run manifest.
+The console (`plugin/policy-console/`, opened by `plugin/scripts/setup-policy.mjs`) shows the shipped presets with the agy driver pin on every card. Picking one, or saving a customized copy, writes `default_policy` to `<project>/.sdlc/project.json`; the skills and the headless launcher read it.
 
-## Before any paid run
+| Preset | Use |
+|---|---|
+| `antigravity-flash38-plus-opus5` | The study policy. Gemini 3.8 Flash conducts; Opus 5 at high effort on judgment phases; Flash on mechanical. Cap $50 |
+| (nothing else) | The Claude harness's `opus-*` / `flash-*` presets are not shipped here; they live under `plugin/mcp/model-dispatch/test/fixtures/policies/` as routing-engine test fixtures. This harness runs Gemini 3.8 Flash and Claude Opus 5, nothing else |
 
-1. `npm test` passes.
-2. `preflight_dispatch` with `auth_mode: vendor` reports `ok: true` for the policy.
-3. The pricing blocks in the policy match `plugin/mcp/model-dispatch/src/prices.ts` (test/prices.test.mjs enforces it).
-4. An explicit go from the study owner.
+Scripted: `node tools/setup.mjs --policy=<name>`, or `node plugin/scripts/setup-policy.mjs --policy=<name> --project-root <project>`.
 
-First paid run: `examples/quick-demo/brief.md` under `antigravity-flash38-plus-haiku45` to prove the wiring, then under `antigravity-flash38-plus-opus5`.
+## 6. Driver billing
+
+The conductor runs on your Google seat by default: no invoice exists, so its cost line is **modeled** from agy's `usage` counters at the driver block's card and labeled so in `driver-cost-modeled.jsonl` and `manifest.json`. A metered driver (`modelProvider: "gemini"` + `GEMINI_API_KEY`) requires editing `~/.gemini/antigravity-cli/settings.json`, which the standing rules exclude; if a study needs it, record the decision in the run manifest (`billing_mode: gemini-api-key` in the policy's `driver:` block).
+
+## 7. Hand over
+
+Setup ends by telling the user to start a **new** `agy` session in the project and to answer **yes** to the trust prompt. Plugins, rules, hooks and MCP servers load when a session begins, only in a trusted workspace; the setup session has none of them. Then `/mmo:greenfield` or `/mmo:brownfield`.
+
+## 8. Before any paid run
+
+1. `npm test` passes and `npm run verify` is green.
+2. The headless checks in [docs/verification/p1-agy-runtime.md](docs/verification/p1-agy-runtime.md) (2, 4, 6, 10) pass — recorded 2026-09-17 on agy 1.2.5.
+3. `preflight_dispatch` with `auth_mode: vendor` reports `ok: true` for the policy, and its models and rates are read back to the user.
+4. The pricing blocks in the policy match `plugin/mcp/model-dispatch/src/prices.ts` (`prices.test.mjs` enforces it).
+5. An explicit go from the study owner.
+
+First paid run: `examples/quick-demo/brief.md` under `antigravity-flash38-plus-opus5`.
+
+## Brownfield addendum
+
+Brownfield runs add a write contract: `<project>/.sdlc/local/write-contract.json`, confirmed at Gate 0, enforced by the `PreToolUse` hook in `plugin/hooks.json` (`plugin/agy/hooks/write-contract-check.mjs`). A refused write names the path and the rule; the decision is recorded in `.sdlc/local/guard-decisions.jsonl`. `npm run verify -- --brownfield-check` runs the brownfield prerequisites (Node, git ≥ 2.30, `.sdlc/` writable, skill-name conflicts).

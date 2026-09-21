@@ -7,8 +7,8 @@
  * launched it. So this script does the coupling: snapshot policies before →
  * launch server + browser → wait for user to save → diff to find the
  * new/modified policy → write its name to the current project's
- * .sdlc/project.json as `default_policy`. Both /mmo:greenfield and /mmo:brownfield
- * read that field via session-hydrate.
+ * .sdlc/project.json as `default_policy`. The greenfield and brownfield skills
+ * read that field via session-hydrate, and plugin/agy/run.mjs takes --policy.
  *
  * Flow is hybrid on purpose:
  *   - happy path: user saves, presses Enter, script detects exactly one new file
@@ -240,9 +240,9 @@ function prompt(question) {
  * Wait for a save to land in POLICIES_DIR. Resolves with the source that
  * triggered ("watch" | "enter" | "timeout"). Filesystem-signaled by default;
  * Enter is a parallel path for real terminals; timeout is the safety net.
- * The whole reason this exists instead of a plain readline prompt: Claude
- * Code's Bash tool doesn't attach an interactive stdin, so the previous
- * `await prompt("Press Enter…")` blocked forever and the coupling stalled
+ * The whole reason this exists instead of a plain readline prompt: an agent's
+ * shell tool doesn't attach an interactive stdin, so a plain
+ * `await prompt("Press Enter…")` blocks forever and the coupling stalls
  * after the browser save landed on disk.
  */
 function waitForPolicySave(before, timeoutMs) {
@@ -496,7 +496,7 @@ async function interactiveFlow(resolved, args) {
   process.stderr.write("\n");
   process.stderr.write(`  → Configure your policy in the browser, then click Save.\n`);
   process.stderr.write(`  → The terminal detects your save automatically (no Enter needed).\n`);
-  process.stderr.write(`  → To skip (pipelines will fall back to opus-plus-flash), press Ctrl-C.\n\n`);
+  process.stderr.write(`  → To skip (pipelines will fall back to antigravity-flash38-plus-opus5), press Ctrl-C.\n\n`);
 
   // Wait for a save (or Enter in a real TTY, or timeout). fs.watch is the
   // primary path because Claude Code's Bash tool doesn't provide interactive
@@ -508,7 +508,7 @@ async function interactiveFlow(resolved, args) {
 
   const { added, modified } = diffPolicies(before);
   // Strip the .yaml extension — `default_policy` in project.json is a policy
-  // *name* (`opus-only`, `opus-plus-flash`), not a filename. Downstream
+  // *name* (`antigravity-flash38-plus-opus5`), not a filename. Downstream
   // consumers (session-hydrate, MCP policy loader, /mmo:policy print) all
   // treat it as the bare stem; the old single-candidate branch left the
   // extension on, producing `default_policy="foo.yaml"` and 404s downstream.
@@ -532,7 +532,7 @@ async function interactiveFlow(resolved, args) {
       "\nType a policy name to use as this project's default, or press Enter to skip: ",
     );
     if (!ans) {
-      log("skipped — no default_policy written; pipelines will use opus-plus-flash.");
+      log("skipped — no default_policy written; pipelines will use antigravity-flash38-plus-opus5.");
       cleanup();
       return;
     }

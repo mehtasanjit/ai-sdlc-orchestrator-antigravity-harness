@@ -11,6 +11,11 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
+// The carried Claude-harness policies are bridge test fixtures, not shipped
+// presets of this harness (plugin/config/policies/ holds the two antigravity
+// policies). Point the loader at them for this file's process.
+process.env.MMO_POLICY_DIR = new URL("./fixtures/policies/", import.meta.url).pathname;
+
 /** A direct-tier event shaped exactly like the one the 2026-08-04 run produced. */
 function modelSuppliedEvent(overrides = {}) {
   return {

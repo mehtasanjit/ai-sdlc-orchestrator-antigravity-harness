@@ -34,6 +34,11 @@ import { unreachableModelIds } from "../dist/routing.js";
 import { assessModels } from "../dist/preflight.js";
 import { checkModelPrice, effectivePrice } from "../dist/effectivePrice.js";
 
+// The carried Claude-harness policies are bridge test fixtures, not shipped
+// presets of this harness (plugin/config/policies/ holds the two antigravity
+// policies). Point the loader at them for this file's process.
+process.env.MMO_POLICY_DIR = new URL("./fixtures/policies/", import.meta.url).pathname;
+
 const HERE = dirname(fileURLToPath(import.meta.url));
 const FIXTURE = join(HERE, "fixtures", "governance-demo", "routing-policy.yaml");
 const DAY = "2026-09-14";

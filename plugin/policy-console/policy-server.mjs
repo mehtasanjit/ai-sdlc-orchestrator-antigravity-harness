@@ -71,7 +71,7 @@ const KNOWN_ADAPTERS = [
 ];
 const ADAPTER_LABEL = {
   "builtin-anthropic": "Anthropic (Claude)",
-  "claude-cli": "Anthropic (Claude Code CLI, Max subscription)",
+  "claude-cli": "Anthropic Claude via claude -p (arm A: API key · arm B: Vertex)",
   "mcp:model-dispatch": "Gemini — completion call",
   "antigravity-worker": "Gemini — Antigravity agent (SDK worker)",
 };
@@ -88,14 +88,7 @@ const ANTHROPIC_EFFORT_TIERS = ["off", "low", "medium", "high", "xhigh", "max"];
 // tools/test/policy-console-presets.test.mjs fails when this list and the
 // directory disagree.
 const SHIPPED_PRESETS = [
-  "flash-agsdk-only",
-  "opus-only",
-  "opus-only-v5",
-  "opus-plus-flash",
-  "opus-plus-flash-v37",
-  "opus-plus-flash-v38",
-  "opus-plus-sonnet",
-  "opus-plus-sonnet-max",
+  "antigravity-flash38-plus-opus5",
 ];
 const NAME_PATTERN = /^[a-z0-9][a-z0-9-]*$/;
 
@@ -117,10 +110,9 @@ function listPolicyIds() {
     .filter((f) => f.endsWith(".yaml"))
     .map((f) => f.replace(/\.yaml$/, ""))
     .sort((a, b) => {
-      if (a === "opus-only") return -1;
-      if (b === "opus-only") return 1;
-      if (a === "opus-plus-flash") return -1;
-      if (b === "opus-plus-flash") return 1;
+      // The study policy first, then anything saved from the console.
+      const rank = (id) => (id === "antigravity-flash38-plus-opus5" ? 0 : 1);
+      if (rank(a) !== rank(b)) return rank(a) - rank(b);
       return a.localeCompare(b);
     });
 }
@@ -225,7 +217,7 @@ function fallbackRule(policy) {
 
 /**
  * Rules for phases NOT in the visible PHASES list (e.g. brownfield's
- * `discovery`, `change_plan` in `opus-plus-flash.yaml`). The console UI
+ * `discovery`, `change_plan` in `antigravity-flash38-plus-opus5.yaml`). The console UI
  * only renders 9 phases, but the base policy may name more. Without this,
  * buildCustomPolicy iterates only PHASES and silently drops those rules
  * on save — a data-loss regression from the old TypeScript app. Skip the
@@ -258,6 +250,10 @@ function summarizePolicy(id, policy, headerComment) {
     desc: headerComment || `${policy.models.length} models across ${policy.rules.length} routing rules.`,
     models: policy.models,
     select: policy.select,
+    // The agy driver pin (plugin/agy/telemetry/fairnessPin.mjs reads it). Shown,
+    // never edited here: the pin is a study decision, not a per-project knob.
+    driver: policy.driver ?? null,
+    hardCostCapUsd: typeof policy.hard_cost_cap_usd === "number" ? policy.hard_cost_cap_usd : null,
     routing,
     thinking,
     intentOverrides: intentPhaseOverrides(policy),
@@ -280,8 +276,8 @@ function loadAllPolicySummaries() {
 
 // ── build (mirrors lib/buildPolicy.ts) ────────────────────────────────
 
-function buildCustomPolicy(base, input) {
-  const { select, structural } = base;
+export function buildCustomPolicy(base, input) {
+  const { select, structural, driver, hardCostCapUsd } = base;
   const { models } = input;
   const rules = [];
 
@@ -328,7 +324,7 @@ function buildCustomPolicy(base, input) {
   }
 
   // Carry through rules for phases the console UI doesn't edit — brownfield's
-  // discovery / change_plan in opus-plus-flash.yaml is the concrete case. Old
+  // discovery / change_plan in antigravity-flash38-plus-opus5.yaml is the concrete case. Old
   // code silently dropped these on save; a saved custom policy would then fall
   // through to the default for those phases.
   if (Array.isArray(structural.extraPhaseRules)) {
@@ -337,12 +333,33 @@ function buildCustomPolicy(base, input) {
 
   rules.push(structural.fallback ?? { default: models[0]?.id ?? input.routing[PHASES[0].id] });
 
+  // `driver:` and `hard_cost_cap_usd` are not editable in the console and are
+  // carried from the base verbatim. Dropping the driver block made every
+  // console-saved antigravity policy unrunnable: run.mjs reads its pin there.
   return {
     version: base.version,
     name: input.name,
+    ...(driver ? { driver } : {}),
     models,
     ...(select ? { select } : {}),
     rules,
+    ...(typeof hardCostCapUsd === "number" ? { hard_cost_cap_usd: hardCostCapUsd } : {}),
+  };
+}
+
+/** The base-policy facts buildCustomPolicy needs, read off a parsed YAML. */
+export function baseFor(base) {
+  return {
+    version: base.version,
+    select: base.select,
+    driver: base.driver ?? null,
+    hardCostCapUsd: typeof base.hard_cost_cap_usd === "number" ? base.hard_cost_cap_usd : null,
+    structural: {
+      codegenTaskTypes: codegenTaskTypes(base),
+      debugEscalation: debugEscalationRule(base),
+      fallback: fallbackRule(base),
+      extraPhaseRules: extraPhaseRules(base),
+    },
   };
 }
 
@@ -460,19 +477,7 @@ function savePolicy(input) {
   if (errors.length) return { ok: false, errors };
 
   const base = parseYaml(readPolicyRaw(input.baseId));
-  const policy = buildCustomPolicy(
-    {
-      version: base.version,
-      select: base.select,
-      structural: {
-        codegenTaskTypes: codegenTaskTypes(base),
-        debugEscalation: debugEscalationRule(base),
-        fallback: fallbackRule(base),
-        extraPhaseRules: extraPhaseRules(base),
-      },
-    },
-    { ...input, name },
-  );
+  const policy = buildCustomPolicy(baseFor(base), { ...input, name });
   const yamlText = renderPolicyYaml(policy, input.baseId);
   const path = join(POLICIES_DIR, `${name}.yaml`);
 
@@ -585,19 +590,7 @@ const server = createServer(async (req, res) => {
         return;
       }
       const base = parseYaml(readPolicyRaw(payload.baseId));
-      const policy = buildCustomPolicy(
-        {
-          version: base.version,
-          select: base.select,
-          structural: {
-            codegenTaskTypes: codegenTaskTypes(base),
-            debugEscalation: debugEscalationRule(base),
-            fallback: fallbackRule(base),
-            extraPhaseRules: extraPhaseRules(base),
-          },
-        },
-        { ...payload, name },
-      );
+      const policy = buildCustomPolicy(baseFor(base), { ...payload, name });
       sendJson(res, 200, { ok: true, yaml: renderPolicyYaml(policy, payload.baseId) });
       return;
     }
@@ -607,10 +600,13 @@ const server = createServer(async (req, res) => {
   }
 });
 
-const args = parseArgs(process.argv.slice(2));
-server.listen(args.port, args.host, () => {
-  process.stderr.write(`policy-server: listening on http://${args.host}:${args.port}\n`);
-});
+export { summarizePolicy, renderPolicyYaml, SHIPPED_PRESETS, ADAPTER_LABEL };
 
-process.on("SIGTERM", () => server.close(() => process.exit(0)));
-process.on("SIGINT", () => server.close(() => process.exit(130)));
+if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
+  const args = parseArgs(process.argv.slice(2));
+  server.listen(args.port, args.host, () => {
+    process.stderr.write(`policy-server: listening on http://${args.host}:${args.port}\n`);
+  });
+  process.on("SIGTERM", () => server.close(() => process.exit(0)));
+  process.on("SIGINT", () => server.close(() => process.exit(130)));
+}

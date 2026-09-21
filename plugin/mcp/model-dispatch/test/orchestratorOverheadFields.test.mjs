@@ -30,7 +30,7 @@ const PKG = join(HERE, "..");
 const SCRIPT = join(PKG, "..", "..", "scripts", "collect-orchestrator-usage.mjs");
 const REPO = join(PKG, "..", "..", "..");
 const TSC = join(PKG, "node_modules", "typescript", "bin", "tsc");
-const ENV = { ...process.env, MMO_SELECT: "" };
+const ENV = { ...process.env, MMO_SELECT: "", MMO_POLICY_DIR: new URL("./fixtures/policies/", import.meta.url).pathname };
 
 /** The Fix E fields: on the manifest's orchestrator_overhead block AND on the orchestrator telemetry event. */
 const FIX_E_FIELDS = [

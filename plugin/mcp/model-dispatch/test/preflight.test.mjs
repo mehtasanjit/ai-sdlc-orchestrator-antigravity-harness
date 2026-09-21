@@ -14,6 +14,11 @@ import {
   requiresServerDispatch,
 } from "../dist/preflight.js";
 
+// The carried Claude-harness policies are bridge test fixtures, not shipped
+// presets of this harness (plugin/config/policies/ holds the two antigravity
+// policies). Point the loader at them for this file's process.
+process.env.MMO_POLICY_DIR = new URL("./fixtures/policies/", import.meta.url).pathname;
+
 /** The two models of the shipped opus-plus-flash policy, in policy-file order. */
 const MODELS = [
   { id: "opus", model_name: "claude-opus-4-7", adapter: "builtin-anthropic" },

@@ -13,7 +13,7 @@ start the run until step 5 is confirmed.
 
 **Before anything else,** check the current directory. This command is the **greenfield** entry
 point — it generates a whole new application from a brief into `./src`. If the user is standing in
-an **existing repo** (any of the signals below), they almost certainly want `/mmo:brownfield`
+an **existing repo** (any of the signals below), they almost certainly want ``/mmo:brownfield``
 instead, and running greenfield here would treat their real code as an empty canvas.
 
 Signals of an existing repo:
@@ -26,24 +26,24 @@ If any of these hold, **stop and offer the choice** before continuing:
 
 > This looks like an existing repo, not an empty folder.
 >
-> - **`/mmo:brownfield`** is for extending an existing project — pick one of seven job types
+> - **``/mmo:brownfield``** is for extending an existing project — pick one of seven job types
 >   (docs / bugfix / feature-extend / feature-new / refactor / test / deps), confirm scope at
 >   Gate 0, and run with a write contract that guarantees your existing files stay untouched.
-> - **`/mmo:greenfield`** (this command) will treat this folder as the target for a fresh generated
+> - **``/mmo:greenfield``** (this command) will treat this folder as the target for a fresh generated
 >   application. That may not be what you want.
 >
 > Which do you want to run? (`brownfield` / `run --force-greenfield` / `abort`)
 
 Only proceed with the rest of this command if the user replies `run --force-greenfield` or
 explicitly confirms they want greenfield in this folder. If they reply `brownfield`, exit and
-tell them to run `/mmo:brownfield` in their next turn.
+tell them to run ``/mmo:brownfield`` in their next turn.
 
 # 1. Check the setup before anything else
 
 Run the setup check that ships with the plugin:
 
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/scripts/verify-setup.mjs"
+node "${MMO_PLUGIN_ROOT}/agy/verify-setup.mjs"
 ```
 
 Read its exit code, not just its output.
@@ -71,16 +71,16 @@ each so the choice is meaningful. Say plainly how long each takes, because the d
 minutes versus hours and the user is paying for it. All four paths are inside the installed
 plugin, not the working directory — the user is typically standing in an empty folder, where no
 repository file exists:
-- `${CLAUDE_PLUGIN_ROOT}/examples/unit-convert/brief.md` — one endpoint converting Celsius to
+- `${MMO_PLUGIN_ROOT}/examples/unit-convert/brief.md` — one endpoint converting Celsius to
   Fahrenheit, three responses, no database. The shortest brief here, and the only one with no
   recorded pass in the repo, so a run against it cannot be mistaken for a replay of one.
-- `${CLAUDE_PLUGIN_ROOT}/examples/quick-demo/brief.md` — a one-endpoint ping service on Express,
+- `${MMO_PLUGIN_ROOT}/examples/quick-demo/brief.md` — a one-endpoint ping service on Express,
   no database. The one to pick to see the pipeline end to end: minutes, not hours, and a fraction
   of the cost.
-- `${CLAUDE_PLUGIN_ROOT}/examples/workforce-ops/brief.md` — HR and workforce operations: employees,
+- `${MMO_PLUGIN_ROOT}/examples/workforce-ops/brief.md` — HR and workforce operations: employees,
   time entries, leave approval, reporting, with encrypted PII and role-based masking. Five modules;
   expect an hour or more.
-- `${CLAUDE_PLUGIN_ROOT}/examples/travel-ops/brief.md` — travel booking operations: fare rules,
+- `${MMO_PLUGIN_ROOT}/examples/travel-ops/brief.md` — travel booking operations: fare rules,
   holds, cancellation and refund computation, an append-only ledger, with encrypted traveller PII.
   Five modules; expect an hour or more.
 
@@ -135,7 +135,7 @@ Tell the user both paths. If `./src` already contains files, say so and ask befo
 State the routing plainly, as fact. Read the policy name written by setup:
 
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/scripts/setup-policy.mjs" --print-only
+node "${MMO_PLUGIN_ROOT}/scripts/setup-policy.mjs" --print-only
 ```
 
 This prints the `default_policy` field setup wrote to `.sdlc/project.json`. If the output is
@@ -145,7 +145,7 @@ has explicitly picked or explicitly kept as the shipped default.
 
 Resolve the policy through the `load_policy` MCP tool, passing `policy_name: <resolved-name>` and
 `project_root: $(pwd)`. Do **not** read the preset YAML from
-`${CLAUDE_PLUGIN_ROOT}/config/policies/` yourself: the loader's precedence puts a repo-local
+`${MMO_PLUGIN_ROOT}/config/policies/` yourself: the loader's precedence puts a repo-local
 `<project root>/routing-policy.yaml` ahead of the named preset, and reading the preset file
 directly is exactly the bug that made greenfield preview one policy while the run priced under
 another. Passing `project_root` here also fixes it for the rest of the run: the server remembers
@@ -154,7 +154,7 @@ and every billed dispatch resolve through the same loader. Keep passing it on ea
 `execute_with_model` anyway — the fallback is a safety net, not a licence to drop the argument.
 
 The plan preview must state which policy file won and where it came from — one line, e.g.
-`Policy: project override (routing-policy.yaml)` or `Policy: preset opus-plus-flash` — so a
+`Policy: project override (routing-policy.yaml)` or `Policy: preset antigravity-flash38-plus-opus5` — so a
 surprise override is visible before anything is billed. To tell the two apart, check whether
 `<project root>/routing-policy.yaml` exists: if it does, the loader used it.
 
@@ -183,35 +183,27 @@ constructs the agent's adapter but never calls it, so three things stay unknown 
 delegated packet: whether the project carries the Antigravity entitlement, whether the region
 serves the model, and whether the credentials are still valid. All three fail *after* requirements,
 design and task planning are billed to the premium tier. Say that in one sentence and offer to run
-`${CLAUDE_PLUGIN_ROOT}/scripts/probe-agent-worker.mjs` first — one trivial delegation, about two
+`${MMO_PLUGIN_ROOT}/scripts/probe-agent-worker.mjs` first — one trivial delegation, about two
 cents, and it exits 0 or names the cause in words. If they decline, continue; the run is not
 blocked on it.
 
 This command runs whatever `project.default_policy` resolves to. To change it for this project,
-the user re-runs setup — `node "${CLAUDE_PLUGIN_ROOT}/scripts/setup-policy.mjs"` opens the
+the user re-runs setup — `node "${MMO_PLUGIN_ROOT}/scripts/setup-policy.mjs"` opens the
 browser-based policy console and writes the new choice to `.sdlc/project.json`. Do not launch
 the console from this flow; setup owns it.
 
 If step 1 reported missing Gemini credentials, say so here and explain the consequence in one
 sentence: the mechanical phases cannot dispatch, so the run would fail at the first codegen packet.
-Offer to continue on `opus-only` instead, which routes every phase to Claude and needs no Gemini
-credentials — and say plainly that it costs more, because the cost saving comes precisely from the
-phases that would have gone to the cheaper model.
+There is no all-Claude preset on this harness — the conductor itself is Gemini, so a Gemini
+credential is required regardless. Stop and tell the user which door to open (`GEMINI_API_KEY`,
+or Vertex ADC), then re-run the setup skill.
 
-# 5. Choose the telemetry mode, out loud
+# 5. Confirm the telemetry mode
 
-The run records tokens and cost in one of two modes. Present the choice; do not decide silently.
-
-- **Vendor** — every call goes through the bundled server, and the numbers are the ones the vendor
-  reports. Requires `ANTHROPIC_API_KEY`. Use this whenever the numbers will be shown to anyone.
-- **Estimated** — the judgment-phase tokens are estimated from character counts. No API key needed;
-  a Claude Code subscription covers the run. The mechanical-phase numbers are still vendor-reported.
-  This mode also requires `CLAUDE_CODE_SUBAGENT_MODEL` to have been set before `claude` launched,
-  to the policy's driver model: from a terminal, exported or in the `env` block of the project's
-  `.claude/settings.local.json`; from the desktop app, in the `env` block of
-  `~/.claude/settings.json` (the app ignores project settings files). The orchestrator's run-start
-  check stops the run otherwise and prints where to set it, because the driver subagents execute
-  whatever that variable names while the policy only prices the work.
+On this runtime there is one mode: **vendor**. Every call goes through the bundled server on real
+credentials, and the numbers are the ones the vendor reports. `--auth=estimated` and
+`CLAUDE_CODE_SUBAGENT_MODEL` belong to the Claude Code harness and do not apply here. Say so in one
+line and continue with `--auth=vendor`.
 
 If `ANTHROPIC_API_KEY` is set, recommend vendor and say why: the numbers reconcile against the
 console. If it is absent, recommend estimated and say what is lost: the judgment-phase figures are
@@ -226,7 +218,7 @@ Invoke the `orchestrator` subagent with the resolved settings from the steps abo
 
 - `brief_path` — the confirmed brief
 - `auth_mode` — `vendor` or `estimated`, as confirmed in step 5
-- `policy` — the resolved policy name from step 4 (`project.default_policy` or `opus-plus-flash`)
+- `policy` — the resolved policy name from step 4 (`project.default_policy` or `antigravity-flash38-plus-opus5`)
 - `code_dir` — `./src`
 - `output_dir` — `./.sdlc`
 

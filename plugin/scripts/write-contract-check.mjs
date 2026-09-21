@@ -259,8 +259,8 @@ async function main() {
   // (and target is by definition inside it). `escapes` cannot be true here.
   const { rel } = toRepoRelative(target, contractPath);
 
-  // The run's own output directory is auto-allowlisted (agents/orchestrator.md
-  // requires direct-tier artifacts to land under `.sdlc/runs/<run-id>/`).
+  // The run's own output directory is auto-allowlisted (the pipeline skill
+  // requires run artifacts to land under `.sdlc/runs/<run-id>/`).
   // `.sdlc/**` is in the default off-limits list and off-limits is evaluated
   // before the allowlist, so without this the contract refuses the run the
   // artifacts it is told to write. Scoped to this contract's run_id.

@@ -68,6 +68,18 @@ interface ClaudeCliResponse extends ClaudeCliResultLike {
   [key: string]: unknown;
 }
 
+/**
+ * `claude -p` argv for a model entry. `--effort` is passed only when the
+ * policy carries `reasoning.effort` (Haiku 4.5 rejects the flag), so Opus is
+ * thinking-matched to the Claude Code harness runs.
+ */
+export function claudeCliArgs(config: Pick<ModelConfig, "model_name" | "reasoning">): string[] {
+  const args = ["-p", "--model", config.model_name, "--output-format", "json"];
+  const effort = config.reasoning?.effort;
+  if (effort) args.push("--effort", effort);
+  return args;
+}
+
 export class ClaudeCliAdapter implements ModelAdapter {
   readonly id: string;
   readonly modelConfig: ModelConfig;
@@ -284,7 +296,7 @@ export class ClaudeCliAdapter implements ModelAdapter {
       try {
         child = this.spawnFn(
           "claude",
-          ["-p", "--model", this.modelConfig.model_name, "--output-format", "json"],
+          claudeCliArgs(this.modelConfig),
           { stdio: ["pipe", "pipe", "pipe"] },
         );
       } catch (err: any) {

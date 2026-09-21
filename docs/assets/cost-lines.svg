@@ -1,0 +1,109 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 400" role="img" aria-labelledby="cl-title cl-desc">
+  <title id="cl-title">Three cost lines, never summed</title>
+  <desc id="cl-desc">A run produces three cost lines. The driver line is Gemini 3.8 Flash conducting on a Google seat, priced from agy's stream-json usage at the policy's driver card — modeled, no invoice. The Gemini workers line is the mechanical phases through the bridge — cash, vendor-metered on an API key or a GCP project. The Claude worker line is Opus 5 on the judgment phases through claude -p — cash on an Anthropic key or Vertex, modeled on a claude.ai seat. manifest.json carries all three under cost.lines with a kind of cash or modeled, and a note that the two kinds are different dollars and are not added.</desc>
+
+  <defs>
+    <marker id="cl-arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#6B7280"/>
+    </marker>
+    <style>
+      .tag  { font: 700 10px system-ui, -apple-system, "Segoe UI", sans-serif; fill: #6B7280; letter-spacing: 0.10em; }
+      .h    { font: 700 15px system-ui, -apple-system, "Segoe UI", sans-serif; fill: #111827; }
+      .b    { font: 600 13px system-ui, -apple-system, "Segoe UI", sans-serif; fill: #1F2937; }
+      .s    { font: 400 12px system-ui, -apple-system, "Segoe UI", sans-serif; fill: #4B5563; }
+      .mono { font: 500 11.5px ui-monospace, "SF Mono", Menlo, Consolas, monospace; fill: #1F2937; }
+      .kind { font: 700 11px system-ui, -apple-system, "Segoe UI", sans-serif; letter-spacing: 0.08em; }
+      .note { font: 600 12.5px system-ui, -apple-system, "Segoe UI", sans-serif; fill: #B91C1C; }
+      @media (prefers-color-scheme: dark) {
+        .tag  { fill: #9CA3AF; }
+        .h    { fill: #F9FAFB; }
+        .b    { fill: #E5E7EB; }
+        .s    { fill: #D1D5DB; }
+        .mono { fill: #E5E7EB; }
+        .note { fill: #FCA5A5; }
+      }
+    </style>
+  </defs>
+
+  <rect width="1000" height="400" fill="none"/>
+
+  <text x="40"  y="36" class="tag">WHO SPENT</text>
+  <text x="400" y="36" class="tag">WHERE THE FIGURE COMES FROM</text>
+  <text x="760" y="36" class="tag">KIND OF DOLLARS</text>
+
+  <!-- line 1: driver -->
+  <g>
+    <rect x="40" y="56" width="320" height="86" rx="10" fill="#EDE9FE" stroke="#6D28D9" stroke-width="1.5"/>
+    <text x="58" y="82"  class="h" style="fill:#3B0764">Driver</text>
+    <text x="58" y="102" class="s" style="fill:#4C1D95">Gemini 3.8 Flash conducting on agy</text>
+    <text x="58" y="120" class="s" style="fill:#4C1D95">reads · plans · dispatches · judges gates</text>
+    <text x="58" y="136" class="s" style="fill:#4C1D95">authors nothing shipped</text>
+
+    <path d="M 365 99 L 395 99" stroke="#6B7280" stroke-width="1.5" marker-end="url(#cl-arr)"/>
+
+    <rect x="400" y="56" width="330" height="86" rx="10" fill="#F9FAFB" stroke="#D1D5DB" stroke-width="1.5"/>
+    <text x="418" y="82" class="b">stream-json usage × driver card</text>
+    <text x="418" y="102" class="mono">driver-cost-modeled.jsonl</text>
+    <text x="418" y="120" class="s">thinking at the output rate,</text>
+    <text x="418" y="136" class="s">cache reads at the cached rate</text>
+
+    <path d="M 735 99 L 765 99" stroke="#6B7280" stroke-width="1.5" marker-end="url(#cl-arr)"/>
+
+    <rect x="770" y="56" width="190" height="86" rx="10" fill="#FFF7ED" stroke="#C2410C" stroke-width="1.5"/>
+    <text x="865" y="88" text-anchor="middle" class="kind" style="fill:#9A3412">MODELED</text>
+    <text x="865" y="108" text-anchor="middle" class="s" style="fill:#9A3412">a Google seat has</text>
+    <text x="865" y="124" text-anchor="middle" class="s" style="fill:#9A3412">no per-token invoice</text>
+  </g>
+
+  <!-- line 2: gemini workers -->
+  <g>
+    <rect x="40" y="158" width="320" height="86" rx="10" fill="#E0F2FE" stroke="#0369A1" stroke-width="1.5"/>
+    <text x="58" y="184" class="h" style="fill:#0C4A6E">Gemini workers</text>
+    <text x="58" y="204" class="s" style="fill:#075985">Gemini 3.8 Flash on the mechanical phases</text>
+    <text x="58" y="222" class="s" style="fill:#075985">codegen · tests · docs · debug</text>
+    <text x="58" y="238" class="s" style="fill:#075985">as a model, or as an Antigravity SDK agent</text>
+
+    <path d="M 365 201 L 395 201" stroke="#6B7280" stroke-width="1.5" marker-end="url(#cl-arr)"/>
+
+    <rect x="400" y="158" width="330" height="86" rx="10" fill="#F9FAFB" stroke="#D1D5DB" stroke-width="1.5"/>
+    <text x="418" y="184" class="b">the vendor's usageMetadata × the list</text>
+    <text x="418" y="204" class="mono">telemetry.jsonl · provenance: vendor</text>
+    <text x="418" y="222" class="s">cached count subtracted once, in the adapter;</text>
+    <text x="418" y="238" class="s">thinking tokens billed as output</text>
+
+    <path d="M 735 201 L 765 201" stroke="#6B7280" stroke-width="1.5" marker-end="url(#cl-arr)"/>
+
+    <rect x="770" y="158" width="190" height="86" rx="10" fill="#ECFDF5" stroke="#059669" stroke-width="1.5"/>
+    <text x="865" y="190" text-anchor="middle" class="kind" style="fill:#065F46">CASH</text>
+    <text x="865" y="210" text-anchor="middle" class="s" style="fill:#047857">AI Studio key, or</text>
+    <text x="865" y="226" text-anchor="middle" class="s" style="fill:#047857">a GCP project via Vertex</text>
+  </g>
+
+  <!-- line 3: claude worker -->
+  <g>
+    <rect x="40" y="260" width="320" height="86" rx="10" fill="#FEF3C7" stroke="#B45309" stroke-width="1.5"/>
+    <text x="58" y="286" class="h" style="fill:#78350F">Claude worker</text>
+    <text x="58" y="306" class="s" style="fill:#92400E">Claude Opus 5 on the judgment phases</text>
+    <text x="58" y="324" class="s" style="fill:#92400E">requirements · design · plan · reviews</text>
+    <text x="58" y="340" class="s" style="fill:#92400E">through claude -p, via the bridge</text>
+
+    <path d="M 365 303 L 395 303" stroke="#6B7280" stroke-width="1.5" marker-end="url(#cl-arr)"/>
+
+    <rect x="400" y="260" width="330" height="86" rx="10" fill="#F9FAFB" stroke="#D1D5DB" stroke-width="1.5"/>
+    <text x="418" y="286" class="b">claude -p result usage × the list</text>
+    <text x="418" y="306" class="mono">telemetry.jsonl · provenance: vendor</text>
+    <text x="418" y="324" class="s">Claude Code's own total_cost_usd is kept</text>
+    <text x="418" y="340" class="s">as cli_reported_cost_usd — a check, never booked</text>
+
+    <path d="M 735 303 L 765 303" stroke="#6B7280" stroke-width="1.5" marker-end="url(#cl-arr)"/>
+
+    <rect x="770" y="260" width="190" height="86" rx="10" fill="#ECFDF5" stroke="#059669" stroke-width="1.5"/>
+    <text x="865" y="284" text-anchor="middle" class="kind" style="fill:#065F46">CASH on arm A / B</text>
+    <text x="865" y="302" text-anchor="middle" class="s" style="fill:#047857">Anthropic key · Vertex</text>
+    <line x1="786" y1="311" x2="944" y2="311" stroke="#059669" stroke-width="0.5"/>
+    <text x="865" y="328" text-anchor="middle" class="kind" style="fill:#9A3412">MODELED on the seat</text>
+    <text x="865" y="342" text-anchor="middle" class="s" style="fill:#9A3412">claude.ai sign-in, no invoice</text>
+  </g>
+
+  <text x="500" y="382" text-anchor="middle" class="note">cost.note — "dispatched_cash_usd and the modeled figures are different kinds of dollars and are not summed."</text>
+</svg>

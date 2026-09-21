@@ -18,7 +18,7 @@ import { CallToolRequestSchema, ListToolsRequestSchema } from "@modelcontextprot
 
 import { existsSync } from "node:fs";
 
-import { loadPolicy, loadPolicyFromPath, getModel } from "./policy.js";
+import { loadPolicy, loadPolicyFromPath, getModel, DEFAULT_POLICY_NAME } from "./policy.js";
 import {
   pickModel,
   simulatePolicyCost,
@@ -64,7 +64,7 @@ function validateTaskPacket(raw: unknown): TaskPacket {
     });
     throw new Error(
       `execute_with_model: TaskPacket is missing required field${missing.length > 1 ? "s" : ""}: ${missing.join(", ")}. ` +
-      `See plugin/mcp/model-dispatch/src/types.ts for the schema (or plugin/agents/orchestrator.md for the required-fields table).`,
+      `See plugin/mcp/model-dispatch/src/types.ts for the schema (or the TaskPacket table in plugin/skills/pipeline/SKILL.md).`,
     );
   }
   if (!Array.isArray(packet.inputs)) {
@@ -101,7 +101,7 @@ function ensurePolicy(policyName?: string, projectRoot?: string, policyPath?: st
   // An omitted project_root falls back to the one an earlier caller supplied,
   // so a dispatch resolves the same policy the preview did. See project-root.ts.
   projectRoot = resolveProjectRoot(projectRoot);
-  const key = `${policyName ?? "opus-only"}|${projectRoot ?? ""}|${policyPath ?? ""}`;
+  const key = `${policyName ?? DEFAULT_POLICY_NAME}|${projectRoot ?? ""}|${policyPath ?? ""}`;
   if (activePolicy && activePolicyKey === key) return activePolicy;
   const policy = policyPath
     ? loadPolicyFromPath(policyPath)
