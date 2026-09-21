@@ -7,7 +7,7 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { readFileSync, existsSync } from "node:fs";
+import { readFileSync, existsSync, lstatSync, readlinkSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -41,13 +41,37 @@ test("mcp_config.json carries no secret: every env value is a ${VAR} reference t
   }
 });
 
-test(".agents/plugins.json registers ./plugin and nothing else", () => {
-  const reg = readJson(".agents/plugins.json");
-  assert.deepEqual(reg, { entries: [{ path: ".", include_only: ["^plugin$"] }] });
+test(".agents/plugins/mmo/ is the discovery mount: every entry a relative symlink into plugin/ (check 10)", () => {
+  const mount = join(ROOT, ".agents", "plugins", "mmo");
+  assert.ok(!existsSync(join(ROOT, ".agents", "plugins.json")), "the declared route did not resolve on agy 1.2.5 and is not used");
+  for (const name of ["plugin.json", "mcp_config.json", "hooks.json", "skills", "rules", "mcp", "agy", "config", "scripts"]) {
+    const at = join(mount, name);
+    assert.ok(lstatSync(at).isSymbolicLink(), `${name} is a symlink`);
+    assert.equal(readlinkSync(at), join("..", "..", "..", "plugin", name));
+    assert.ok(existsSync(at), `${name} resolves`);
+  }
+  assert.equal(readJson(".agents/plugins/mmo/plugin.json").name, "mmo");
 });
 
 test("the conductor rules ship inside the plugin", () => {
   const rules = readFileSync(join(ROOT, "plugin", "rules", "AGENTS.md"), "utf8");
   assert.match(rules, /author no shipped content/);
   assert.match(rules, /execute_with_model/);
+});
+
+test("hooks.json uses agy's format: named hooks, regex matchers on step types, commands relative to the plugin dir", () => {
+  const hooks = readJson("plugin/hooks.json");
+  assert.ok(!("hooks" in hooks), "the Claude Code {hooks:{...}} envelope is not agy's format (check 11)");
+  const guard = hooks["mmo-write-contract"];
+  assert.ok(guard?.PreToolUse?.[0]?.matcher, "PreToolUse is grouped: matcher + hooks");
+  assert.match(guard.PreToolUse[0].matcher, /run_command/);
+  for (const group of [...guard.PreToolUse, ...hooks["mmo-telemetry-heartbeat"].PostToolUse]) {
+    for (const h of group.hooks) {
+      assert.equal(h.type, "command");
+      assert.ok(!h.command.includes("${CLAUDE_PLUGIN_ROOT}"), "no Claude Code variable");
+      const script = h.command.replace(/^node\s+/, "");
+      assert.ok(existsSync(join(ROOT, "plugin", script)), `${script} resolves from the plugin dir (hook cwd)`);
+    }
+  }
+  assert.equal(hooks["mmo-telemetry-heartbeat"].PostToolUse[0].matcher, "mcp_tool");
 });

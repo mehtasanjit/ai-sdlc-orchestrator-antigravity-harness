@@ -1,0 +1,30 @@
+{
+  "mmo-write-contract": {
+    "PreToolUse": [
+      {
+        "matcher": "run_command|code_action|propose_code|file_change|write_blob|replace_file_content|write_to_file|multi_replace_file_content",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node agy/hooks/write-contract-check.mjs",
+            "timeout": 10
+          }
+        ]
+      }
+    ]
+  },
+  "mmo-telemetry-heartbeat": {
+    "PostToolUse": [
+      {
+        "matcher": "mcp_tool",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node agy/hooks/heartbeat.mjs",
+            "timeout": 5
+          }
+        ]
+      }
+    ]
+  }
+}

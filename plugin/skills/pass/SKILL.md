@@ -1,7 +1,7 @@
 ---
 name: pass
 description: "Run the AI-SDLC workflow end-to-end. Reads a project brief and drives requirements, design, codegen, tests, docs, and reviews under the loaded policy. Premium-judgment phases stay on the subagent's own tier; mechanical phases dispatch to the policy's mechanical model. Configurable via --auth, --policy, --study, --run-id."
-argument-hint: "--auth=vendor|estimated [--policy=<name>] [--study=<study-id>] [--run-id=<run-id>] <path-to-brief.md>"
+argument-hint: "--auth=vendor [--policy=<name>] [--study=<study-id>] [--run-id=<run-id>] <path-to-brief.md>"
 ---
 
 
@@ -10,7 +10,7 @@ Invoke the `orchestrator` subagent to execute one full SDLC run.
 **Arguments:** $ARGUMENTS
 
 **Argument parsing (the orchestrator must do this):**
-- `--auth=<vendor|estimated>` — **required**. Picks the telemetry mode for the whole run. `vendor` dispatches every LLM call via the MCP server so telemetry carries real vendor-reported tokens; `estimated` uses a char-count heuristic for direct-tier calls. If the flag is missing or carries any other value, abort — see rule 6 in the orchestrator's system prompt for the exact abort text.
+- `--auth=vendor` — **required**, and `vendor` is the only value this runtime accepts: every LLM call dispatches via the MCP server so telemetry carries real vendor-reported tokens. `estimated` (a char-count heuristic for direct-tier calls) belongs to the Claude Code harness. If the flag is missing or carries any other value, abort — see rule 6 in the orchestrator's system prompt for the exact abort text.
 - `--policy=<name>` — routing policy name. When absent, resolves to the current project's `default_policy` field from `.sdlc/project.json` (written by the setup-time policy console — see [SETUP.md](../../SETUP.md) §5b), or `opus-plus-flash` if no project default is set.
 - `--study=<study-id>` — case-study identifier. Defaults to `workforce-ops`. Set this to a project-specific id when running against a brief other than the shipped `examples/workforce-ops/brief.md`, so telemetry and packets stay grouped by project.
 - `--run-id=<run-id>` — run identifier within the study. Defaults to `pass1`.
@@ -33,7 +33,7 @@ precedence, and the orchestrator's job is to pass the arguments that express wha
 for:
 
 1. **An explicit `--policy=<name>` flag wins over everything.** Pass it as
-   `policy_path: ${CLAUDE_PLUGIN_ROOT}/config/policies/<name>.yaml` — an explicit path bypasses
+   `policy_path: ${MMO_PLUGIN_ROOT}/config/policies/<name>.yaml` — an explicit path bypasses
    the loader's search entirely, which is what lets a flag typed for *this run* beat a repo-local
    override.
 2. **Otherwise a repo-local `<project root>/routing-policy.yaml` wins over any name.** Pass
@@ -41,27 +41,27 @@ for:
    file whenever it exists. Omitting `project_root` is the historical bug: the run silently fell
    back to the shipped preset while the project's own policy sat unread.
 3. **Otherwise the named preset** `plugin/config/policies/<name>.yaml` loads — the project's
-   `default_policy` from `.sdlc/project.json`, or `opus-plus-flash` when none is set.
+   `default_policy` from `.sdlc/project.json`, or `antigravity-flash38-plus-opus5` when none is set.
 
 Pass the same policy arguments on **every** call, `simulate_policy` included — a what-if priced
 under a different policy than the run used is worse than no what-if.
 
 **Requirements before starting:**
 - Gemini credentials must be present when the policy uses any Gemini model — either Google Cloud credentials for Gemini Enterprise Agent Platform, formerly Vertex AI (`gcloud auth application-default login`, no key), or `GEMINI_API_KEY` for AI Studio. If neither is available, abort with a clear message naming both.
-- `ANTHROPIC_API_KEY` env var must be set when `--auth=vendor`. If signed in to a Claude Code subscription under `--auth=estimated`, Claude Code provides direct-tier auth and the variable does not need to be exported. It IS required for `claude --print` (headless) invocations under `--auth=vendor`.
-- `CLAUDE_CODE_SUBAGENT_MODEL` must be set **before `claude` launches** when `--auth=estimated`, to the policy's driver `model_name`: from a terminal, exported or in the `env` block of `<project>/.claude/settings.local.json`; from the desktop app, in the `env` block of `~/.claude/settings.json` (the app ignores project settings files). It is what the five driver subagents actually execute on, and the orchestrator's run-start driver-model check aborts (printing where to set it) when it is unset or wrong. Print the expected value ahead of a headless run with `node "${CLAUDE_PLUGIN_ROOT}/scripts/driver-model-check.mjs" --project-root "$(pwd)" --print-only` plus the run's `--policy`/`--policy-path` arguments. Irrelevant under `--auth=vendor`.
+- A Claude wallet must be present in the shell that launched agy: arm A `ANTHROPIC_API_KEY`, or arm B `CLAUDE_CODE_USE_VERTEX=1` + `ANTHROPIC_VERTEX_PROJECT_ID` + `CLOUD_ML_REGION=global`. `--auth=estimated` is not available on this runtime; if it is passed, abort with the rule-6 text.
+- `CLAUDE_CODE_SUBAGENT_MODEL` does not apply on this runtime: the conductor is agy's own model, pinned by the policy's `driver:` block and asserted by `plugin/agy/run.mjs` before a headless run starts.
 - The MCP server `model-dispatch` must be registered (it is, via the plugin manifest).
 
 **HITL gates active:** Gate 1 (requirements), Gate 2 (design), Gate 3 (security review), Gate 4 (final acceptance).
 
-When invoked headlessly (e.g. via `claude --print "/mmo:pass ..." --output-format stream-json --verbose`), all four HITL gates auto-approve so the session can complete end-to-end without prompts.
+When invoked headlessly (`plugin/agy/run.mjs`, which wraps `agy --print … --output-format stream-json` with the pinned invocation, or `--gates=auto-approve` here), all four HITL gates auto-approve so the session can complete end-to-end without prompts.
 
 ---
 
 ## Brownfield-mode flags (added in v1)
 
 When `--mode=brownfield` is set, the pipeline uses the brownfield entry (equivalent to
-`/mmo:brownfield` but flag-driven for scripted / CI use). Additional required + optional
+``/mmo:brownfield`` but flag-driven for scripted / CI use). Additional required + optional
 flags:
 
 | Flag | Purpose |

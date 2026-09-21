@@ -20,6 +20,11 @@ import {
   unreachableModelIds,
 } from "../dist/routing.js";
 
+// The carried Claude-harness policies are bridge test fixtures, not shipped
+// presets of this harness (plugin/config/policies/ holds the two antigravity
+// policies). Point the loader at them for this file's process.
+process.env.MMO_POLICY_DIR = new URL("./fixtures/policies/", import.meta.url).pathname;
+
 const ctx = (phase, task_type = "misc", module = "cross", retry_count = 0) => ({
   phase,
   task_type,

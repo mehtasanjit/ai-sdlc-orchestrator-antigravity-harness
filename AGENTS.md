@@ -33,8 +33,20 @@ Rules for Antigravity CLI (`agy`) sessions editing this repo. The full contribut
 - **The driver pin lives in the policy's `driver:` block** (`plugin/config/policies/antigravity-flash38-plus-opus5.yaml`), read by `plugin/agy/run.mjs`. It is not a `models[]` entry: preflight builds an adapter for every model.
 - **Headless runs need `--dangerously-skip-permissions`.** Print mode soft-denies any tool that would prompt. `--gates=auto-approve` is the pass skill's gate mode, a different layer.
 - **Driver cost is modeled, never presented as spend.** Seat billing has no invoice; the event reader prices `usage` from the driver block's card and labels the line `modeled`.
-- **Never edit `~/.gemini/`.** The plugin is discovered from `.agents/plugins.json` in the repo. `agy plugin install`, `agy plugin import` and `agy mcp add` all write under your home directory; do not use them for this repo.
-- **Every capability claim cites a check** in `docs/verification/p1-agy-runtime.md`. A check marked pending pins nothing.
+- **Never edit `~/.gemini/`.** The plugin is discovered from the `.agents/plugins/mmo/` mount in the repo (the declared `.agents/plugins.json` route did not resolve — check 10). `agy plugin install`, `agy plugin import` and `agy mcp add` all write under your home directory; do not use them for this repo.
+- **Every capability claim cites a check** in `docs/verification/p1-agy-runtime.md`. A check marked pending pins nothing. `plugin/agy/telemetry/fairnessPin.mjs` mirrors the pending set; flip an entry only in the commit that records the live result.
+- **Two dispatch routes, one contract.** The conductor calls the bridge's MCP tools directly (pattern a); `plugin/agy/dispatch.mjs` is the fallback when a session binds none (pattern b). Both go through the same five tools and the same TaskPacket.
+- **`manifest.json` is code-written** (`plugin/agy/manifest.mjs`), never by the model. The driver's own line lives in `driver-cost-modeled.jsonl`, `provenance: "modeled"`, `tier: "orchestrator"`.
+
+## Standing rules
+
+- Generic engine only: no campaign values, seeds or study ids in code.
+- Never commit keys, credential files, run databases, run folders, or `dist/`.
+- Every change ships its tests, offline and free, reachable from `npm test`.
+- Pricing preflight before any paid run; no paid run without an explicit go.
+- The `google-antigravity` SDK is never the driver and never carries a Claude call. agy's built-in Claude is never used.
+- Nothing under `~/.gemini/` or `~/.claude/` is edited; everything lives under `.agents/` in the repo.
+- Modeled dollars (the driver line) and cash dollars (bridge dispatches) are never summed into one figure.
 
 ## Other conventions
 

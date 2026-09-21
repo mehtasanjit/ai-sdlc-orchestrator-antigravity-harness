@@ -1,0 +1,148 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 400" role="img" aria-labelledby="pg-title pg-desc">
+  <title id="pg-title">The pipeline's phases and gates</title>
+  <desc id="pg-desc">A greenfield run walks eleven states in order, with four human-in-the-loop gates: after requirements, after design, after security review, and before final acceptance. Brownfield inserts discovery and change_plan around the same core and adds Gate 0 before any of them. Amber phases dispatch to Claude Opus 5, blue to Gemini 3.8 Flash, violet are the conductor's own steps, grey are local with no model call.</desc>
+
+  <defs>
+    <marker id="pg-arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#6B7280"/>
+    </marker>
+    <style>
+      .tag  { font: 700 10px system-ui, -apple-system, "Segoe UI", sans-serif; fill: #6B7280; letter-spacing: 0.10em; }
+      .h    { font: 700 15px system-ui, -apple-system, "Segoe UI", sans-serif; fill: #111827; }
+      .s    { font: 400 12px system-ui, -apple-system, "Segoe UI", sans-serif; fill: #4B5563; }
+      .mono { font: 500 11px ui-monospace, "SF Mono", Menlo, Consolas, monospace; fill: #1F2937; }
+      .gate { font: 700 10.5px system-ui, -apple-system, "Segoe UI", sans-serif; fill: #B91C1C; letter-spacing: 0.06em; }
+      .leg  { font: 500 12px system-ui, -apple-system, "Segoe UI", sans-serif; fill: #374151; }
+      @media (prefers-color-scheme: dark) {
+        .tag  { fill: #9CA3AF; }
+        .h    { fill: #F9FAFB; }
+        .s    { fill: #D1D5DB; }
+        .mono { fill: #E5E7EB; }
+        .gate { fill: #FCA5A5; }
+        .leg  { fill: #D1D5DB; }
+      }
+    </style>
+  </defs>
+
+  <rect width="1000" height="400" fill="none"/>
+
+  <text x="40" y="36" class="tag">GREENFIELD — 11 STATES, 4 GATES</text>
+
+  <!-- row 1 -->
+  <g>
+    <rect x="40"  y="56" width="120" height="44" rx="8" fill="#F3F4F6" stroke="#6B7280" stroke-width="1.5"/>
+    <text x="100" y="74" text-anchor="middle" class="mono">preflight_dispatch</text>
+    <text x="100" y="90" text-anchor="middle" class="s">rule 0 · pricing</text>
+
+    <path d="M 165 78 L 195 78" stroke="#6B7280" stroke-width="1.5" marker-end="url(#pg-arr)"/>
+
+    <rect x="200" y="56" width="120" height="44" rx="8" fill="#EDE9FE" stroke="#6D28D9" stroke-width="1.5"/>
+    <text x="260" y="74" text-anchor="middle" class="mono">read_brief</text>
+    <text x="260" y="90" text-anchor="middle" class="s">conductor</text>
+
+    <path d="M 325 78 L 355 78" stroke="#6B7280" stroke-width="1.5" marker-end="url(#pg-arr)"/>
+
+    <rect x="360" y="56" width="140" height="44" rx="8" fill="#FEF3C7" stroke="#B45309" stroke-width="1.5"/>
+    <text x="430" y="74" text-anchor="middle" class="mono">requirements_analysis</text>
+    <text x="430" y="90" text-anchor="middle" class="s">Opus 5</text>
+
+    <line x1="518" y1="50" x2="518" y2="106" stroke="#B91C1C" stroke-width="2" stroke-dasharray="4 3"/>
+    <text x="518" y="118" text-anchor="middle" class="gate">GATE 1</text>
+
+    <path d="M 505 78 L 535 78" stroke="#6B7280" stroke-width="1.5" marker-end="url(#pg-arr)"/>
+
+    <rect x="540" y="56" width="140" height="44" rx="8" fill="#FEF3C7" stroke="#B45309" stroke-width="1.5"/>
+    <text x="610" y="74" text-anchor="middle" class="mono">architecture_design</text>
+    <text x="610" y="90" text-anchor="middle" class="s">Opus 5</text>
+
+    <line x1="698" y1="50" x2="698" y2="106" stroke="#B91C1C" stroke-width="2" stroke-dasharray="4 3"/>
+    <text x="698" y="118" text-anchor="middle" class="gate">GATE 2</text>
+
+    <path d="M 685 78 L 715 78" stroke="#6B7280" stroke-width="1.5" marker-end="url(#pg-arr)"/>
+
+    <rect x="716" y="56" width="152" height="44" rx="8" fill="#E0F2FE" stroke="#0369A1" stroke-width="1.5"/>
+    <text x="792" y="74" text-anchor="middle" class="mono">cache_project_header</text>
+    <text x="792" y="90" text-anchor="middle" class="s">Flash · warms the cache</text>
+
+    <path d="M 873 78 L 897 78" stroke="#6B7280" stroke-width="1.5" marker-end="url(#pg-arr)"/>
+
+    <rect x="902" y="56" width="78" height="44" rx="8" fill="#FEF3C7" stroke="#B45309" stroke-width="1.5"/>
+    <text x="941" y="74" text-anchor="middle" class="mono">plan_task</text>
+    <text x="941" y="90" text-anchor="middle" class="mono">_packets</text>
+  </g>
+
+  <!-- wrap -->
+  <path d="M 941 105 L 941 130 L 100 130 L 100 150" stroke="#6B7280" stroke-width="1.5" fill="none" marker-end="url(#pg-arr)"/>
+
+  <!-- row 2 -->
+  <g>
+    <rect x="40"  y="156" width="120" height="44" rx="8" fill="#E0F2FE" stroke="#0369A1" stroke-width="1.5"/>
+    <text x="100" y="174" text-anchor="middle" class="mono">execute_packets</text>
+    <text x="100" y="190" text-anchor="middle" class="s">Flash · codegen</text>
+
+    <path d="M 165 178 L 195 178" stroke="#6B7280" stroke-width="1.5" marker-end="url(#pg-arr)"/>
+
+    <rect x="200" y="156" width="140" height="44" rx="8" fill="#FEF3C7" stroke="#B45309" stroke-width="1.5"/>
+    <text x="270" y="174" text-anchor="middle" class="mono">senior_code_review</text>
+    <text x="270" y="190" text-anchor="middle" class="s">Opus 5</text>
+
+    <path d="M 345 178 L 375 178" stroke="#6B7280" stroke-width="1.5" marker-end="url(#pg-arr)"/>
+
+    <rect x="380" y="156" width="110" height="44" rx="8" fill="#F3F4F6" stroke="#6B7280" stroke-width="1.5"/>
+    <text x="435" y="174" text-anchor="middle" class="mono">test_run</text>
+    <text x="435" y="190" text-anchor="middle" class="s">local · no model</text>
+
+    <path d="M 495 178 L 525 178" stroke="#6B7280" stroke-width="1.5" marker-end="url(#pg-arr)"/>
+
+    <rect x="530" y="156" width="130" height="44" rx="8" fill="#FEF3C7" stroke="#B45309" stroke-width="1.5"/>
+    <text x="595" y="174" text-anchor="middle" class="mono">security_review</text>
+    <text x="595" y="190" text-anchor="middle" class="s">Opus 5</text>
+
+    <line x1="678" y1="150" x2="678" y2="206" stroke="#B91C1C" stroke-width="2" stroke-dasharray="4 3"/>
+    <text x="678" y="218" text-anchor="middle" class="gate">GATE 3</text>
+
+    <path d="M 665 178 L 695 178" stroke="#6B7280" stroke-width="1.5" marker-end="url(#pg-arr)"/>
+
+    <rect x="696" y="156" width="166" height="44" rx="8" fill="#EDE9FE" stroke="#6D28D9" stroke-width="1.5"/>
+    <text x="779" y="174" text-anchor="middle" class="mono">generate_final_report</text>
+    <text x="779" y="190" text-anchor="middle" class="s">conductor · SUMMARY.md</text>
+
+    <line x1="876" y1="150" x2="876" y2="206" stroke="#B91C1C" stroke-width="2" stroke-dasharray="4 3"/>
+    <text x="876" y="218" text-anchor="middle" class="gate">GATE 4</text>
+
+    <path d="M 867 178 L 891 178" stroke="#6B7280" stroke-width="1.5" marker-end="url(#pg-arr)"/>
+
+    <rect x="896" y="156" width="84" height="44" rx="8" fill="#ECFDF5" stroke="#059669" stroke-width="1.5"/>
+    <text x="938" y="174" text-anchor="middle" class="mono" style="fill:#065F46">done</text>
+    <text x="938" y="190" text-anchor="middle" class="s" style="fill:#047857">manifest.json</text>
+  </g>
+
+  <!-- brownfield -->
+  <text x="40" y="262" class="tag">BROWNFIELD ADDS</text>
+  <g>
+    <line x1="40" y1="274" x2="40" y2="330" stroke="#B91C1C" stroke-width="2" stroke-dasharray="4 3"/>
+    <text x="48" y="286" class="gate">GATE 0 — scope, job type, write contract</text>
+
+    <rect x="48" y="296" width="120" height="34" rx="8" fill="#FEF3C7" stroke="#B45309" stroke-width="1.5"/>
+    <text x="108" y="317" text-anchor="middle" class="mono">discovery</text>
+    <path d="M 173 313 L 203 313" stroke="#6B7280" stroke-width="1.5" marker-end="url(#pg-arr)"/>
+    <text x="270" y="317" text-anchor="middle" class="s">before requirements</text>
+
+    <rect x="360" y="296" width="120" height="34" rx="8" fill="#FEF3C7" stroke="#B45309" stroke-width="1.5"/>
+    <text x="420" y="317" text-anchor="middle" class="mono">change_plan</text>
+    <path d="M 485 313 L 515 313" stroke="#6B7280" stroke-width="1.5" marker-end="url(#pg-arr)"/>
+    <text x="600" y="317" text-anchor="middle" class="s">after design, before packets</text>
+  </g>
+
+  <!-- legend -->
+  <g>
+    <rect x="40"  y="360" width="14" height="14" rx="3" fill="#FEF3C7" stroke="#B45309"/>
+    <text x="60"  y="371" class="leg">Claude Opus 5 through the bridge — judgment</text>
+    <rect x="330" y="360" width="14" height="14" rx="3" fill="#E0F2FE" stroke="#0369A1"/>
+    <text x="350" y="371" class="leg">Gemini 3.8 Flash through the bridge — mechanical</text>
+    <rect x="650" y="360" width="14" height="14" rx="3" fill="#EDE9FE" stroke="#6D28D9"/>
+    <text x="670" y="371" class="leg">conductor — modeled</text>
+    <rect x="820" y="360" width="14" height="14" rx="3" fill="#F3F4F6" stroke="#6B7280"/>
+    <text x="840" y="371" class="leg">local — no model call</text>
+  </g>
+</svg>

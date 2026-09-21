@@ -142,10 +142,10 @@ targets so future `/sdlc-audit` runs can trace them.
 # 7. Flag surface
 
 ```
-/mmo:revert <run-id>                       # interactive; confirms before every destructive step
-/mmo:revert <run-id> --skip-dirty          # revert clean files only; leave dirty ones alone
-/mmo:revert <run-id> --dry-run             # print what WOULD be done; don't execute
-/mmo:revert <run-id> --keep-backups        # skip the backup-cleanup prompt
+`/mmo:revert` <run-id>                       # interactive; confirms before every destructive step
+`/mmo:revert` <run-id> --skip-dirty          # revert clean files only; leave dirty ones alone
+`/mmo:revert` <run-id> --dry-run             # print what WOULD be done; don't execute
+`/mmo:revert` <run-id> --keep-backups        # skip the backup-cleanup prompt
 ```
 
 No `--force`. If the user needs to override the dirty check for a specific file, they use

@@ -3,18 +3,18 @@
  * see who produced each line without parsing text — the single most misread
  * fact in a multi-model run is "who actually wrote the code".
  *
- * The codex cast differs from the Claude harness's in a way that matters
- * here: there, one premium model both conducted the run AND did the judgment
- * work, so a single `[C]` covered both. Here the conductor and the judgment
- * worker are separate calls to the same model family — the conductor's cost
- * is modeled from its own turns, the judgment worker's is vendor-metered
- * through the bridge. Collapsing them into one tag would hide exactly the
- * distinction the cost report exists to make.
+ * The antigravity cast differs from the Claude harness's in a way that
+ * matters here: there, one premium model both conducted the run AND did the
+ * judgment work, so a single `[C]` covered both. Here Gemini conducts and
+ * Opus 5 judges — the conductor's cost is modeled from its own turns, the
+ * judgment worker's is vendor-metered through the bridge. Collapsing them
+ * into one tag would hide exactly the distinction the cost report exists to
+ * make.
  */
 
 export const ACTOR = {
-  driver: "[D]",    // the codex conductor — runs the loop, writes no shipped content
-  judge: "[J]",     // GPT judgment worker, dispatched through the bridge
+  driver: "[D]",    // the Gemini conductor on agy — runs the loop, writes no shipped content
+  judge: "[J]",     // Opus 5 judgment worker, dispatched through the bridge
   worker: "[G]",    // Gemini mechanical tier
   handoff: "[→]",   // the dispatch itself: packet written, bridge called, result read
   script: "[·]",    // a scripted step of our own — verify, report

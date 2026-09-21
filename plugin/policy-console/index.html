@@ -77,6 +77,9 @@
     .badge { padding: 2px 8px; border-radius: 999px; font-size: 11px; background: var(--surface-2); color: var(--text-muted); }
     .badge.preset { background: #e8f0fe; color: var(--primary); }
     .badge.custom { background: #e6f4ea; color: var(--success-fg); }
+    .badge.driver { background: #fef7e0; color: #7a5a00; }
+    .driver-strip { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; padding: 10px 12px; background: #fef7e0; border: 1px solid #f3e2a8; border-radius: var(--radius-sm); font-size: 13px; margin-bottom: 12px; }
+    .driver-strip .k { color: var(--text-muted); }
     .model-list { display: flex; flex-direction: column; gap: 8px; }
     .model-chip { display: grid; grid-template-columns: 160px 220px 1fr auto; align-items: center; gap: 12px; padding: 8px 12px; background: var(--surface-2); border-radius: var(--radius-sm); }
     .adapter-badge { color: var(--text-muted); font-size: 12px; }
@@ -185,6 +188,7 @@
           <p>Every phase below routes to one of these. Add a model to make it selectable — it's written into the saved policy's own <span class="mono">models:</span> block.</p>
         </div>
       </div>
+      <div id="driver-strip" class="driver-strip hidden"></div>
       <div id="model-list" class="model-list"></div>
       <div id="add-model-container">
         <button class="btn ghost add-model-btn" onclick="toggleAddModel(true)">+ Add model</button>
@@ -291,15 +295,17 @@ function renderGallery() {
       <div class="desc">${escapeHtml(p.desc)}</div>
       <div class="meta">
         <span class="badge ${p.origin}">${p.origin}</span>
+        ${p.driver ? `<span class="badge driver" title="The agy conductor pin — read from the policy's driver: block, not editable here">driver: ${escapeHtml(p.driver.model_name)} · ${escapeHtml(p.driver.reasoning?.effort ?? "?")} · ${escapeHtml(p.driver.billing_mode ?? "seat")}</span>` : `<span class="badge" title="No driver: block — plugin/agy/run.mjs cannot run this policy on agy">no agy driver</span>`}
         <span class="badge">${p.models.length} model${p.models.length === 1 ? "" : "s"}</span>
         <span class="badge mono">${escapeHtml(meta)}</span>
+        ${typeof p.hardCostCapUsd === "number" ? `<span class="badge">cap $${p.hardCostCapUsd}</span>` : ""}
       </div>
     `;
     g.appendChild(c);
   }
-  // Default the "add new" base to opus-plus-flash if present, otherwise the
+  // Default the "add new" base to the study policy if present, otherwise the
   // first shipped preset, otherwise the first policy on disk.
-  const defaultBase = allPolicies.find((p) => p.id === "opus-plus-flash")
+  const defaultBase = allPolicies.find((p) => p.id === "antigravity-flash38-plus-opus5")
     ?? allPolicies.find((p) => p.origin === "preset")
     ?? allPolicies[0];
   if (defaultBase) {
@@ -337,11 +343,34 @@ function openEditor(policy, isNew) {
   document.getElementById("output-path").textContent = "plugin/config/policies/<name>.yaml";
   document.getElementById("view-gallery").classList.add("hidden");
   document.getElementById("view-editor").classList.remove("hidden");
+  renderDriverStrip(policy);
   renderModels();
   renderPhases();
   toggleAddModel(false);
   updateValidation();
   refreshPreview();
+}
+
+// The conductor pin is carried into a saved policy verbatim and is not a
+// per-project choice, so it is shown, not edited.
+function renderDriverStrip(policy) {
+  const el = document.getElementById("driver-strip");
+  if (!policy.driver) {
+    el.className = "driver-strip";
+    el.innerHTML = `<span><b>No agy driver block.</b> A policy saved from this base cannot be run by <span class="mono">plugin/agy/run.mjs</span>; start from <span class="mono">antigravity-flash38-plus-opus5</span> for a runnable one.</span>`;
+    return;
+  }
+  const d = policy.driver;
+  const card = rateLabel(d) || "—";
+  el.className = "driver-strip";
+  el.innerHTML = `
+    <span class="k">Conductor (agy driver, carried as-is):</span>
+    <span class="mono">${escapeHtml(d.model_name)}</span>
+    <span>effort <b>${escapeHtml(d.reasoning?.effort ?? "?")}</b></span>
+    <span>billing <b>${escapeHtml(d.billing_mode ?? "seat")}</b> — modeled, never presented as spend</span>
+    <span class="rate tnum">${card}</span>
+    ${typeof policy.hardCostCapUsd === "number" ? `<span>hard cap <b>$${policy.hardCostCapUsd}</b></span>` : ""}
+  `;
 }
 
 function renderModels() {

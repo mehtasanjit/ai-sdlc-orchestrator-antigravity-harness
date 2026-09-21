@@ -1,6 +1,6 @@
 # Brief template
 
-> **For:** writing your own project brief in the section layout the pipeline expects. **Also see:** [tutorial-first-run.md](tutorial-first-run.md) · [running.md](running.md).
+> **For:** writing your own project brief in the section layout the pipeline expects. **Also see:** [tutorial-first-run.md](tutorial-first-run.md) · [running.md](running.md) · [../examples/](../examples/).
 
 The driver reads the brief file at the path it is given. The requirements and
 architecture phases expect the section headings listed below; the wording
@@ -10,11 +10,11 @@ Copy this file, fill in the sections, save it anywhere in the repo (or
 outside it), and point the driver at the new path:
 
 ```
-node plugin/codex/run.mjs \
+node plugin/agy/run.mjs \
   --brief=path/to/your-brief.md \
   --project-root=. \
   --output-dir=.sdlc \
-  --policy=gpt-plus-flash \
+  --policy=antigravity-flash38-plus-opus5 \
   --run-id=pass1
 ```
 
@@ -23,10 +23,10 @@ and the run manifest. Give each run its own `--run-id` so they stay separate.
 Add `--dry-run` to render the conductor prompt and exit without spending
 anything, and `--gates=auto-approve` for an unattended run.
 
-Related: [running.md](running.md#bring-your-own-brief) for the full workflow,
-[methodology.md](methodology.md) for what the pipeline records.
+Related: [running.md](running.md) for the flags and the run directory,
+[architecture.md](architecture.md) for what the pipeline records.
 
-`$mmo-codex:greenfield` runs from wherever you are — usually an empty folder —
+The `greenfield` skill runs from wherever you are — usually an empty folder —
 and `docs/` is not copied on install, so that skill carries the same section
 set inline in `plugin/skills/greenfield/SKILL.md`. **A heading changed here
 must be changed there too.**

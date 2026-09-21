@@ -29,6 +29,11 @@ import * as effectiveMod from "../dist/effectivePrice.js";
 import * as pricingMod from "../dist/pricing.js";
 import { priceClaudeCliResult, readWorkerTranscript } from "../dist/adapters/claudeCliLedger.js";
 
+// The carried Claude-harness policies are bridge test fixtures, not shipped
+// presets of this harness (plugin/config/policies/ holds the two antigravity
+// policies). Point the loader at them for this file's process.
+process.env.MMO_POLICY_DIR = new URL("./fixtures/policies/", import.meta.url).pathname;
+
 const HERE = dirname(fileURLToPath(import.meta.url));
 const SCRIPT = join(HERE, "..", "..", "..", "scripts", "collect-orchestrator-usage.mjs");
 const REPO = join(HERE, "..", "..", "..", "..");

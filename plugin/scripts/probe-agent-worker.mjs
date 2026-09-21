@@ -11,7 +11,7 @@
  * gemini-3.5-flash global: 12,245/154 tokens, $0.0198.
  *
  * Usage:
- *   node probe-agent-worker.mjs                  # opus-plus-flash
+ *   node probe-agent-worker.mjs                  # antigravity-flash38-plus-opus5
  *   node probe-agent-worker.mjs --policy=<name>
  *
  * Exit 0: delegation completed and priced. Exit 1: cause named in words.
@@ -39,7 +39,7 @@ export function agentLeafFrom(policy) {
     throw new Error(
       `Policy '${policy?.name ?? "?"}' declares no agent-worker leaf ` +
         `(no model with adapter: ${AGENT_ADAPTER}), so there is nothing here to probe. ` +
-        `The shipped policy that has one is opus-plus-flash.`
+        `The shipped policy that has one is antigravity-flash38-plus-opus5.`
     );
   }
   if (leaves.length > 1) {
@@ -242,7 +242,7 @@ function makeProbeDirs() {
 async function main() {
   const pluginRoot = dirname(dirname(fileURLToPath(import.meta.url)));
   const argv = process.argv.slice(2);
-  const policyName = readFlag(argv, "policy") ?? "opus-plus-flash";
+  const policyName = readFlag(argv, "policy") ?? "antigravity-flash38-plus-opus5";
   const modelId = readFlag(argv, "model");
   const log = (m = "") => console.log(m);
 

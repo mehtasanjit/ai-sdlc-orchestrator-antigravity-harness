@@ -13,18 +13,18 @@ pause only when a human decision is genuinely required.
 **Argument parsing:**
 - `--policy=<name>` — pre-answer the policy pick (skips the browser). Must match a file in
   `plugin/config/policies/<name>.yaml` — the directory listing is the authoritative preset set
-  (`opus-plus-flash` is the recommended default; a wrong name makes the loader print the live
+  (`antigravity-flash38-plus-opus5` is the study policy and the default; a wrong name makes the loader print the live
   list).
 - `--gemini-door=<enterprise|antigravity>` — pre-answer the Gemini door choice. `enterprise` is the
   API-key / ADC path (default); `antigravity` opens the Antigravity SDK worker (requires ADC).
-- `--user` — write the Gemini-door selection to `~/.claude/settings.json` (all folders on this
-  machine) instead of the project-local `.claude/settings.local.json`.
+- `--user` — accepted for compatibility and ignored: this runtime keeps every setting in the
+  project (`.sdlc/local/mmo-select.json`); nothing is written under `~/.gemini/`.
 
 # Scope
 
 This is the RE-VERIFY / RE-CONFIGURE command. First-time install (marketplace add + `/plugin
 install`) still lives in [SETUP.md](../../SETUP.md) — the plugin has to exist before its slash
-commands do. `/mmo:setup` covers everything from step 3 of SETUP.md onward: MCP server build,
+commands do. ``/mmo:setup`` covers everything from step 3 of SETUP.md onward: MCP server build,
 environment check, credential probe, Gemini door, policy pick, and the hand-over banner.
 
 Every step below auto-runs unless it hits a genuine decision. Print one line per completed step,
@@ -33,14 +33,14 @@ so the user can see progress. Pause only when a step actually needs a human answ
 # 1. Build / rebuild the MCP server (silent)
 
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/scripts/verify-setup.mjs" --fix --project-root "$(pwd)"
+node "${MMO_PLUGIN_ROOT}/agy/verify-setup.mjs" --fix --project-root "$(pwd)"
 ```
 
 `--fix` installs the MCP server's npm deps and TypeScript-compiles it. Idempotent — no-op if the
 build is already current. Report the one-line result and continue.
 
 If the script exits non-zero, print the error, its `fix:` field, and STOP. This is a blocking
-issue (Node < 20, missing Claude Code CLI, a build error) and must be resolved before anything
+issue (Node < 20, `agy` or `claude` missing, a build error) and must be resolved before anything
 downstream can work.
 
 # 2. Read the verify result and pause only for missing credentials
@@ -51,14 +51,16 @@ The script reports three kinds of finding:
 - `!` **warning** — usually a missing credential. **Pause here.** For each warning, print the
   finding and ask the user for the value. Do not fabricate; do not proceed to the next step until
   the credential is either supplied or explicitly skipped.
-  - `ANTHROPIC_API_KEY` — required for vendor-billed runs. Not required under subscription auth.
+  - A Claude wallet — arm A `ANTHROPIC_API_KEY`, or arm B `CLAUDE_CODE_USE_VERTEX=1` +
+    `ANTHROPIC_VERTEX_PROJECT_ID` + `CLOUD_ML_REGION=global`. Required by every policy that
+    routes judgment work through `claude-cli`.
   - Gemini access — required by any policy that routes mechanical phases to Gemini. Two doors,
     see step 3 below.
 - `✓` **ok** — no action, continue.
 
-Write supplied credentials to the `env` block of `~/.claude/settings.json` (or use
-`gcloud auth application-default login` for the Google Cloud path — no env var involved). Never
-write `MMO_SELECT` by hand; step 3 handles it.
+Do not write a supplied credential anywhere. Tell the user to export it in the shell that launches
+agy (or run `gcloud auth application-default login` for the Google Cloud path — no env var
+involved) and to start a new session. Never write `MMO_SELECT` by hand; step 3 handles it.
 
 # 3. Gemini door — auto-pick if only one works, ask only if both are available
 
@@ -82,7 +84,7 @@ Decision matrix:
 When switching to Antigravity:
 
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/scripts/verify-setup.mjs" --enable-agent --project-root "$(pwd)"
+node "${MMO_PLUGIN_ROOT}/agy/verify-setup.mjs" --enable-agent --project-root "$(pwd)"
 ```
 
 Add `--user` if the caller passed `--user`. This writes `MMO_SELECT=gemini-flash=flash-agsdk-worker`
@@ -90,22 +92,22 @@ to the settings file and builds the Python environment the agent path needs.
 
 # 4. Policy pick
 
-Read the current default: `node "${CLAUDE_PLUGIN_ROOT}/scripts/setup-policy.mjs" --print-only
+Read the current default: `node "${MMO_PLUGIN_ROOT}/scripts/setup-policy.mjs" --print-only
 --project-root "$(pwd)"`. If it prints a policy name, the project already has one — print
 `current policy: <name>` and skip to step 5.
 
 If `--policy=<name>` was supplied, honor it silently — no prompt, no browser:
 
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/scripts/setup-policy.mjs" --policy=<name> --project-root "$(pwd)"
+node "${MMO_PLUGIN_ROOT}/scripts/setup-policy.mjs" --policy=<name> --project-root "$(pwd)"
 ```
 
-**Otherwise, use the same terminal picker as `/mmo:policy change` Shape 2.** Skip the mid-run
+**Otherwise, use the same terminal picker as ``/mmo:policy` change` Shape 2.** Skip the mid-run
 guard here (no brownfield run has started yet in setup); everything else applies:
 
 1. Enumerate policies:
    ```bash
-   node "${CLAUDE_PLUGIN_ROOT}/scripts/setup-policy.mjs" --list-json --project-root "$(pwd)"
+   node "${MMO_PLUGIN_ROOT}/scripts/setup-policy.mjs" --list-json --project-root "$(pwd)"
    ```
 2. Ask via `AskUserQuestion`:
    - question: `Which policy do you want as this project's default?`
@@ -121,7 +123,7 @@ guard here (no brownfield run has started yet in setup); everything else applies
        (options: `Retry (I fixed them)`, `Pick a different policy`). Retry → re-run `--check-creds`
        with the same policy. Pick different → loop back to step 1.
    - `Author a new policy (opens browser)` → run
-     `node "${CLAUDE_PLUGIN_ROOT}/scripts/setup-policy.mjs" --project-root "$(pwd)"`. The script
+     `node "${MMO_PLUGIN_ROOT}/scripts/setup-policy.mjs" --project-root "$(pwd)"`. The script
      starts the local server, opens the browser, and detects the save automatically via `fs.watch`.
 
 Do not suggest "Type something" as a hidden option — the user's typed name may not match a
@@ -137,24 +139,24 @@ did not (e.g. the run stopped short earlier), print it explicitly:
 
 Try one of these in a NEW session in the same folder:
 
-  /mmo:greenfield          — generate a new app from a brief (empty folder)
-  /mmo:brownfield   — work on this existing repo (docs, bugfix, feature, refactor, …)
-  /mmo:policy       — change this project's model policy
-  /mmo:pass         — headless/scripted run (for CI or replays)
+  `/mmo:greenfield`          — generate a new app from a brief (empty folder)
+  `/mmo:brownfield`   — work on this existing repo (docs, bugfix, feature, refactor, …)
+  `/mmo:policy`       — change this project's model policy
+  `/mmo:pass`         — headless/scripted run (for CI or replays)
 
-Current policy: <policyName>   (change: /mmo:policy change)
+Current policy: <policyName>   (change: `/mmo:policy` change)
 ```
 
-Say plainly why a NEW session is required: Claude Code builds the slash-command list and starts
-plugin MCP servers at session boot. In this session the setup changes are on disk but not live.
+Say plainly why a NEW session is required: agy loads a plugin's skills, rules, hooks and MCP
+servers when a session begins. In this session the setup changes are on disk but not live.
 
 # Idempotency
 
 Every step is safe to re-run:
 - The MCP build is a `tsc` no-op if nothing changed.
 - The credential probe reads env / settings; it never writes.
-- The Gemini-door flip is a plain settings write.
+- The Gemini-door flip is a plain write of `.sdlc/local/mmo-select.json`.
 - The policy pick reads `.sdlc/project.json` first and skips the browser if a policy is already set.
 
-Re-run `/mmo:setup` after `/plugin update` (the update wipes `dist/`; `--fix` restores it), or
+Re-run ``/mmo:setup`` after `/plugin update` (the update wipes `dist/`; `--fix` restores it), or
 whenever a credential changes.

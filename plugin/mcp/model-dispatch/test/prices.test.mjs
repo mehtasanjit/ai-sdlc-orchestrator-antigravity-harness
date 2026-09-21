@@ -23,9 +23,22 @@ import { parse as parseYaml } from "yaml";
 import { PRICE_LIST, PRICE_LIST_VERIFIED, resolveModel, lookupPrice } from "../dist/prices.js";
 import { computeCostUsd } from "../dist/pricing.js";
 
+// The carried Claude-harness policies are bridge test fixtures, not shipped
+// presets of this harness (plugin/config/policies/ holds the two antigravity
+// policies). Point the loader at them for this file's process.
+process.env.MMO_POLICY_DIR = new URL("./fixtures/policies/", import.meta.url).pathname;
+
 const HERE = dirname(fileURLToPath(import.meta.url));
 const DIST = join(HERE, "..", "dist");
 const POLICY_DIR = join(HERE, "..", "..", "..", "config", "policies");
+// Both the shipped antigravity policies and the carried Claude-harness
+// fixtures are checked against the price list: a fixture with a stale card
+// would make a routing test pass on a price nobody bills.
+const FIXTURE_POLICY_DIR = join(HERE, "fixtures", "policies");
+const policyFiles = () => [
+  ...readdirSync(POLICY_DIR).filter((f) => f.endsWith(".yaml")).map((f) => join(POLICY_DIR, f)),
+  ...readdirSync(FIXTURE_POLICY_DIR).filter((f) => f.endsWith(".yaml")).map((f) => join(FIXTURE_POLICY_DIR, f)),
+];
 
 const ANTHROPIC_URL = "https://platform.claude.com/docs/en/about-claude/pricing";
 const GEMINI_URL = "https://ai.google.dev/gemini-api/docs/pricing";
@@ -355,13 +368,12 @@ const BUCKETS = ["input", "input_cached", "output", "input_cache_write", "input_
 const TODAY = new Date().toISOString().slice(0, 10);
 
 test("every shipped policy's pricing card equals the price list for today's date", () => {
-  const files = readdirSync(POLICY_DIR).filter((f) => f.endsWith(".yaml"));
-  // Changed: 8 since opus-plus-flash-v38 shipped in v0.7.3.
-  assert.ok(files.length >= 8, `expected the shipped policies under ${POLICY_DIR}`);
+  const files = policyFiles();
+  assert.ok(files.some((f) => f.startsWith(POLICY_DIR)) && files.some((f) => f.startsWith(FIXTURE_POLICY_DIR)), `expected the shipped and fixture policies under ${POLICY_DIR} and ${FIXTURE_POLICY_DIR}`);
   const problems = [];
   let checked = 0;
   for (const file of files) {
-    const policy = parseYaml(readFileSync(join(POLICY_DIR, file), "utf-8"));
+    const policy = parseYaml(readFileSync(file, "utf-8"));
     for (const m of policy.models ?? []) {
       const where = `${file} models[${m.id}] (${m.model_name})`;
       if (!m.pricing) { problems.push(`${where}: no pricing card (the orchestrator's estimated telemetry needs one)`); continue; }
@@ -396,11 +408,11 @@ test("every shipped policy's pricing card equals the price list for today's date
 // citing .../docs/en/docs/about-claude/pricing, a doubled path Anthropic only
 // answers with a 307 redirect to .../docs/en/about-claude/pricing.
 test("every shipped card cites its list period's source page and carries that period's verified date", () => {
-  const files = readdirSync(POLICY_DIR).filter((f) => f.endsWith(".yaml"));
+  const files = policyFiles();
   const problems = [];
   let checked = 0;
   for (const file of files) {
-    const raw = readFileSync(join(POLICY_DIR, file), "utf-8");
+    const raw = readFileSync(file, "utf-8");
     if (raw.includes("docs/en/docs")) problems.push(`${file}: contains the doubled docs/en/docs pricing path`);
     for (const m of parseYaml(raw).models ?? []) {
       const where = `${file} models[${m.id}] (${m.model_name})`;

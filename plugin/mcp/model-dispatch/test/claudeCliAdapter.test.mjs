@@ -236,3 +236,33 @@ test("constructor throws when the claude binary is missing (ENOENT)", () => {
     /needs the `claude` binary on PATH/,
   );
 });
+
+// ── --effort (docs/verification/p1-agy-runtime.md check 7) ─────────────────
+
+test("claudeCliArgs passes --effort only when the policy entry carries reasoning.effort", async () => {
+  const { claudeCliArgs } = await import("../dist/adapters/ClaudeCliAdapter.js");
+  assert.deepEqual(
+    claudeCliArgs({ model_name: "claude-opus-5", reasoning: { effort: "high" } }),
+    ["-p", "--model", "claude-opus-5", "--output-format", "json", "--effort", "high"],
+  );
+  assert.deepEqual(
+    claudeCliArgs({ model_name: "claude-haiku-4-5" }),
+    ["-p", "--model", "claude-haiku-4-5", "--output-format", "json"],
+    "Haiku 4.5 rejects the flag; an entry without reasoning.effort must not send it",
+  );
+});
+
+test("the spawned claude invocation carries the policy's effort", async () => {
+  let seenArgs = null;
+  const spawnFn = (cmd, args, opts) => {
+    seenArgs = args;
+    return fakeSpawn(() => ({ stdout: JSON.stringify(SUCCESS_RESPONSE), code: 0 }))(cmd, args, opts);
+  };
+  const adapter = new ClaudeCliAdapter(
+    { ...BASE_CONFIG, reasoning: { effort: "high" } },
+    { probeBinary: () => {}, projectsDir: mkdtempSync(join(tmpdir(), "cli-effort-")), spawnFn },
+  );
+  await adapter.execute(PACKET);
+  assert.ok(Array.isArray(seenArgs), "claude was spawned");
+  assert.equal(seenArgs[seenArgs.indexOf("--effort") + 1], "high");
+});

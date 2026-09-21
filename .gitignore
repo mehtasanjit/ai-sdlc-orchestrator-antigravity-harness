@@ -26,3 +26,16 @@ Thumbs.db
 *.swp
 .idea/
 .vscode/
+
+# Hook heartbeat log written next to the workspace by plugin/agy/hooks/heartbeat.mjs
+.hook-logs/
+
+# A stray clone of this repo nested in the working tree; never part of the harness
+/ai-sdlc-orchestrator-antigravity-harness/
+
+# Clones agy makes of the workspace inside itself during an interactive session (seen 2026-09-17 as ./Untitled/)
+/Untitled/
+
+# Python, only on machines that opted into the Antigravity SDK agent path
+__pycache__/
+plugin/mcp/model-dispatch/worker/.venv/
