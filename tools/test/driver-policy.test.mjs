@@ -44,10 +44,10 @@ for (const name of [STUDY]) {
     assert.equal(policy.driver.pricing_last_verified, flash.pricing_last_verified);
   });
 
-  test(`${name}: judgment phases route to the claude-cli adapter`, () => {
+  test(`${name}: judgment phases route to the claude-agent-sdk adapter`, () => {
     const policy = load(name);
-    const judgment = policy.models.find((m) => m.adapter === "claude-cli");
-    assert.ok(judgment, "no claude-cli model");
+    const judgment = policy.models.find((m) => m.adapter === "claude-agent-sdk");
+    assert.ok(judgment, "no claude-agent-sdk model");
     for (const phase of ["requirements_analysis", "architecture_design", "plan_task_packets", "senior_code_review", "security_review"]) {
       const rule = policy.rules.find((r) => r.when?.phase === phase);
       assert.equal(rule?.use, judgment.id, phase);
@@ -56,7 +56,7 @@ for (const name of [STUDY]) {
 }
 
 test("the study policy runs Opus 5 at high effort and caps the run at $50", () => {
-  const opus = load(STUDY).models.find((m) => m.adapter === "claude-cli");
+  const opus = load(STUDY).models.find((m) => m.adapter === "claude-agent-sdk");
   assert.equal(opus.model_name, "claude-opus-5");
   assert.equal(opus.reasoning?.effort, "high");
   assert.equal(load(STUDY).hard_cost_cap_usd, 50);

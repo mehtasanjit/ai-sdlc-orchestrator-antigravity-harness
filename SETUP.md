@@ -27,19 +27,19 @@ Nothing under `~/.gemini/` or `~/.claude/` is written. There is no global instal
 
 ## 3. The Claude wallets — two arms and the seat
 
-Every wallet runs the same policy file and the same `claude-cli` adapter (`claude -p`). The wallet is the environment the bridge is launched with — the shell that starts `agy` — or, with nothing exported, Claude Code's own sign-in.
+Every wallet runs the same policy file and the same `claude-agent-sdk` adapter (the Claude Agent SDK, in-process). The wallet is the environment the bridge is launched with — the shell that starts `agy` — or, with nothing exported, Claude Code's own sign-in.
 
 | | Arm A | Arm B | Seat |
 |---|---|---|---|
 | Wallet | Anthropic API key | GCP project, Google's invoice, Google's published Claude rates | A claude.ai subscription (Pro / Max) that Claude Code is signed in to |
 | Env | `ANTHROPIC_API_KEY` | `CLAUDE_CODE_USE_VERTEX=1` `ANTHROPIC_VERTEX_PROJECT_ID` `CLOUD_ML_REGION=global` + ADC | nothing — `claude auth status` shows `authMethod: claude.ai` |
-| Cost of record | `claude -p` result priced from the dated price list (Anthropic card) — cash | tokens from the same result × the Vertex Claude card; the GCP invoice is the receipt — cash | tokens priced at the Anthropic card — **modeled**; no invoice exists |
+| Cost of record | the SDK result's `modelUsage` priced from the dated price list (Anthropic card) — cash | tokens from the same result × the Vertex Claude card; the GCP invoice is the receipt — cash | tokens priced at the Anthropic card — **modeled**; no invoice exists |
 | Gate | key present | project active, Claude enabled in Model Garden (24–48 h approval), `roles/aiplatform.user`, quota in region | signed in once with `claude` |
 | Study use | yes | yes | wiring and development runs; a study cost of record on it needs the owner's sign-off |
 
 A key or the Vertex variables win over the seat when both are present. Arm A and arm B set at once is refused by `verify` and by the wizard: the run record could not say which wallet paid. `manifest.json` records the wallet as `harness.arm` (`A`, `B` or `seat`) and, on the seat, moves the Claude line out of `cost.dispatched_cash_usd` into `cost.claude_seat_modeled_usd`.
 
-Re-test arm B with `claude -p --model claude-opus-5 'say ok'` under the arm-B env. A `403` names the project state; a `404 model not found` means Model Garden has not enabled Claude yet.
+Re-test arm B with `claude -p --model claude-opus-5 'say ok'` under the arm-B env (the CLI and the SDK read the same environment, so this still probes the arm). A `403` names the project state; a `404 model not found` means Model Garden has not enabled Claude yet.
 
 ## 4. Gemini doors
 
@@ -53,6 +53,8 @@ The wizard offers the agent path only when a usable Vertex ADC exists; `--agent`
 ## 5. Choosing the policy
 
 The console (`plugin/policy-console/`, opened by `plugin/scripts/setup-policy.mjs`) shows the shipped presets with the agy driver pin on every card. Picking one, or saving a customized copy, writes `default_policy` to `<project>/.sdlc/project.json`; the skills and the headless launcher read it.
+
+`tools/setup.mjs` opens the console on every run that has a terminal attached, whether or not `default_policy` is already set — close the browser or press Ctrl-C to keep the current value. Two ways to bypass it: `--policy=<name>` writes the name directly, and a run with no TTY (CI, piped stdin) skips the console and warns that the launcher will fall back to `antigravity-flash38-plus-opus5`.
 
 | Preset | Use |
 |---|---|

@@ -142,7 +142,14 @@ async function main(args) {
   const claude = probeClaudeCli();
   if (claude.present) ok(`claude ${claude.version?.join(".") ?? ""}`.trim());
   else if (claude.unprovable) warn("Could not run claude --version from here.");
-  else { fail("claude is not on PATH — the claude-cli adapter spawns `claude -p` for every judgment phase."); hint("https://code.claude.com/docs"); blocked = true; }
+  else {
+    // The shipped policies run the judgment tier on claude-agent-sdk, which
+    // brings its own Claude Code binary, so a missing `claude` no longer
+    // blocks setup. It is still needed to sign in to a claude.ai seat, and by
+    // any policy that names the claude-cli adapter.
+    warn("claude is not on PATH. The shipped policies reach Claude through the Agent SDK, which carries its own binary.");
+    hint("Install it to use a claude.ai seat or the claude-cli adapter: https://code.claude.com/docs");
+  }
 
   step("Credentials");
   const env = process.env;
@@ -226,14 +233,28 @@ async function main(args) {
     const r = run(process.execPath, [join(PLUGIN_ROOT, "scripts", "setup-policy.mjs"), "--policy", String(args.policy), "--project-root", projectRoot, "--skip-install"], ROOT);
     if (r.status === 0) ok(`default_policy = ${args.policy} (${projectJson})`);
     else { fail(`Could not write the policy: ${(r.stderr || r.stdout || "").trim()}`); blocked = true; }
-  } else if (current) {
-    ok(`default_policy = ${current} (already chosen). Change it: node plugin/scripts/setup-policy.mjs --project-root "${projectRoot}"`);
-  } else if (interactive && (await askYesNo("Open the policy console in your browser to pick one now?", true))) {
+  } else if (input.isTTY === true) {
+    // The console always opens -- no question, and regardless of whether a
+    // default is already chosen. It is the only place a policy can be authored
+    // or reviewed, and saving nothing there leaves the current value untouched,
+    // so re-opening is never destructive. --yes no longer suppresses it: the
+    // question it used to answer defaulted to yes anyway. Gated on a real TTY
+    // rather than `interactive` so piped/CI runs, which have no browser and no
+    // way to answer, take the branch below instead of blocking on fs.watch.
+    if (current) ok(`default_policy = ${current} (${projectJson}) -- opening the console to review or change it.`);
     const r = spawnSync(process.execPath, [join(PLUGIN_ROOT, "scripts", "setup-policy.mjs"), "--project-root", projectRoot], { cwd: ROOT, stdio: "inherit" });
-    if (r.status !== 0) warn("The console did not record a choice; the launcher falls back to antigravity-flash38-plus-opus5.");
+    if (r.status !== 0) {
+      warn(current
+        ? `The console did not record a choice; default_policy stays "${current}".`
+        : "The console did not record a choice; the launcher falls back to antigravity-flash38-plus-opus5.");
+    }
+  } else if (current) {
+    ok(`default_policy = ${current} (${projectJson})`);
   } else {
-    ok("No project policy chosen; the launcher and the skills fall back to antigravity-flash38-plus-opus5.");
-    hint(`Pick one later: node plugin/scripts/setup-policy.mjs --project-root "${projectRoot}"   or --policy=<name> here.`);
+    // Never report a missing policy as a success. The fallback is real but
+    // silent at run time, so it is surfaced here as an item to act on.
+    warn("No project policy chosen (no TTY -- the console needs a terminal and a browser); the launcher and the skills fall back to antigravity-flash38-plus-opus5.");
+    hint(`Pick one before your first run: node plugin/scripts/setup-policy.mjs --project-root "${projectRoot}"   or re-run with --policy=<name>.`);
   }
 
   console.log("");

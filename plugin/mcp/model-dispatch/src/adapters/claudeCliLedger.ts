@@ -165,24 +165,105 @@ function noteModifiers(rec: MessageRecord, usage: Record<string, unknown>): void
 }
 
 /**
+ * Accumulates the per-model cache-write and modifier facts that price a
+ * worker call, from assistant-message frames handed in one at a time.
+ *
+ * Two producers feed it the same facts and must price them identically: the
+ * `claude -p` worker's JSONL transcript (readWorkerTranscript, below) and the
+ * Agent SDK's in-process assistant-message stream
+ * (ClaudeAgentSdkAdapter). One implementation is the point — the merge rule
+ * is the subtle part (review findings M1 / R1), and a second copy of it would
+ * drift into pricing the same tokens two ways, which is exactly the class of
+ * bug the in-session subtraction cannot survive.
+ *
+ * Rules, unchanged from the transcript reader they were extracted from:
+ * cache fields are counted once per message id (the first frame carries the
+ * complete set); request modifiers are merged from EVERY frame of a message,
+ * because Claude Code writes `speed` only on a later streamed or terminal
+ * frame; output is a streaming snapshot, so the terminal (stop_reason) frame
+ * wins, else the largest seen.
+ */
+export class ModelWriteAccumulator {
+  private readonly byModel = new Map<string, TranscriptModelWrites>();
+  private readonly byId = new Map<string, MessageRecord>();
+  private readonly messages: MessageRecord[] = [];
+  private finished = false;
+
+  /**
+   * One assistant-message frame. Frames sharing a message `id` are one
+   * message; a null id makes the frame a message of its own. `stopReason`
+   * non-null marks the terminal frame.
+   */
+  add(model: string, usage: Record<string, any>, stopReason: unknown, id: string | null): void {
+    const counted = id !== null ? this.byId.get(id) : undefined;
+    if (counted) {
+      // A repeat frame of a message already counted: its cache fields repeat
+      // the first frame's, but it may be the only one that records `speed`.
+      noteModifiers(counted, usage);
+      // Output is a streaming snapshot: the terminal frame's value wins, else
+      // the largest seen, exactly as the collector books it.
+      const out = num(usage.output_tokens);
+      const terminal = stopReason != null;
+      if (!counted.terminal && (terminal || out > counted.output)) {
+        counted.output = out;
+        counted.terminal = terminal;
+      }
+      counted.searches = Math.max(counted.searches, num(usage.server_tool_use?.web_search_requests));
+      return;
+    }
+    const key = modelKey(model);
+    const entry = this.byModel.get(key) ?? {
+      write_5m: 0,
+      write_1h: 0,
+      split_known: true,
+      modifiers: new Set<string>(),
+      modifier_conflicts: [],
+      logged: { input: 0, input_cached: 0, output: 0, web_search_requests: 0 },
+    };
+    const written = num(usage.cache_creation_input_tokens);
+    const split = usage.cache_creation;
+    if (written > 0 && (!split || typeof split !== "object")) entry.split_known = false;
+    const oneHour = Math.min(written, num(split?.ephemeral_1h_input_tokens));
+    entry.write_1h += oneHour;
+    entry.write_5m += written - oneHour;
+    this.byModel.set(key, entry);
+    const rec: MessageRecord = {
+      key,
+      values: { speed: null, service_tier: null, inference_geo: null },
+      conflicts: new Set(),
+      input: num(usage.input_tokens),
+      input_cached: num(usage.cache_read_input_tokens),
+      output: num(usage.output_tokens),
+      terminal: stopReason != null,
+      searches: num(usage.server_tool_use?.web_search_requests),
+    };
+    noteModifiers(rec, usage);
+    this.messages.push(rec);
+    if (id !== null) this.byId.set(id, rec);
+  }
+
+  /**
+   * Folds each message's merged modifiers and logged tokens into its model.
+   * Call once — the fold adds, so a second call would double-count.
+   */
+  finish(): Map<string, TranscriptModelWrites> {
+    if (this.finished) return this.byModel;
+    this.finished = true;
+    foldMessages(this.messages, this.byModel);
+    return this.byModel;
+  }
+}
+
+/**
  * Per model (list id, or the raw name when unlisted): cache writes by TTL and
  * the modifiers used. Assistant lines only, `<synthetic>` skipped, lines of
- * another session skipped. Cache writes are counted once per message id (its
- * first line carries the complete cache fields); request modifiers are read
- * from EVERY line of the message and merged (noteModifiers), and each message
- * adds its merged triple once all files are read. Null when no file could be read.
+ * another session skipped. Null when no file could be read.
  *
- * Why every line (review findings M1 / R1): Claude Code writes `speed` only on
- * a later streamed or terminal line of most messages. Reading the first line
- * alone priced a fast-mode worker at standard rates, half the fast price, while
- * the collector, which merges every line, priced the same tokens at fast rates,
- * so the in-session subtraction removed a different figure from the one its
- * scan added.
+ * The counting rules live in ModelWriteAccumulator; this function is the
+ * JSONL parser in front of it.
  */
 export function readWorkerTranscript(files: string[], sessionId: string): Map<string, TranscriptModelWrites> | null {
-  const byModel = new Map<string, TranscriptModelWrites>();
-  const byId = new Map<string, MessageRecord>();
-  const messages: MessageRecord[] = [];
+  const acc = new ModelWriteAccumulator();
   let readAny = false;
   for (const file of files) {
     let text: string;
@@ -205,56 +286,19 @@ export function readWorkerTranscript(files: string[], sessionId: string): Map<st
       const usage = msg?.usage;
       if (!usage || msg.model === "<synthetic>") continue;
       if (typeof obj.sessionId === "string" && obj.sessionId !== sessionId) continue;
-      const id = typeof msg.id === "string" ? msg.id : null;
-      const counted = id !== null ? byId.get(id) : undefined;
-      if (counted) {
-        // A repeat line of a message already counted: its cache fields repeat
-        // the first line's, but it may be the only line that records `speed`.
-        noteModifiers(counted, usage);
-        // Output is a streaming snapshot: the terminal line's value wins, else
-        // the largest seen, exactly as the collector books it.
-        const out = num(usage.output_tokens);
-        const terminal = msg.stop_reason != null;
-        if (!counted.terminal && (terminal || out > counted.output)) {
-          counted.output = out;
-          counted.terminal = terminal;
-        }
-        counted.searches = Math.max(counted.searches, num(usage.server_tool_use?.web_search_requests));
-        continue;
-      }
-      const key = modelKey(String(msg.model ?? "(unlabeled)"));
-      const entry = byModel.get(key) ?? {
-        write_5m: 0,
-        write_1h: 0,
-        split_known: true,
-        modifiers: new Set<string>(),
-        modifier_conflicts: [],
-        logged: { input: 0, input_cached: 0, output: 0, web_search_requests: 0 },
-      };
-      const written = num(usage.cache_creation_input_tokens);
-      const split = usage.cache_creation;
-      if (written > 0 && (!split || typeof split !== "object")) entry.split_known = false;
-      const oneHour = Math.min(written, num(split?.ephemeral_1h_input_tokens));
-      entry.write_1h += oneHour;
-      entry.write_5m += written - oneHour;
-      byModel.set(key, entry);
-      // A line with no string id is a message of its own.
-      const rec: MessageRecord = {
-        key,
-        values: { speed: null, service_tier: null, inference_geo: null },
-        conflicts: new Set(),
-        input: num(usage.input_tokens),
-        input_cached: num(usage.cache_read_input_tokens),
-        output: num(usage.output_tokens),
-        terminal: msg.stop_reason != null,
-        searches: num(usage.server_tool_use?.web_search_requests),
-      };
-      noteModifiers(rec, usage);
-      messages.push(rec);
-      if (id !== null) byId.set(id, rec);
+      acc.add(
+        String(msg.model ?? "(unlabeled)"),
+        usage,
+        msg.stop_reason,
+        typeof msg.id === "string" ? msg.id : null,
+      );
     }
   }
-  // Every line has been read, so each message's modifiers are final.
+  return readAny ? acc.finish() : null;
+}
+
+/** Every frame has been seen, so each message's modifiers are final. */
+function foldMessages(messages: MessageRecord[], byModel: Map<string, TranscriptModelWrites>): void {
   for (const rec of messages) {
     const entry = byModel.get(rec.key) as TranscriptModelWrites;
     entry.modifiers.add(JSON.stringify([rec.values.speed ?? null, rec.values.service_tier ?? null, rec.values.inference_geo ?? null]));
@@ -264,7 +308,6 @@ export function readWorkerTranscript(files: string[], sessionId: string): Map<st
     entry.logged.output += rec.output;
     entry.logged.web_search_requests += rec.searches;
   }
-  return readAny ? byModel : null;
 }
 
 /** The fields of a `claude -p --output-format json` result this ledger reads. */

@@ -109,8 +109,8 @@ test("claudeWallet and geminiDoor read the arm and the door from the environment
   assert.deepEqual(geminiDoor(policy, {}), { leaf: "flash-completion", wallet: "gcp" });
 });
 
-test("costLines partitions bridge events by the policy's claude-cli models", () => {
-  const policy = { models: [{ adapter: "claude-cli", model_name: "claude-opus-5" }, { adapter: "mcp:model-dispatch", model_name: "gemini-3.8-flash" }] };
+test("costLines partitions bridge events by the policy's Claude-worker models", () => {
+  const policy = { models: [{ adapter: "claude-agent-sdk", model_name: "claude-opus-5" }, { adapter: "mcp:model-dispatch", model_name: "gemini-3.8-flash" }] };
   const lines = costLines({ dispatched: [ev({ model: "claude-opus-5", cost_usd: 1 }), ev({ cost_usd: 2 })], modeled: [], policy, pin: null, env: {} });
   assert.equal(lines.find((l) => l.line === "claude_worker").cost_usd, 1);
   assert.equal(lines.find((l) => l.line === "gemini_workers").cost_usd, 2);

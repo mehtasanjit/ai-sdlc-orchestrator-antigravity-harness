@@ -21,7 +21,10 @@ test("load_policy reaches the real server and returns the official antigravity p
     const policy = await bridge.callTool("load_policy", { policy_name: POLICY });
     assert.equal(policy.name, POLICY);
     assert.equal(policy.version, 1);
-    assert.ok(policy.models.some((m) => m.adapter === "claude-cli"), "policy names the claude-cli adapter");
+    assert.ok(
+      policy.models.some((m) => m.adapter === "claude-agent-sdk"),
+      "policy names the claude-agent-sdk adapter — the judgment tier's transport since the Agent SDK port",
+    );
   } finally {
     await bridge.close();
   }

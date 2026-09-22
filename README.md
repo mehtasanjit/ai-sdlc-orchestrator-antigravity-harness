@@ -15,7 +15,7 @@ The cast is fixed by policy:
 | Role | Model | Path |
 |---|---|---|
 | Conductor (driver) | Gemini 3.8 Flash, effort high | `agy` itself, on your Google seat |
-| Judgment phases | Claude Opus 5 | bridge → `claude-cli` adapter → `claude -p` (the Claude Agent SDK engine). Arm A bills an Anthropic key; arm B bills a GCP project through Vertex |
+| Judgment phases | Claude Opus 5 | bridge → `claude-agent-sdk` adapter → the Claude Agent SDK (`@anthropic-ai/claude-agent-sdk`, in-process). Arm A bills an Anthropic key; arm B bills a GCP project through Vertex; a claude.ai seat is the third door |
 | Mechanical phases | Gemini 3.8 Flash | bridge → `flash-completion` on `GEMINI_API_KEY`, or the Antigravity SDK worker on Vertex ADC |
 
 The conductor authors no shipped content. Every requirements document, design, packet result, review and test comes back from a bridge dispatch, where it is priced and recorded in `telemetry.jsonl`. The conductor's own turns are priced separately and labeled **modeled**, because a Google seat has no invoice; the two kinds of dollars are never summed. See [docs/methodology.md](docs/methodology.md).
@@ -32,7 +32,7 @@ flowchart TD
     Headless["plugin/agy/run.mjs<br/>headless, pinned invocation<br/>(measured runs)"]
     Cond["Gemini 3.8 Flash conducts<br/>reads policy YAML<br/>decomposes into TaskPackets<br/>authors nothing shipped"]
     Bridge["model-dispatch bridge (MCP)<br/>routing · adapters<br/>telemetry · cost"]
-    Opus["claude-cli adapter<br/>claude -p → Claude Opus 5<br/>requirements · design · plan<br/>senior review · security"]
+    Opus["claude-agent-sdk adapter<br/>Claude Agent SDK → Claude Opus 5<br/>requirements · design · plan<br/>senior review · security"]
     GemModel["Gemini 3.8 Flash as a model<br/>one call per packet<br/>AI Studio key or ADC"]
     GemAgent["Gemini 3.8 Flash as an agent<br/>Antigravity SDK · ADC only<br/>tools + workspace"]
     Out[".sdlc/ artifacts<br/>telemetry.jsonl · manifest.json<br/>driver-cost-modeled.jsonl<br/>provenance.json · generated code"]
@@ -315,7 +315,7 @@ npm ci && npm run build && npm test
 node tools/setup.mjs --project-root /path/to/your/project
 ```
 
-`tools/setup.mjs` runs the same checks the prompt route runs, builds the bridge, mounts `.agents/plugins/mmo/` into the project, and opens the policy console once. `--yes` takes every default, `--policy=<name>` skips the browser, `--no-agent` skips the door question.
+`tools/setup.mjs` runs the same checks the prompt route runs, builds the bridge, mounts `.agents/plugins/mmo/` into the project, and opens the policy console on every run from a terminal — including when a default is already set, so you can review or change it. `--yes` takes every default but no longer skips the console, `--policy=<name>` skips the browser, `--no-agent` skips the door question.
 
 A headless run, dry first — the invocation prints with every credential reported only as set/unset:
 
