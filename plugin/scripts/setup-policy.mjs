@@ -291,7 +291,8 @@ function waitForPolicySave(before, timeoutMs) {
 // --list-json / --check-creds need three signals per policy:
 //   1. every model's auth.env
 //   2. any model uses adapter: antigravity-worker  → requires_vertex_adc
-//   3. any model uses adapter: claude-cli          → requires_claude_cli
+//   3. any model uses a Claude worker adapter      → requires_claude_cli
+//      (claude-agent-sdk or claude-cli)
 //
 // Bringing in the `yaml` package would work but the plugin cache doesn't
 // have a top-level node_modules — only plugin/policy-console does, and only
@@ -329,7 +330,7 @@ function introspectPolicy(name, path) {
     adapters: [...adapters].sort(),
     required_env: [...envVars].sort(),
     requires_vertex_adc: adapters.has("antigravity-worker"),
-    requires_claude_cli: adapters.has("claude-cli"),
+    requires_claude_cli: adapters.has("claude-agent-sdk") || adapters.has("claude-cli"),
   };
 }
 

@@ -237,16 +237,20 @@ const GEMINI_TIERS = ["off", "minimal", "low", "medium", "high"];
 const ANTHROPIC_EFFORT_TIERS = ["off", "low", "medium", "high", "xhigh", "max"];
 const NAME_PATTERN = /^[a-z0-9][a-z0-9-]*$/;
 
+// Adapters whose thinking control is an Anthropic `effort` level.
+const ANTHROPIC_ADAPTERS = new Set(["builtin-anthropic", "claude-agent-sdk", "claude-cli"]);
+
 function thinkingSupport(model) {
   if (!model) return [];
   if (model.adapter === "mcp:model-dispatch" || model.adapter === "antigravity-worker") return GEMINI_TIERS;
-  if (model.adapter === "builtin-anthropic" || model.adapter === "claude-cli") return ANTHROPIC_EFFORT_TIERS;
+  if (ANTHROPIC_ADAPTERS.has(model.adapter)) return ANTHROPIC_EFFORT_TIERS;
   return [];
 }
 
 function defaultAuthEnv(adapter) {
-  // claude-cli reads OAuth from the local `claude` binary — no env var to name.
-  if (adapter === "claude-cli") return "";
+  // The two Claude Code transports read whichever wallet the launching shell
+  // selected (key, Vertex or the claude.ai seat) — no env var to name here.
+  if (adapter === "claude-agent-sdk" || adapter === "claude-cli") return "";
   return adapter === "builtin-anthropic" ? "ANTHROPIC_API_KEY" : "GEMINI_API_KEY";
 }
 
@@ -583,8 +587,8 @@ function addModel() {
   }
 
   const model = { id, adapter, model_name, pricing: { input, input_cached, output } };
-  // claude-cli has no env var — omit auth entirely so the YAML doesn't carry
-  // a misleading empty key.
+  // The Claude Code transports have no env var — omit auth entirely so the
+  // YAML doesn't carry a misleading empty key.
   if (authEnv) model.auth = { env: authEnv };
   editorState.models.push(model);
   renderModels();

@@ -335,10 +335,17 @@ export function evaluate({
   }
 
   if (!hasClaudeCli) {
+    // Not blocking since the judgment tier moved to claude-agent-sdk, which
+    // brings its own Claude Code binary as an optional dependency of the
+    // bridge. Still worth saying: the claude-cli adapter needs the binary,
+    // and `claude auth status` is how the seat wallet is checked.
     problems.push({
       id: "claude-cli",
-      severity: "blocking",
-      message: "Claude Code CLI not found on PATH.",
+      severity: "warning",
+      message:
+        "Claude Code CLI not found on PATH. The shipped policies dispatch Claude through the " +
+        "Agent SDK, which carries its own binary, so this only matters for a policy on the " +
+        "claude-cli adapter or for signing in to a claude.ai seat.",
       fix: "npm install -g @anthropic-ai/claude-code",
     });
   }

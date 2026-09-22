@@ -73,11 +73,21 @@ test("claudeArmState names the wallet the shell selects", () => {
   assert.equal(claudeArmState({ ANTHROPIC_API_KEY: "${ANTHROPIC_API_KEY}" }).arm, "none", "an unexpanded placeholder is not a key");
 });
 
-test("no Claude wallet blocks a policy that bills claude-cli, and is a warning for one that does not", () => {
+test("no Claude wallet blocks a policy that bills a Claude worker, and is a warning for one that does not", () => {
   const blocked = evaluate({ ...HEALTHY, env: { GEMINI_API_KEY: "x" } }).problems.find((p) => p.id === "claude-arm");
   assert.equal(blocked.severity, "blocking");
-  const warned = evaluate({ ...HEALTHY, env: { GEMINI_API_KEY: "x" }, policy: { name: "flash-only", usesClaudeCli: false, usesGemini: true } }).problems.find((p) => p.id === "claude-arm");
-  assert.equal(warned, undefined, "a policy with no claude-cli adapter needs no Claude wallet at all");
+  const warned = evaluate({ ...HEALTHY, env: { GEMINI_API_KEY: "x" }, policy: { name: "flash-only", usesClaudeWorker: false, usesClaudeCli: false, usesGemini: true } }).problems.find((p) => p.id === "claude-arm");
+  assert.equal(warned, undefined, "a policy with no Claude worker needs no Claude wallet at all");
+});
+
+test("a claude-agent-sdk policy needs a wallet but not `claude` on PATH", () => {
+  // The Agent SDK ships its own Claude Code binary, so the PATH probe is
+  // irrelevant to it — but the wallet still has to be selected.
+  const sdkOnly = { name: "agent-sdk-only", usesClaudeWorker: true, usesClaudeCli: false, usesGemini: true };
+  const withNoBinary = evaluate({ ...HEALTHY, claudeCli: { present: false }, policy: sdkOnly }).problems;
+  assert.equal(withNoBinary.find((p) => p.id === "claude-cli"), undefined, "no PATH complaint for the SDK transport");
+  const noWallet = evaluate({ ...HEALTHY, env: { GEMINI_API_KEY: "x" }, policy: sdkOnly }).problems.find((p) => p.id === "claude-arm");
+  assert.equal(noWallet?.severity, "blocking", "the wallet is still required");
 });
 
 test("both arms set is blocking; an incomplete arm B is blocking", () => {
@@ -122,7 +132,10 @@ test("observePolicy reads the real default policy and its adapters", () => {
   const p = observePolicy(PLUGIN, "/nonexistent");
   assert.equal(p.name, DEFAULT_POLICY);
   assert.equal(p.selected, false);
-  assert.equal(p.usesClaudeCli, true);
+  // The shipped policy's judgment tier is claude-agent-sdk, which is a Claude
+  // worker (so the wallet is required) but needs no `claude` on PATH.
+  assert.equal(p.usesClaudeWorker, true);
+  assert.equal(p.usesClaudeCli, false);
   assert.equal(p.usesGemini, true);
   assert.deepEqual(policyAdapters("models:\n  - adapter: claude-cli\n  - adapter: mcp:model-dispatch # x"), ["claude-cli", "mcp:model-dispatch"]);
 });

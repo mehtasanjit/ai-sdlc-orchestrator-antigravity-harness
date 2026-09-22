@@ -84,7 +84,7 @@ export const JUDGMENT_PHASES = [
  * all — no CLAUDE_CODE_SUBAGENT_MODEL value makes a Claude Code subagent
  * execute a non-Anthropic model — so that is an error, not a mismatch.
  */
-export const IN_SESSION_ADAPTERS = new Set(["builtin-anthropic", "claude-cli"]);
+export const IN_SESSION_ADAPTERS = new Set(["builtin-anthropic", "claude-agent-sdk", "claude-cli"]);
 
 /**
  * Route all judgment phases and require one model. Returns

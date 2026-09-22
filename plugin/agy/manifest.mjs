@@ -11,7 +11,8 @@
  * Three cost lines, labeled, never summed into one figure:
  *   driver   modeled  — agy stream-json usage × the driver card
  *   gemini   cash     — bridge events for Gemini models
- *   claude   cash     — bridge events for the claude-cli worker (arm A: Anthropic; arm B: GCP)
+ *   claude   cash     — bridge events for the Claude worker (claude-agent-sdk / claude-cli;
+ *                      arm A: Anthropic; arm B: GCP)
  *
  * Usage: node manifest.mjs <run-dir> [--policy=<name>] [--run-id=<id>] [--agy-version=<v>]
  */
@@ -60,9 +61,20 @@ export function geminiDoor(policy, env = process.env) {
   return { leaf: chosen, wallet };
 }
 
+/**
+ * Adapters that dispatch a Claude worker, and so put their model's dollars on
+ * the Claude cost line. Mirrors the bridge's adapter registry
+ * (plugin/mcp/model-dispatch/src/adapters/index.ts), which is the source of
+ * truth; the two trees do not import each other. A policy naming an adapter
+ * missing from here would have its Claude spend silently counted as Gemini.
+ */
+export const CLAUDE_WORKER_ADAPTERS = new Set(["claude-agent-sdk", "claude-cli"]);
+
 /** The three lines. `dispatched` are bridge events (no orchestrator tier). */
 export function costLines({ dispatched, modeled, policy, pin, env = process.env, login = null }) {
-  const claudeModels = new Set((policy?.models ?? []).filter((m) => m.adapter === "claude-cli").map((m) => m.model_name));
+  const claudeModels = new Set(
+    (policy?.models ?? []).filter((m) => CLAUDE_WORKER_ADAPTERS.has(m.adapter)).map((m) => m.model_name),
+  );
   const sum = (events) => ({
     cost_usd: r6(events.reduce((s, e) => s + (e.cost_usd ?? 0), 0)),
     calls: events.length,
@@ -89,7 +101,7 @@ export function costLines({ dispatched, modeled, policy, pin, env = process.env,
     { line: "gemini_workers", kind: "cash", wallet: door.wallet, leaf: door.leaf, models: [...new Set(gemini.map((e) => e.model))], ...sum(gemini) },
     { line: "claude_worker", kind: seat ? "modeled" : "cash", wallet: wallet.wallet, arm: wallet.arm, models: [...new Set(claude.map((e) => e.model))], ...sum(claude),
       cli_reported_cost_usd: r6(claude.reduce((s, e) => s + (e.cli_reported_cost_usd ?? 0), 0)),
-      ...(seat ? { basis: `MODELED: claude -p ran on a claude.ai ${wallet.subscription ?? ""} seat — tokens priced at the Anthropic card, no invoice exists` } : {}) },
+      ...(seat ? { basis: `MODELED: the Claude worker ran on a claude.ai ${wallet.subscription ?? ""} seat — tokens priced at the Anthropic card, no invoice exists` } : {}) },
   ];
 }
 

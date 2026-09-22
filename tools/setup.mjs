@@ -142,7 +142,14 @@ async function main(args) {
   const claude = probeClaudeCli();
   if (claude.present) ok(`claude ${claude.version?.join(".") ?? ""}`.trim());
   else if (claude.unprovable) warn("Could not run claude --version from here.");
-  else { fail("claude is not on PATH — the claude-cli adapter spawns `claude -p` for every judgment phase."); hint("https://code.claude.com/docs"); blocked = true; }
+  else {
+    // The shipped policies run the judgment tier on claude-agent-sdk, which
+    // brings its own Claude Code binary, so a missing `claude` no longer
+    // blocks setup. It is still needed to sign in to a claude.ai seat, and by
+    // any policy that names the claude-cli adapter.
+    warn("claude is not on PATH. The shipped policies reach Claude through the Agent SDK, which carries its own binary.");
+    hint("Install it to use a claude.ai seat or the claude-cli adapter: https://code.claude.com/docs");
+  }
 
   step("Credentials");
   const env = process.env;
