@@ -315,7 +315,7 @@ npm ci && npm run build && npm test
 node tools/setup.mjs --project-root /path/to/your/project
 ```
 
-`tools/setup.mjs` runs the same checks the prompt route runs, builds the bridge, mounts `.agents/plugins/mmo/` into the project, and opens the policy console once. `--yes` takes every default, `--policy=<name>` skips the browser, `--no-agent` skips the door question.
+`tools/setup.mjs` runs the same checks the prompt route runs, builds the bridge, mounts `.agents/plugins/mmo/` into the project, and opens the policy console on every run from a terminal — including when a default is already set, so you can review or change it. `--yes` takes every default but no longer skips the console, `--policy=<name>` skips the browser, `--no-agent` skips the door question.
 
 A headless run, dry first — the invocation prints with every credential reported only as set/unset:
 

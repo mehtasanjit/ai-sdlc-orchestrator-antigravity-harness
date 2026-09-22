@@ -54,6 +54,8 @@ The wizard offers the agent path only when a usable Vertex ADC exists; `--agent`
 
 The console (`plugin/policy-console/`, opened by `plugin/scripts/setup-policy.mjs`) shows the shipped presets with the agy driver pin on every card. Picking one, or saving a customized copy, writes `default_policy` to `<project>/.sdlc/project.json`; the skills and the headless launcher read it.
 
+`tools/setup.mjs` opens the console on every run that has a terminal attached, whether or not `default_policy` is already set — close the browser or press Ctrl-C to keep the current value. Two ways to bypass it: `--policy=<name>` writes the name directly, and a run with no TTY (CI, piped stdin) skips the console and warns that the launcher will fall back to `antigravity-flash38-plus-opus5`.
+
 | Preset | Use |
 |---|---|
 | `antigravity-flash38-plus-opus5` | The study policy. Gemini 3.8 Flash conducts; Opus 5 at high effort on judgment phases; Flash on mechanical. Cap $50 |
