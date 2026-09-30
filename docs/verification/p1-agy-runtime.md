@@ -103,11 +103,11 @@ Seat quota only, no cash. From a terminal whose `agy` is signed in, in the repo 
 tools/p1/live-checks.sh 16
 ```
 
-The script makes two `--print` calls on the pinned slug: one that writes about 300 words, then a resume of the same conversation that replies `ok`. It prints both `result.usage` blocks. Read `output_tokens` on the resume:
+The script makes two `--print` calls on the pinned slug: one that writes about 300 words, then a resume of the same conversation that replies `ok`. `tools/p1/check16.mjs` prints each call's exit code, `result.status`, conversation id and `usage`, then a verdict. Both calls must exit 0 with `status: "OK"`; otherwise the verdict is `INVALID` and the run answers nothing. The verdict reads `output_tokens` on the resume:
 
 | Resume `output_tokens` | Reading | Set `RESUME_USAGE.state` to |
 |---|---|---|
 | At least the first call's `output_tokens` (hundreds) | Counters carry over | `"cumulative"` |
 | A handful | Counters restart per process | `"per-invocation"` |
 
-Record the two usage blocks in the check 16 row, flip the row to **PASS**, and change `RESUME_USAGE.state` in `plugin/agy/telemetry/event-reader.mjs` in the same commit. `tools/test/telemetry.test.mjs` fails if the row and the constant disagree. Any real resumed run answers the same question from `driver-manifest.json` → `driver_usage.invocations[].cumulative_usage`.
+Record the two usage blocks in the check 16 row, flip the row to **PASS**, and change `RESUME_USAGE.state` in `plugin/agy/telemetry/event-reader.mjs` in the same commit. `tools/test/telemetry.test.mjs` fails if the row and the constant disagree. A real resumed run settles it only one way: a resumed invocation whose `driver_usage.invocations[].cumulative_usage.output_tokens` is below the previous invocation's means the counters restarted. A larger value fits both readings and settles nothing.

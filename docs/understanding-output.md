@@ -151,11 +151,13 @@ Same line shape as telemetry, so the two files can be concatenated for analysis 
   "tier": "orchestrator",
   "provenance": "modeled",
   "billing_mode": "seat",
-  "input_tokens": 700,
-  "input_tokens_cached": 800,
-  "output_tokens": 330,
-  "output_tokens_reasoning": 30,
-  "cost_usd": 0.001823
+  "input_tokens": 1300,
+  "input_tokens_cached": 1200,
+  "output_tokens": 580,
+  "output_tokens_reasoning": 80,
+  "cost_usd": 0.00324,
+  "invocation": 2,
+  "usage_reading": "per-invocation"
 }
 ```
 
@@ -167,9 +169,10 @@ Same line shape as telemetry, so the two files can be concatenated for analysis 
 |---|---|
 | `resume_check` | `{check: 16, state}`; `pending` until the live result is recorded |
 | `reading` | The reading `driver-cost-modeled.jsonl` uses |
-| `cost_usd`, `cost_usd_low`, `cost_usd_high` | The driver figure, and the same results priced under each reading. Equal for a run with one invocation |
-| `invocations[]` | Per `agy --print` process: exit status, wall clock, `result` count, `num_turns`, `duration_seconds`, the raw cumulative `usage`, and the line count that splits `driver-events.jsonl` |
-| `invocations_without_usage` | Processes that ended without a `result` event. Their driver tokens are in no figure |
+| `cost_usd`, `cost_usd_low`, `cost_usd_high`, `tokens_low`, `tokens_high` | The driver figure, and the same results priced under each reading. Equal for a run with one invocation |
+| `resumed_without_earlier_record` | Set when a `--resume` launch carried no earlier record |
+| `invocations[]` | Per `agy --print` process: exit status, wall clock, the count of results that reported usage and of all-zero ones, the last `status`, the conversation id, `num_turns`, `duration_seconds`, the raw cumulative `usage`, the line count that splits `driver-events.jsonl`, and `carried_from_earlier_launch` for an invocation a `--resume` read back |
+| `invocations_without_usage` | Processes with no result that reported usage: no `result` event, or only an all-zero error result (the shape check 8 recorded). The per-invocation figure is missing their tokens |
 
 ### `manifest.json`
 
@@ -189,23 +192,26 @@ The dispatched rollup, then three blocks this harness adds.
 | `delegated` | Whether any packet went to the agent worker |
 | `cable` | One-paragraph description of the wiring: driver runtime and models, driver auth, worker models, `claude_worker_auth` (names the arm, the GCP project and region on arm B, or the seat), `summary` (each worker model and the adapter its events recorded, or `adapter not recorded`) |
 | `driver_cost_usd`, `driver_cost_basis`, `driver_turns`, `agy_invocations` | The modeled driver figure and the sentence that says how it was derived; how many turns and how many `agy --print` invocations (the resume loop) |
-| `driver_cost_usd_low`, `driver_cost_resume_check` | Present while check 16 is pending on a resumed run: the lower bound of the driver range; `driver_cost_usd` is the upper |
-| `driver_invocations_without_usage` | `agy --print` processes that reported no `usage`; the driver figure is missing their tokens |
+| `driver_cost_usd_low`, `driver_cost_resume_check` | Present while check 16 is pending on a resumed run: the lower bound of the driver range; `driver_cost_usd` is the per-invocation reading |
+| `driver_resumed_without_earlier_record` | This launch resumed a conversation without the earlier launch's record; check 16 decides whether its first counters include that launch |
+| `driver_invocations_without_usage` | `agy --print` processes that reported no usage (no `result` event, or only an all-zero error result); the true driver figure may be higher |
 | `completed`, `gates`, `pin_rejection` | Whether `SUMMARY.md` appeared; the gate mode; the stderr line if agy refused the pinned model |
 | `unrecorded_phases` | Judgment phases the run went through that left no telemetry row at all — neither a dispatch nor a `provenance: "none"` row. See [methodology.md](methodology.md#vendor-mode-is-the-only-mode) |
 | `conductor_edits` | Per planned `artifact_path`, whether the final file differs from the last worker result for it (`edited`, `unchanged`, `unknown` counts, `files[]`), and `unplanned` files no packet targets. `null` when the run folder cannot tell |
 | `written_by`, `written_at` | `plugin/agy/manifest.mjs` and when |
 
-**`usage`** — `dispatched` and `driver` token buckets side by side, the driver's stamped `provenance: "modeled"`.
+**`usage`** — `dispatched` and `driver` token buckets side by side. `usage.driver.provenance` is `modeled`, or `unmeasured` on an interactive run. While check 16 is pending on a resumed run, `usage.driver.bound` is `upper` and `usage.driver.low` holds the cumulative reading's tokens.
 
 **`cost`**
 
 | Field | Meaning |
 |---|---|
 | `dispatched_cash_usd` | Bridge dispatches that a vendor invoiced. On arm A or B this equals `total_cost_usd`. Opus calls on the seat are subtracted out, because they were not invoiced either |
-| `driver_modeled_usd` | The conductor's loop at the driver card |
+| `driver_modeled_usd` | The conductor's loop at the driver card. $0 on an interactive run, where `driver_measured` is `false` |
+| `driver_modeled_usd_low` | Present while check 16 is pending on a resumed run: the lower bound |
+| `driver_measured` | `false` on an interactive run: no agy usage counters were captured, and the $0 is not a measurement |
 | `claude_seat_modeled_usd` | Present only when Opus calls ran on the seat: those calls, priced at the Anthropic card, no invoice |
-| `lines[]` | Three entries — `driver`, `gemini_workers`, `claude_worker` — each with `kind` (`cash`, `modeled`, `mixed` on a Claude line partly on the seat, or `unmeasured` for an interactive run's driver), the wallet, models, tokens, `cost_usd`, and on the modeled and mixed ones a `basis` sentence. A fourth, `unclassified`, appears only when an event names no known worker adapter and no `claude-` or `gemini-` model; its dollars stay off both worker lines |
+| `lines[]` | Three entries — `driver`, `gemini_workers`, `claude_worker` — each with `kind` (`cash`, `modeled`, `mixed` on a Claude line partly on the seat, or `unmeasured` for an interactive run's driver), the wallet, models, tokens, `cost_usd`, and on the modeled, mixed and unmeasured ones a `basis` sentence. The driver line also carries `cost_usd_low`, `cost_usd_high`, `tokens_low`, `resume_check`, `resumed_without_earlier_record` and `invocations_without_usage` when they apply. A fourth, `unclassified`, appears only when an event names no known worker adapter and no `claude-` or `gemini-` model; its dollars stay off both worker lines |
 | `note` | The rule, restated in the file itself: the cash figure and the modeled figures are different kinds of dollars and are not summed |
 
 The two worker lines take their wallet from each event's `wallet` stamp:

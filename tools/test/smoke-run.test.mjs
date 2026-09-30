@@ -55,12 +55,16 @@ test("run.mjs completes a two-invocation run against the stub agy and writes eve
     assert.equal(manifest.cost.driver_modeled_usd, 0.004658);
     assert.equal(manifest.cost.driver_modeled_usd_low, 0.003241);
     assert.equal(manifest.harness.driver_cost_resume_check.check, 16);
-    assert.match(manifest.cost.lines[0].basis, /check 16 pending; lower bound \$0\.003241/);
+    assert.match(manifest.cost.lines[0].basis, /range \$0\.003241–\$0\.004658: check 16/);
+    assert.equal(manifest.usage.driver.bound, "upper");
+    assert.equal(manifest.usage.driver.low.input_tokens, 1300, "the cumulative reading's input: 600 + 700");
     assert.equal(manifest.cost.dispatched_cash_usd, 0);
     const report = spawnSync(process.execPath, [join(ROOT, "tools", "report.mjs"), out], { encoding: "utf8" });
     assert.equal(report.status, 0, report.stderr);
     assert.match(report.stdout, /Modeled cost\s+\$0\.0047/);
     assert.match(report.stdout, /Range\s+\$0\.0032 – \$0\.0047/);
+    const md = spawnSync(process.execPath, [join(ROOT, "tools", "report.mjs"), out, "--markdown"], { encoding: "utf8" });
+    assert.match(md.stdout, /range is \$0\.0032 – \$0\.0047/);
   } finally { rmSync(proj, { recursive: true, force: true }); }
 });
 

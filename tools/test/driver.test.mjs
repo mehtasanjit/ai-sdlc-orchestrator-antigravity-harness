@@ -17,6 +17,7 @@ import {
   buildAgyArgs,
   buildRunArtifacts,
   priorInvocations,
+  assertResumable,
   terminated,
   loadPolicyFile,
   renderPrompt,
@@ -251,6 +252,29 @@ test("buildRunArtifacts records each invocation's line count, so a later --resum
   assert.equal(driverUsage.resume_check.check, 16);
 });
 
+test("a pin rejection in a carried invocation is not reported again by the launch that resumes it", () => {
+  const rejected = JSON.stringify({ event: "result", result: { conversation_id: "c1", status: "ERROR", error: "model is overloaded, try again later", usage: {} } });
+  const ok = JSON.stringify({ event: "result", result: { conversation_id: "c1", status: "OK", usage: { input_tokens: 10, output_tokens: 1, thinking_tokens: 0, cache_read_tokens: 0, total_tokens: 11 } } });
+  const carried = buildRunArtifacts({ invocations: [{ stdout: rejected, carried: true }, { stdout: ok, status: 0 }], pin: PIN, passId: "r1" });
+  assert.equal(carried.rejection, null);
+  const fresh = buildRunArtifacts({ invocations: [{ stdout: rejected, status: 1 }], pin: PIN, passId: "r1" });
+  assert.match(fresh.rejection, /model/);
+});
+
+test("assertResumable refuses to carry a record made under another pin or policy", () => {
+  const prior = { invocations: [{ stdout: "", carried: true }], pin: { slug: "gemini-3.8-flash-high" }, policy: "p1" };
+  assert.doesNotThrow(() => assertResumable(prior, { slug: "gemini-3.8-flash-high", policyName: "p1" }));
+  assert.throws(() => assertResumable(prior, { slug: "gemini-3.1-pro-high", policyName: "p1" }), /ran on 'gemini-3\.8-flash-high'.*--policy=p1/);
+  assert.throws(() => assertResumable(prior, { slug: "gemini-3.8-flash-high", policyName: "p2" }), /ran under policy 'p1'/);
+  assert.doesNotThrow(() => assertResumable({ invocations: [], pin: { slug: "x" }, policy: "y" }, { slug: "z", policyName: "w" }), "nothing carried, nothing to compare");
+});
+
+test("a resume that carries no earlier record is flagged, since check 16 decides what its first counters include", () => {
+  const ok = JSON.stringify({ event: "result", result: { conversation_id: "c1", status: "OK", usage: { input_tokens: 10, output_tokens: 1, thinking_tokens: 0, cache_read_tokens: 0, total_tokens: 11 } } });
+  assert.equal(buildRunArtifacts({ invocations: [{ stdout: ok }], pin: PIN, passId: "r1", resumedFirst: true }).driverUsage.resumed_without_earlier_record, true);
+  assert.equal(buildRunArtifacts({ invocations: [{ stdout: ok }], pin: PIN, passId: "r1" }).driverUsage.resumed_without_earlier_record, undefined);
+});
+
 test("terminated adds the missing newline, so two invocations never share a line", () => {
   assert.equal(terminated('{"a":1}'), '{"a":1}\n');
   assert.equal(terminated('{"a":1}\n'), '{"a":1}\n');
@@ -271,10 +295,16 @@ test("priorInvocations reads the earlier launch of the same conversation back, s
     assert.deepEqual(priorInvocations(dir, "other").invocations, [], "a different conversation carries nothing");
     assert.deepEqual(priorInvocations(dir, null).invocations, []);
 
-    writeFileSync(join(dir, "driver-manifest.json"), JSON.stringify({ conversation_id: "c1", agy_exit_status: 0 }));
+    writeFileSync(join(dir, "driver-manifest.json"), JSON.stringify({ conversation_id: "c1", agy_exit_status: 0, pin: { slug: "s" }, policy: "p" }));
     const legacy = priorInvocations(dir, "c1");
-    assert.equal(legacy.invocations.length, 1, "no recorded boundaries: the whole earlier stream is one invocation");
-    assert.equal(legacy.invocations[0].stdout, a + b);
+    assert.equal(legacy.invocations.length, 1, "no recorded boundaries and one init: one invocation");
+    assert.equal(terminated(legacy.invocations[0].stdout), a + b);
+    assert.deepEqual([legacy.pin, legacy.policy], [{ slug: "s" }, "p"]);
+
+    const second = '{"event":"init","conversation_id":"c1"}\n' + b;
+    writeFileSync(join(dir, "driver-events.jsonl"), a + second);
+    const split = priorInvocations(dir, "c1");
+    assert.deepEqual(split.invocations.map((i) => terminated(i.stdout)), [a, second], "a pre-boundary stream is split at each init event");
 
     writeFileSync(join(dir, "driver-manifest.json"), "not json");
     assert.deepEqual(priorInvocations(dir, "c1").invocations, []);

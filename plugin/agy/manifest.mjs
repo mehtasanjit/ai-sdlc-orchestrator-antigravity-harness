@@ -29,7 +29,7 @@ import { parse as parseYaml } from "yaml";
 import { buildManifest } from "../mcp/model-dispatch/dist/telemetry.js";
 import { resolveGeminiBackend } from "../mcp/model-dispatch/dist/adapters/geminiEndpoint.js";
 import { readPin, driverSlug, pendingPinChecks } from "./telemetry/fairnessPin.mjs";
-import { driverRange, driverRangeNote } from "./telemetry/driverRange.mjs";
+import { driverRange, driverRangeNote, driverRangeNotes } from "./telemetry/driverRange.mjs";
 import { isMain } from "../scripts/lib/is-main.mjs";
 import { conductorWork } from "./telemetry/conductorWork.mjs";
 
@@ -203,7 +203,7 @@ export function workerLineOf(event, policy = null) {
  * "unmeasured, never free"), so the dashboard never reads the $0 as free.
  */
 export const UNMEASURED_DRIVER_BASIS =
-  "NOT MEASURED: no headless launcher record (driver-manifest.json). An interactive agy session gives the plugin no usage counters (p1 checks 1, 13), so the conductor's own tokens are in no figure — unmeasured, never free";
+  "NOT MEASURED: no headless launcher record (driver-manifest.json), so no agy usage counters were captured for the conductor; the plugin reads none from an interactive session. Its tokens are in no figure — unmeasured, never free";
 
 export function costLines({ dispatched, modeled, policy, pin, env = process.env, login = null, wallet = claudeWallet(env, login), driverUsage = null, driverMeasured = modeled.length > 0 || driverUsage != null }) {
   const sum = (events) => ({
@@ -317,7 +317,9 @@ export function buildHarnessManifest({ runDir, policyName, runId, env = process.
     driver_cost_usd: driverLine.cost_usd,
     driver_cost_basis: driverLine.basis,
     driver_turns: modeled.length,
-    ...(driverLine.cost_usd_low !== undefined ? { driver_cost_usd_low: driverLine.cost_usd_low, driver_cost_resume_check: driverLine.resume_check } : {}),
+    ...(driverLine.cost_usd_low !== undefined ? { driver_cost_usd_low: driverLine.cost_usd_low } : {}),
+    ...(driverLine.resume_check ? { driver_cost_resume_check: driverLine.resume_check } : {}),
+    ...(driverLine.resumed_without_earlier_record ? { driver_resumed_without_earlier_record: true } : {}),
     ...(driverLine.invocations_without_usage ? { driver_invocations_without_usage: driverLine.invocations_without_usage } : {}),
     agy_invocations: driverManifest?.agy_invocations ?? null,
     completed: driverManifest?.completed ?? null,
@@ -341,6 +343,7 @@ export function buildHarnessManifest({ runDir, policyName, runId, env = process.
       output_tokens: driverLine.output_tokens,
       thinking_tokens: driverLine.thinking_tokens,
       provenance: driverLine.kind,
+      ...(driverLine.tokens_low ? { bound: "upper", low: driverLine.tokens_low } : {}),
     },
   };
   // Claude calls on the seat are modeled too, so they leave the cash figure.
@@ -357,6 +360,16 @@ export function buildHarnessManifest({ runDir, policyName, runId, env = process.
   };
 
   return { ...base, harness, usage, cost };
+}
+
+/** The one-line CLI summary the interactive conductor relays. */
+export function describeManifest(manifest, driverUsage) {
+  const notes = manifest.cost.driver_measured === false ? [] : driverRangeNotes(driverUsage);
+  return describeCostLines(manifest.cost.lines) + (notes.length ? ` (driver: ${notes.join("; ")})` : "");
+}
+
+function driverManifestUsage(runDir) {
+  return readJson(join(runDir, "driver-manifest.json"))?.driver_usage ?? null;
 }
 
 export function parseArgs(argv) {
@@ -383,7 +396,7 @@ if (isMain(import.meta.url)) {
     const manifest = buildHarnessManifest({ runDir, policyName: args.policy, runId: args["run-id"], version: args["agy-version"] ?? agyVersion(), login: probeClaudeLogin() });
     const out = join(runDir, "manifest.json");
     writeFileSync(out, JSON.stringify(manifest, null, 2) + "\n", "utf8");
-    console.log(`manifest: wrote ${out} — ${describeCostLines(manifest.cost.lines)}`);
+    console.log(`manifest: wrote ${out} — ${describeManifest(manifest, driverManifestUsage(runDir))}`);
   } catch (err) {
     console.error(`manifest failed: ${err?.message ?? err}`);
     process.exit(1);

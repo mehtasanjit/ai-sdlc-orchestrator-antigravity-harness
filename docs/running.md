@@ -66,7 +66,7 @@ node plugin/agy/run.mjs \
 
 One `agy --print` invocation may end before the pipeline does. `run.mjs` reads the `conversation_id` from the stream, and while `SUMMARY.md` is absent and agy exited 0, re-invokes with `--conversation <id>` and a short resume prompt, up to `--max-turns`. Every invocation's stream lands in `driver-events.jsonl`, in order, and `driver-manifest.json` → `driver_usage.invocations` records where each one starts and ends. agy's `usage` counters are cumulative within one process (check 8); whether a resumed process continues them or restarts at zero is check 16, still pending. Until it is recorded, a run with more than one invocation carries a driver **range**: `driver-cost-modeled.jsonl` and the headline figure are the upper bound (each process priced as fresh counters), and `driver_usage.cost_usd_low` is the lower bound (each process differenced against the one before).
 
-`--resume=<conversation-id>` into the same `--output-dir` keeps the earlier launch's invocations: `run.mjs` reads them back from the directory before it writes, so the driver line covers the whole conversation, not only the resumed part.
+`--resume=<conversation-id>` into the same `--output-dir` keeps the earlier launch's invocations: `run.mjs` reads them back from the directory before it writes, so the driver line covers the whole conversation, not only the resumed part. The resume must use the policy and driver pin the conversation started under; `run.mjs` refuses otherwise. A resume that finds no earlier record in the directory is flagged `resumed_without_earlier_record`, because check 16 decides whether its first counters include the earlier launch.
 
 ## Choosing a policy in the console
 

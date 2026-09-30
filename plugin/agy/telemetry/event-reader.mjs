@@ -65,32 +65,46 @@ function usageDelta(current, previous) {
 }
 
 /**
- * One usage block per `result` event, in stream order. Consecutive results
- * of the same conversation in the same process are cumulative and get
- * differenced; a result for a different (or unknown) conversation starts a
- * fresh baseline, and so does a new process under the "per-invocation"
- * reading. Events without an `invocation` tag count as one process.
+ * A result whose counters are all zero reports no usage. That is the shape
+ * check 8 recorded for a failed call (`status: "ERROR"`, empty conversation
+ * id), and it must not become the baseline a later result is differenced
+ * against.
+ */
+export function reportsUsage(result) {
+  return Boolean(result?.usage) && USAGE_KEYS.some((k) => (result.usage[k] ?? 0) > 0);
+}
+
+function maxUsage(a, b) {
+  const out = {};
+  for (const k of USAGE_KEYS) out[k] = Math.max(a?.[k] ?? 0, b?.[k] ?? 0);
+  return out;
+}
+
+/**
+ * One usage block per result that reports usage, in stream order. Each
+ * conversation keeps its own baseline, the running maximum of its cumulative
+ * counters; a result is differenced against its conversation's baseline, and
+ * a result with no conversation id stands alone. Under the "per-invocation"
+ * reading every new process starts with no baselines. Events without an
+ * `invocation` tag count as one process.
  */
 export function extractTurnUsage(events, { resume = "cumulative" } = {}) {
   if (!RESUME_READINGS.has(resume)) throw new Error(`extractTurnUsage: resume reading '${resume}' is not one of ${[...RESUME_READINGS].join(", ")}.`);
   const usages = [];
-  let previous = null;
-  let previousConversation = null;
-  let previousInvocation = null;
+  const baselines = new Map();
+  let lastInvocation;
   let index = 0;
   for (const ev of events) {
-    if (ev.event !== "result" || !ev.result?.usage) continue;
+    if (ev.event !== "result" || !reportsUsage(ev.result)) continue;
     index += 1;
     const conversation = ev.result.conversation_id || null;
     const invocation = ev.invocation ?? null;
-    const sameProcess = invocation === previousInvocation;
-    const sameSession = conversation && conversation === previousConversation && (sameProcess || resume === "cumulative");
+    if (resume === "per-invocation" && invocation !== lastInvocation) baselines.clear();
+    lastInvocation = invocation;
     const cumulative = ev.result.usage;
-    const usage = sameSession ? usageDelta(cumulative, previous) : { ...usageDelta(cumulative, null) };
-    usages.push({ turn_index: index, invocation, conversation_id: conversation, usage, cumulative });
-    previous = cumulative;
-    previousConversation = conversation;
-    previousInvocation = invocation;
+    const previous = conversation ? baselines.get(conversation) ?? null : null;
+    usages.push({ turn_index: index, invocation, conversation_id: conversation, usage: usageDelta(cumulative, previous), cumulative });
+    if (conversation) baselines.set(conversation, maxUsage(previous, cumulative));
   }
   return usages;
 }
@@ -148,17 +162,25 @@ export function modeledDriverCostEvents(events, opts) {
 }
 
 const sumCost = (events) => Math.round(events.reduce((s, e) => s + e.cost_usd, 0) * 1e6) / 1e6;
+const sumTokens = (events) => ({
+  input_tokens: events.reduce((s, e) => s + e.input_tokens, 0),
+  input_tokens_cached: events.reduce((s, e) => s + e.input_tokens_cached, 0),
+  output_tokens: events.reduce((s, e) => s + e.output_tokens, 0),
+});
 
 /**
  * The driver line for a run of one or more agy processes. `modeled` is what
  * driver-cost-modeled.jsonl records, under check 16's reading (the upper
- * bound while it is pending); `cost_usd_low`/`cost_usd_high` price the same
- * results under both readings. `invocations` is the per-process evidence
- * check 16 is decided from. A process that ended without a `result` (a
- * timeout or crash) reported no usage, so its driver tokens are missing from
- * every figure; `invocations_without_usage` names it.
+ * bound while it is pending); the `_low`/`_high` fields price the same
+ * results under both readings. `invocations` is the per-process evidence.
+ *
+ * A process with no result that reports usage (no `result` line, or only
+ * check 8's all-zero error envelope) is named in `invocations_without_usage`:
+ * its tokens are in no per-invocation figure. `resumedFirst` marks a launch
+ * whose first process resumed a conversation without the earlier launch's
+ * record, where check 16 decides whether its counters include that launch.
  */
-export function driverUsage(events, opts, { invocations = [], resumeUsage = RESUME_USAGE } = {}) {
+export function driverUsage(events, opts, { invocations = [], resumeUsage = RESUME_USAGE, resumedFirst = false } = {}) {
   const low = modeledDriverCostEvents(events, { ...opts, resume: "cumulative" });
   const high = modeledDriverCostEvents(events, { ...opts, resume: "per-invocation" });
   const reading = resumeUsage.state === "pending" ? "per-invocation" : resumeUsage.state;
@@ -166,13 +188,17 @@ export function driverUsage(events, opts, { invocations = [], resumeUsage = RESU
   const modeled = reading === "cumulative" ? low : high;
 
   const perInvocation = invocations.map((inv, i) => {
-    const results = events.filter((e) => e.invocation === i + 1 && e.event === "result" && e.result?.usage);
-    const last = results.at(-1)?.result ?? null;
+    const all = events.filter((e) => e.invocation === i + 1 && e.event === "result");
+    const usable = all.filter((e) => reportsUsage(e.result));
+    const lastRaw = all.at(-1)?.result ?? null;
+    const last = usable.at(-1)?.result ?? null;
     return {
       invocation: i + 1,
       exit_status: inv.status ?? null,
       wall_ms: inv.wall_ms ?? null,
-      result_events: results.length,
+      result_events: usable.length,
+      results_without_usage: all.length - usable.length,
+      last_status: lastRaw?.status ?? null,
       conversation_id: last?.conversation_id || null,
       num_turns: last?.num_turns ?? null,
       duration_seconds: last?.duration_seconds ?? null,
@@ -189,8 +215,11 @@ export function driverUsage(events, opts, { invocations = [], resumeUsage = RESU
       cost_usd: sumCost(modeled),
       cost_usd_low: sumCost(low),
       cost_usd_high: sumCost(high),
+      tokens_low: sumTokens(low),
+      tokens_high: sumTokens(high),
       invocations: perInvocation,
       invocations_without_usage: missing,
+      ...(resumedFirst ? { resumed_without_earlier_record: true } : {}),
     },
   };
 }

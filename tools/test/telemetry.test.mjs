@@ -11,8 +11,8 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parse as parseYaml } from "yaml";
 
-import { parseEventStream, parseInvocations, extractTurnUsage, modeledDriverCostEvents, driverUsage, conversationIdFrom, extractToolCalls, RESUME_USAGE } from "../../plugin/agy/telemetry/event-reader.mjs";
-import { driverRange, driverRangeNote } from "../../plugin/agy/telemetry/driverRange.mjs";
+import { parseEventStream, parseInvocations, extractTurnUsage, modeledDriverCostEvents, driverUsage, conversationIdFrom, extractToolCalls, reportsUsage, RESUME_USAGE } from "../../plugin/agy/telemetry/event-reader.mjs";
+import { driverRange, driverRangeNote, driverRangeNotes } from "../../plugin/agy/telemetry/driverRange.mjs";
 import { readPin, driverSlug, assertPinnedInvocation, findPinRejection, pendingPinChecks, LIVE_PIN_CHECKS } from "../../plugin/agy/telemetry/fairnessPin.mjs";
 import { inlineMcpConfig, materialiseRunRoot, removeRunRoot, defaultRunRoot, LINKED_PLUGIN_DIRS } from "../../plugin/agy/runRoot.mjs";
 
@@ -33,12 +33,13 @@ test("parseEventStream keeps every well-formed line, stamps a clock, and skips j
   assert.equal(events[0].event, "init");
 });
 
-test("the observed auth-failure envelope parses and yields one zero-usage turn", () => {
-  const observed = '{"event":"result","result":{"conversation_id":"","status":"ERROR","response":"","error":"authentication failed or timed out","duration_seconds":0,"num_turns":0,"usage":{"input_tokens":0,"output_tokens":0,"thinking_tokens":0,"cache_read_tokens":0,"total_tokens":0}}}';
-  const events = parseEventStream(observed);
-  const turns = extractTurnUsage(events);
-  assert.equal(turns.length, 1);
-  assert.equal(turns[0].usage.total_tokens, 0);
+const OBSERVED_ERROR = '{"event":"result","result":{"conversation_id":"","status":"ERROR","response":"","error":"authentication failed or timed out","duration_seconds":0,"num_turns":0,"usage":{"input_tokens":0,"output_tokens":0,"thinking_tokens":0,"cache_read_tokens":0,"total_tokens":0}}}';
+
+test("the observed auth-failure envelope parses and reports no usage, so it yields no turn", () => {
+  const events = parseEventStream(OBSERVED_ERROR);
+  assert.equal(events.length, 1);
+  assert.equal(reportsUsage(events[0].result), false);
+  assert.deepEqual(extractTurnUsage(events), []);
   assert.equal(conversationIdFrom(events), null, "an empty conversation id is not an id");
 });
 
@@ -138,14 +139,47 @@ test("a process that ended without a result is named, not silently priced at zer
 });
 
 test("driverRange shows the bounds only while pending and they differ, and always names missing usage", () => {
-  const pending = { resume_check: { check: 16, state: "pending" }, cost_usd_low: 1, cost_usd_high: 2, invocations_without_usage: [] };
-  assert.deepEqual(driverRange(pending), { cost_usd_low: 1, cost_usd_high: 2, resume_check: { check: 16, state: "pending" } });
+  const check = { check: 16, state: "pending" };
+  const pending = { resume_check: check, cost_usd_low: 1, cost_usd_high: 2, tokens_low: { input_tokens: 5 }, invocations_without_usage: [] };
+  assert.deepEqual(driverRange(pending), { cost_usd_low: 1, cost_usd_high: 2, tokens_low: { input_tokens: 5 }, resume_check: check });
   assert.deepEqual(driverRange({ ...pending, cost_usd_high: 1 }), {});
   assert.deepEqual(driverRange({ ...pending, resume_check: { check: 16, state: "cumulative" } }), {});
   assert.deepEqual(driverRange({ ...pending, cost_usd_high: 1, invocations_without_usage: [3] }), { invocations_without_usage: [3] });
+  assert.deepEqual(driverRange({ ...pending, cost_usd_high: 1, resumed_without_earlier_record: true }), { resumed_without_earlier_record: true, resume_check: check });
   assert.deepEqual(driverRange(null), {});
-  assert.match(driverRangeNote(pending), /check 16 pending; lower bound \$1/);
+  assert.match(driverRangeNote(pending), /range \$1–\$2: check 16 .* pending, the figure is the per-invocation reading, the upper bound/);
   assert.equal(driverRangeNote(null), "");
+});
+
+test("with an invocation missing, the notes stop calling the figure an upper bound", () => {
+  const notes = driverRangeNotes({ resume_check: { check: 16, state: "pending" }, cost_usd_low: 1, cost_usd_high: 2, invocations_without_usage: [3] });
+  assert.doesNotMatch(notes.join(" "), /upper bound/);
+  assert.match(notes.join(" "), /invocation\(s\) 3 reported no usage, so the true figure may be higher/);
+});
+
+test("an all-zero error result between two processes neither breaks the baseline nor hides the range (check 8's envelope)", () => {
+  const r1 = result("c1", usage(1000, 200, 50, 400));
+  const r3 = result("c1", usage(2500, 500, 80, 1200));
+  const events = parseInvocations([r1, OBSERVED_ERROR, r3]);
+  const { summary } = driverUsage(events, OPTS, { invocations: [{ status: 0 }, { status: 1 }, { status: 0 }] });
+  assert.equal(summary.cost_usd_low, 0.003241, "r3 is differenced against r1, not against the zeros");
+  assert.equal(summary.cost_usd_high, 0.004658);
+  assert.deepEqual(summary.invocations_without_usage, [2]);
+  assert.equal(summary.invocations[1].results_without_usage, 1);
+  assert.equal(summary.invocations[1].last_status, "ERROR");
+  const withId = parseInvocations([r1, result("c1", usage(0, 0, 0, 0), { status: "ERROR" }), r3]);
+  assert.equal(driverUsage(withId, OPTS, { invocations: [{}, {}, {}] }).summary.cost_usd_low, 0.003241, "an error result that keeps the id fails the same way without the fix");
+});
+
+test("interleaved conversations keep separate baselines under the cumulative reading", () => {
+  const events = parseEventStream([result("a", usage(100, 10, 0, 0)), result("b", usage(50, 5, 0, 0)), result("a", usage(300, 30, 0, 0))].join("\n"));
+  assert.deepEqual(extractTurnUsage(events).map((u) => u.usage.input_tokens), [100, 50, 200]);
+});
+
+test("the token bounds travel with the cost bounds", () => {
+  const { summary } = driverUsage(twoLaunches(), OPTS, { invocations: [{}, {}] });
+  assert.equal(summary.tokens_low.input_tokens, 2500, "cumulative reading: 1000 + 1500");
+  assert.equal(summary.tokens_high.input_tokens, 3500, "per-invocation reading: 1000 + 2500");
 });
 
 test("check 16's state in code matches its row in the verification doc", () => {

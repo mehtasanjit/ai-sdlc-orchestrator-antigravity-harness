@@ -281,7 +281,13 @@ test("an interactive run (no driver-manifest.json, no modeled lines) carries the
     assert.equal(m.usage.driver.provenance, "unmeasured");
     const r = spawnSync(process.execPath, [join(ROOT, "tools", "report.mjs"), dir], { encoding: "utf8" });
     assert.equal(r.status, 0, r.stderr);
+    assert.match(r.stdout, /Driver loop — not measured/);
     assert.match(r.stdout, /NOT MEASURED/);
+    assert.doesNotMatch(r.stdout, /modeled, not measured/);
+    const cli = spawnSync(process.execPath, [join(ROOT, "plugin", "agy", "manifest.mjs"), dir, `--policy=${POLICY}`, "--run-id=r1"], { encoding: "utf8" });
+    assert.equal(cli.status, 0, cli.stderr);
+    assert.match(cli.stdout, /· driver NOT MEASURED$/m, "the line the interactive conductor relays");
+    assert.doesNotMatch(cli.stdout, /driver modeled/);
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
@@ -296,6 +302,14 @@ test("a headless run whose record exists but reported no usage stays modeled, an
     assert.equal(m.cost.lines[0].kind, "modeled");
     assert.deepEqual(m.harness.driver_invocations_without_usage, [1]);
     assert.match(m.harness.driver_cost_basis, /invocation\(s\) 1 reported no usage/);
+    const r = spawnSync(process.execPath, [join(ROOT, "tools", "report.mjs"), dir], { encoding: "utf8" });
+    assert.equal(r.status, 0, r.stderr);
+    assert.match(r.stdout, /No driver turns recorded/);
+    assert.match(r.stdout, /invocation\(s\) 1 reported no usage/, "the notice prints even with no modeled turn");
+    rmSync(join(dir, "telemetry.jsonl"));
+    const bare = spawnSync(process.execPath, [join(ROOT, "tools", "report.mjs"), dir], { encoding: "utf8" });
+    assert.equal(bare.status, 0, "a driver record with lost usage is still a run to report, not a preflight halt");
+    assert.match(bare.stdout, /invocation\(s\) 1 reported no usage/);
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
