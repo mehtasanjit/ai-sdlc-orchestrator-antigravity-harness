@@ -25,6 +25,7 @@ import { readFileSync, existsSync, readdirSync } from "node:fs";
 import { join, resolve, basename } from "node:path";
 
 import { ACTOR, ACTOR_LEGEND, gutter } from "./logfmt.mjs";
+import { driverRange } from "../plugin/agy/telemetry/driverRange.mjs";
 
 // ─── input ────────────────────────────────────────────────────────────
 
@@ -133,6 +134,8 @@ const retried = [...packetAgg.values()].filter((p) => p.attempts > 1).sort((a, b
 const driverCost = modeledEvents.reduce((s, e) => s + (e.cost_usd ?? 0), 0);
 const driverIn = modeledEvents.reduce((s, e) => s + (e.input_tokens ?? 0), 0);
 const driverOut = modeledEvents.reduce((s, e) => s + (e.output_tokens ?? 0), 0);
+const driverBounds = driverRange(driverManifest.driver_usage);
+const driverUnmeasured = !existsSync(driverManifestPath);
 
 const vendorTotal = sdlcCost + overheadCost;
 
@@ -248,13 +251,25 @@ if (events.length > 0) {
 if (asMarkdown) {
   p(`## Driver loop — modeled, not measured`);
   p();
-  if (modeledEvents.length === 0) {
+  if (modeledEvents.length === 0 && driverUnmeasured) {
+    p(`**Not measured.** No headless launcher record (\`driver-manifest.json\`): an interactive agy session gives the plugin no`);
+    p(`usage counters, so the conductor's own tokens are in no figure. Unmeasured, never free.`);
+  } else if (modeledEvents.length === 0) {
     p(`_No driver turns recorded._`);
   } else {
     p(`| Turns | Tokens (in / out) | Modeled cost |`);
     p(`|---:|---|---:|`);
     p(`| ${modeledEvents.length} | ${fmtCompact(driverIn)} / ${fmtCompact(driverOut)} | ${fmtUSD(driverCost)} |`);
     p();
+    if (driverBounds.cost_usd_low !== undefined) {
+      p(`> **Range ${fmtUSD(driverBounds.cost_usd_low)} – ${fmtUSD(driverBounds.cost_usd_high)}.** agy was resumed, and whether its usage`);
+      p(`> counters restart in a resumed process is p1 check ${driverBounds.resume_check.check}, still pending. The figure above is the upper bound.`);
+      p();
+    }
+    if (driverBounds.invocations_without_usage) {
+      p(`> **Incomplete:** agy invocation(s) ${driverBounds.invocations_without_usage.join(", ")} ended without a result event, so their driver tokens are missing.`);
+      p();
+    }
     p(`> agy reports token counts and no wallet figure, so this is derived from the`);
     p(`> stream's usage counters at the policy's driver card. It is **not** an amount`);
     p(`> anyone was billed — a driver on a Google seat may have cost nothing in money at`);
@@ -264,12 +279,24 @@ if (asMarkdown) {
 } else {
   p(`  Driver loop — modeled, not measured`);
   p();
-  if (modeledEvents.length === 0) {
+  if (modeledEvents.length === 0 && driverUnmeasured) {
+    p(`  NOT MEASURED. No headless launcher record (driver-manifest.json): an interactive`);
+    p(`  agy session gives the plugin no usage counters, so the conductor's own tokens`);
+    p(`  are in no figure. Unmeasured, never free.`);
+  } else if (modeledEvents.length === 0) {
     p(`  No driver turns recorded.`);
   } else {
     p(`  ${"Turns".padEnd(24)}${String(modeledEvents.length).padStart(13)}`);
     p(`  ${"Tokens (in / out)".padEnd(24)}${`${fmtCompact(driverIn)} / ${fmtCompact(driverOut)}`.padStart(13)}`);
     p(`  ${"Modeled cost".padEnd(24)}${fmtUSD(driverCost).padStart(13)}`);
+    if (driverBounds.cost_usd_low !== undefined) {
+      p(`  ${"Range".padEnd(24)}${`${fmtUSD(driverBounds.cost_usd_low)} – ${fmtUSD(driverBounds.cost_usd_high)}`.padStart(13)}`);
+      p(`  agy was resumed; whether its usage counters restart in a resumed process is`);
+      p(`  p1 check ${driverBounds.resume_check.check}, still pending. The modeled cost is the upper bound.`);
+    }
+    if (driverBounds.invocations_without_usage) {
+      p(`  ! agy invocation(s) ${driverBounds.invocations_without_usage.join(", ")} ended without a result event; their driver tokens are missing.`);
+    }
     p();
     p(`  agy reports token counts and no wallet figure, so this is derived from the`);
     p(`  stream's usage at the driver card. It is NOT an amount anyone was billed — a`);

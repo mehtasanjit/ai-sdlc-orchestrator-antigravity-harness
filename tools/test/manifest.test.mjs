@@ -115,8 +115,43 @@ test("costLines partitions bridge events by the policy's Claude-worker models", 
   assert.equal(lines.find((l) => l.line === "claude_worker").cost_usd, 1);
   assert.equal(lines.find((l) => l.line === "gemini_workers").cost_usd, 2);
   assert.equal(lines.find((l) => l.line === "driver").cost_usd, 0);
+  assert.equal(lines.find((l) => l.line === "driver").kind, "unmeasured", "no driver record: the $0 is not a measurement");
   const withNone = costLines({ dispatched: [ev({ model: null, provenance: "none", cost_usd: 0 })], modeled: [], policy, pin: null, env: {} });
   assert.equal(withNone.find((l) => l.line === "gemini_workers").calls, 0, "a provenance:none receipt is not a worker call");
+});
+
+test("an interactive run (no driver-manifest.json, no modeled lines) carries the driver as NOT MEASURED, never as a modeled $0", () => {
+  const dir = runDir();
+  try {
+    rmSync(join(dir, "driver-manifest.json"));
+    rmSync(join(dir, "driver-cost-modeled.jsonl"));
+    const m = buildHarnessManifest({ runDir: dir, policyName: POLICY, runId: "r1" });
+    const driver = m.cost.lines.find((l) => l.line === "driver");
+    assert.equal(driver.kind, "unmeasured");
+    assert.equal(m.harness.driver_cost_usd, 0);
+    assert.match(m.harness.driver_cost_basis, /NOT MEASURED/);
+    assert.match(m.harness.driver_cost_basis, /unmeasured, never free/, "the studies console's wording for an unmeasured driver");
+    assert.doesNotMatch(m.harness.driver_cost_basis, /MODELED/);
+    assert.equal(m.cost.driver_measured, false);
+    assert.equal(m.usage.driver.provenance, "unmeasured");
+    const r = spawnSync(process.execPath, [join(ROOT, "tools", "report.mjs"), dir], { encoding: "utf8" });
+    assert.equal(r.status, 0, r.stderr);
+    assert.match(r.stdout, /NOT MEASURED/);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test("a headless run whose record exists but reported no usage stays modeled, and names the missing invocation", () => {
+  const dir = runDir();
+  try {
+    rmSync(join(dir, "driver-cost-modeled.jsonl"));
+    const dm = JSON.parse(readFileSync(join(dir, "driver-manifest.json"), "utf8"));
+    dm.driver_usage = { resume_check: { check: 16, state: "pending" }, reading: "per-invocation", cost_usd: 0, cost_usd_low: 0, cost_usd_high: 0, invocations: [], invocations_without_usage: [1] };
+    writeFileSync(join(dir, "driver-manifest.json"), JSON.stringify(dm));
+    const m = buildHarnessManifest({ runDir: dir, policyName: POLICY, runId: "r1" });
+    assert.equal(m.cost.lines[0].kind, "modeled");
+    assert.deepEqual(m.harness.driver_invocations_without_usage, [1]);
+    assert.match(m.harness.driver_cost_basis, /invocation\(s\) 1 reported no usage/);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
 test("a run with no telemetry at all still yields a manifest, with empty dispatched sums", () => {

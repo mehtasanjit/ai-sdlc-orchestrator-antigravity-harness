@@ -11,7 +11,8 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parse as parseYaml } from "yaml";
 
-import { parseEventStream, extractTurnUsage, modeledDriverCostEvents, conversationIdFrom, extractToolCalls } from "../../plugin/agy/telemetry/event-reader.mjs";
+import { parseEventStream, parseInvocations, extractTurnUsage, modeledDriverCostEvents, driverUsage, conversationIdFrom, extractToolCalls, RESUME_USAGE } from "../../plugin/agy/telemetry/event-reader.mjs";
+import { driverRange, driverRangeNote } from "../../plugin/agy/telemetry/driverRange.mjs";
 import { readPin, driverSlug, assertPinnedInvocation, findPinRejection, pendingPinChecks, LIVE_PIN_CHECKS } from "../../plugin/agy/telemetry/fairnessPin.mjs";
 import { inlineMcpConfig, materialiseRunRoot, removeRunRoot, defaultRunRoot, LINKED_PLUGIN_DIRS } from "../../plugin/agy/runRoot.mjs";
 
@@ -79,6 +80,80 @@ test("extractToolCalls tolerates the step shapes it may see", () => {
     '{"event":"step_update","step":{"type":"finish"}}',
   ].join("\n");
   assert.deepEqual(extractToolCalls(parseEventStream(text, () => "T")).map((c) => c.name), ["run_command", "mcp_tool", "finish"]);
+});
+
+// ── check 16: usage across a --conversation resume ─────────────────────────
+
+const PRICING = { input: 0.75, input_cached: 0.075, output: 3.75 };
+const OPTS = { pass: "r", model: "gemini-3.8-flash", pricing: PRICING, policyName: "p" };
+const twoLaunches = () => parseInvocations([result("c1", usage(1000, 100, 0, 0)), result("c1", usage(2500, 300, 0, 0))]);
+
+test("parseInvocations tags each process's events with its launch index", () => {
+  const events = parseInvocations(['{"event":"init","conversation_id":"c1"}\n' + result("c1", usage(1, 1, 0, 0)), result("c1", usage(2, 2, 0, 0))], () => "T");
+  assert.deepEqual(events.map((e) => [e.event, e.invocation]), [["init", 1], ["result", 1], ["result", 2]]);
+});
+
+test("across processes, the cumulative reading differences and the per-invocation reading restarts", () => {
+  const cumulative = extractTurnUsage(twoLaunches(), { resume: "cumulative" });
+  const fresh = extractTurnUsage(twoLaunches(), { resume: "per-invocation" });
+  assert.equal(cumulative[1].usage.input_tokens, 1500);
+  assert.equal(fresh[1].usage.input_tokens, 2500);
+  assert.deepEqual(fresh.map((u) => u.invocation), [1, 2]);
+});
+
+test("within one process both readings difference consecutive results (a kept-open session, check 8)", () => {
+  const events = parseInvocations([[result("c1", usage(1000, 100, 0, 0)), result("c1", usage(2500, 300, 0, 0))].join("\n")]);
+  for (const resume of ["cumulative", "per-invocation"]) {
+    assert.equal(extractTurnUsage(events, { resume })[1].usage.input_tokens, 1500, resume);
+  }
+});
+
+test("extractTurnUsage refuses a reading that is not one of the two", () => {
+  assert.throws(() => extractTurnUsage([], { resume: "pending" }), /not one of/);
+});
+
+test("while check 16 is pending the driver line carries the per-invocation upper bound and both figures", () => {
+  const { modeled, summary } = driverUsage(twoLaunches(), OPTS, { invocations: [{ status: 0, wall_ms: 5 }, { status: 0, wall_ms: 7 }] });
+  assert.equal(summary.reading, "per-invocation");
+  assert.ok(summary.cost_usd_low < summary.cost_usd_high);
+  assert.equal(summary.cost_usd, summary.cost_usd_high);
+  assert.equal(modeled[1].input_tokens, 2500);
+  assert.equal(modeled[1].usage_reading, "per-invocation");
+  assert.deepEqual(summary.invocations.map((i) => [i.invocation, i.exit_status, i.wall_ms, i.result_events, i.num_turns]), [[1, 0, 5, 1, 1], [2, 0, 7, 1, 1]]);
+  assert.deepEqual(summary.invocations[1].cumulative_usage, usage(2500, 300, 0, 0), "the raw counters check 16 is decided from");
+});
+
+test("a recorded check 16 prices the lines under its reading", () => {
+  const recorded = driverUsage(twoLaunches(), OPTS, { invocations: [{}, {}], resumeUsage: { check: 16, state: "cumulative" } });
+  assert.equal(recorded.summary.cost_usd, recorded.summary.cost_usd_low);
+  assert.equal(recorded.modeled[1].input_tokens, 1500);
+  assert.throws(() => driverUsage(twoLaunches(), OPTS, { resumeUsage: { check: 16, state: "maybe" } }), /not pending, cumulative or per-invocation/);
+});
+
+test("a process that ended without a result is named, not silently priced at zero", () => {
+  const events = parseInvocations([result("c1", usage(1000, 100, 0, 0)), '{"event":"init","conversation_id":"c1"}']);
+  const { summary } = driverUsage(events, OPTS, { invocations: [{ status: 0 }, { status: null }] });
+  assert.deepEqual(summary.invocations_without_usage, [2]);
+  assert.equal(summary.cost_usd_low, summary.cost_usd_high, "one result: the readings agree");
+});
+
+test("driverRange shows the bounds only while pending and they differ, and always names missing usage", () => {
+  const pending = { resume_check: { check: 16, state: "pending" }, cost_usd_low: 1, cost_usd_high: 2, invocations_without_usage: [] };
+  assert.deepEqual(driverRange(pending), { cost_usd_low: 1, cost_usd_high: 2, resume_check: { check: 16, state: "pending" } });
+  assert.deepEqual(driverRange({ ...pending, cost_usd_high: 1 }), {});
+  assert.deepEqual(driverRange({ ...pending, resume_check: { check: 16, state: "cumulative" } }), {});
+  assert.deepEqual(driverRange({ ...pending, cost_usd_high: 1, invocations_without_usage: [3] }), { invocations_without_usage: [3] });
+  assert.deepEqual(driverRange(null), {});
+  assert.match(driverRangeNote(pending), /check 16 pending; lower bound \$1/);
+  assert.equal(driverRangeNote(null), "");
+});
+
+test("check 16's state in code matches its row in the verification doc", () => {
+  const doc = readFileSync(join(ROOT, "docs", "verification", "p1-agy-runtime.md"), "utf8");
+  const row = doc.split("\n").find((l) => l.startsWith(`| ${RESUME_USAGE.check} |`));
+  assert.ok(row, `check ${RESUME_USAGE.check} has a row`);
+  if (RESUME_USAGE.state === "pending") assert.match(row, /\*\*PENDING/);
+  else assert.match(row, /\*\*PASS/);
 });
 
 // ── fairness pin ──────────────────────────────────────────────────────────

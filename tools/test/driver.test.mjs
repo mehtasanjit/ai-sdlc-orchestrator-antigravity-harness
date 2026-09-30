@@ -16,6 +16,8 @@ import { fileURLToPath } from "node:url";
 import {
   buildAgyArgs,
   buildRunArtifacts,
+  priorInvocations,
+  terminated,
   loadPolicyFile,
   renderPrompt,
   renderSkills,
@@ -236,6 +238,47 @@ test("buildRunArtifacts models the driver's own cost from the result usage, labe
   assert.equal(e.output_tokens_reasoning, 50);
   const expected = (600 * 0.75 + 400 * 0.075 + 250 * 3.75) / 1e6;
   assert.equal(e.cost_usd, Math.round(expected * 1e6) / 1e6, "priced by computeCostUsd, rounded to 6 places");
+});
+
+test("buildRunArtifacts records each invocation's line count, so a later --resume can split the stream", () => {
+  const second = JSON.stringify({ event: "result", result: { conversation_id: "c1", status: "OK", usage: { input_tokens: 3000, output_tokens: 400, thinking_tokens: 60, cache_read_tokens: 900, total_tokens: 3460 } } });
+  const { modeled, driverUsage } = buildRunArtifacts({
+    invocations: [{ stdout: STREAM, status: 0, wall_ms: 10 }, { stdout: second, status: 0, wall_ms: 20 }],
+    pin: PIN, passId: "r1", policyName: DEFAULT_POLICY, now: () => "T",
+  });
+  assert.deepEqual(modeled.map((e) => e.invocation), [1, 2]);
+  assert.deepEqual(driverUsage.invocations.map((i) => i.lines), [3, 1], "an unterminated last line still counts as a line");
+  assert.equal(driverUsage.resume_check.check, 16);
+});
+
+test("terminated adds the missing newline, so two invocations never share a line", () => {
+  assert.equal(terminated('{"a":1}'), '{"a":1}\n');
+  assert.equal(terminated('{"a":1}\n'), '{"a":1}\n');
+  assert.equal(terminated(""), "");
+  assert.equal(terminated(undefined), "");
+});
+
+test("priorInvocations reads the earlier launch of the same conversation back, split at the recorded boundaries", () => {
+  const dir = tmp();
+  try {
+    const a = '{"event":"init","conversation_id":"c1"}\n{"event":"result","result":{"conversation_id":"c1","usage":{"input_tokens":1}}}\n';
+    const b = '{"event":"result","result":{"conversation_id":"c1","usage":{"input_tokens":2}}}\n';
+    writeFileSync(join(dir, "driver-events.jsonl"), a + b);
+    writeFileSync(join(dir, "driver-manifest.json"), JSON.stringify({ conversation_id: "c1", started_at: "S", driver_usage: { invocations: [{ lines: 2, exit_status: 0, wall_ms: 9 }, { lines: 1, exit_status: 1, wall_ms: 4 }] } }));
+    const prior = priorInvocations(dir, "c1");
+    assert.equal(prior.started_at, "S");
+    assert.deepEqual(prior.invocations.map((i) => [terminated(i.stdout), i.status, i.wall_ms, i.carried]), [[a, 0, 9, true], [b, 1, 4, true]]);
+    assert.deepEqual(priorInvocations(dir, "other").invocations, [], "a different conversation carries nothing");
+    assert.deepEqual(priorInvocations(dir, null).invocations, []);
+
+    writeFileSync(join(dir, "driver-manifest.json"), JSON.stringify({ conversation_id: "c1", agy_exit_status: 0 }));
+    const legacy = priorInvocations(dir, "c1");
+    assert.equal(legacy.invocations.length, 1, "no recorded boundaries: the whole earlier stream is one invocation");
+    assert.equal(legacy.invocations[0].stdout, a + b);
+
+    writeFileSync(join(dir, "driver-manifest.json"), "not json");
+    assert.deepEqual(priorInvocations(dir, "c1").invocations, []);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
 test("buildRunArtifacts surfaces a pin rejection from the result envelope", () => {
