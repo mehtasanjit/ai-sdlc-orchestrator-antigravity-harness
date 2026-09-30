@@ -127,12 +127,12 @@ test("--list-json on the shipped policies dir returns correctly-shaped JSON entr
     assert.ok(Array.isArray(study.required_env), "required_env array");
     assert.equal(typeof study.requires_vertex_adc, "boolean");
     assert.equal(typeof study.requires_claude_cli, "boolean");
-    // claude-cli (Opus 5) + mcp:model-dispatch and antigravity-worker (Flash).
+    // claude-agent-sdk (Opus 5) + mcp:model-dispatch and antigravity-worker (Flash).
     // The Opus leaf carries no auth block: the wallet is the bridge's env.
-    assert.deepEqual(study.adapters, ["antigravity-worker", "claude-cli", "mcp:model-dispatch"]);
+    assert.deepEqual(study.adapters, ["antigravity-worker", "claude-agent-sdk", "mcp:model-dispatch"]);
     assert.deepEqual(study.required_env, ["GEMINI_API_KEY"]);
     assert.equal(study.requires_vertex_adc, true, "antigravity-worker → vertex ADC");
-    assert.equal(study.requires_claude_cli, true, "claude-cli → the claude binary");
+    assert.equal(study.requires_claude_cli, true, "claude-agent-sdk → the claude binary");
   } finally { cleanup(dir); }
 });
 
