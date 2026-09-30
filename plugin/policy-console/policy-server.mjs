@@ -65,12 +65,14 @@ const CONDITIONAL_SKIP_NOTE = {
 
 const KNOWN_ADAPTERS = [
   "builtin-anthropic",
+  "claude-agent-sdk",
   "claude-cli",
   "mcp:model-dispatch",
   "antigravity-worker",
 ];
 const ADAPTER_LABEL = {
   "builtin-anthropic": "Anthropic (Claude)",
+  "claude-agent-sdk": "Anthropic Claude via the Claude Agent SDK (arm A: API key · arm B: Vertex · seat)",
   "claude-cli": "Anthropic Claude via claude -p (arm A: API key · arm B: Vertex)",
   "mcp:model-dispatch": "Gemini — completion call",
   "antigravity-worker": "Gemini — Antigravity agent (SDK worker)",
@@ -78,6 +80,8 @@ const ADAPTER_LABEL = {
 
 const GEMINI_TIERS = ["off", "minimal", "low", "medium", "high"];
 const ANTHROPIC_EFFORT_TIERS = ["off", "low", "medium", "high", "xhigh", "max"];
+/** Adapters whose thinking control is an Anthropic `effort` level, not a Gemini tier. */
+const ANTHROPIC_ADAPTERS = new Set(["builtin-anthropic", "claude-agent-sdk", "claude-cli"]);
 // Every preset YAML the plugin ships, for the console's "preset" vs "custom"
 // origin chip. A name list is the only discriminator available: console-saved
 // custom policies land in the same config/policies/ directory as the shipped
@@ -94,12 +98,12 @@ const NAME_PATTERN = /^[a-z0-9][a-z0-9-]*$/;
 
 function thinkingSupport(model) {
   if (model.adapter === "mcp:model-dispatch" || model.adapter === "antigravity-worker") return GEMINI_TIERS;
-  if (model.adapter === "builtin-anthropic" || model.adapter === "claude-cli") return ANTHROPIC_EFFORT_TIERS;
+  if (ANTHROPIC_ADAPTERS.has(model.adapter)) return ANTHROPIC_EFFORT_TIERS;
   return [];
 }
 
 function thinkingField(model) {
-  return model.adapter === "builtin-anthropic" || model.adapter === "claude-cli" ? "effort" : "tier";
+  return ANTHROPIC_ADAPTERS.has(model.adapter) ? "effort" : "tier";
 }
 
 // ── policy readers ────────────────────────────────────────────────────

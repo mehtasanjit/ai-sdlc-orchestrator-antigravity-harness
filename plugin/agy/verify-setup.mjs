@@ -347,11 +347,16 @@ export function observePolicy(pluginRoot, projectRoot = process.cwd(), read = re
     const adapters = policyAdapters(read(path, "utf8"));
     return {
       name, selected, path, adapters,
+      // Any Claude worker — gates the wallet check, which both transports need.
+      usesClaudeWorker: adapters.includes("claude-agent-sdk") || adapters.includes("claude-cli"),
+      // Only the subprocess transport needs `claude` on PATH. The Agent SDK
+      // ships its own platform binary as an optional dependency, so a policy
+      // on claude-agent-sdk alone runs on a machine with no `claude` at all.
       usesClaudeCli: adapters.includes("claude-cli"),
       usesGemini: adapters.includes("mcp:model-dispatch") || adapters.includes("antigravity-worker"),
     };
   } catch {
-    return { name, selected, path, adapters: null, usesClaudeCli: null, usesGemini: null };
+    return { name, selected, path, adapters: null, usesClaudeWorker: null, usesClaudeCli: null, usesGemini: null };
   }
 }
 
@@ -492,21 +497,27 @@ export function evaluate({
   }
 
   const arm = claudeArmState(env, claudeLogin);
-  if (policy?.usesClaudeCli !== false) {
-    if (claudeCli.unprovable) {
-      problems.push({
-        id: "claude-cli-unprovable",
-        severity: "warning",
-        message: "Could not run `claude --version`; the Opus worker's binary is unproven from here.",
-        fix: "Run this script from a plain terminal.",
-      });
-    } else if (!claudeCli.present) {
-      problems.push({
-        id: "claude-cli",
-        severity: policy?.usesClaudeCli ? "blocking" : "warning",
-        message: `Claude Code (\`claude\`) is not on PATH — the claude-cli adapter spawns \`claude -p\` for every judgment phase${policy?.name ? ` of ${policy.name}` : ""}.`,
-        fix: "Install Claude Code (https://code.claude.com/docs) and sign in or export ANTHROPIC_API_KEY.",
-      });
+  const usesClaudeWorker = policy?.usesClaudeWorker ?? policy?.usesClaudeCli;
+  if (usesClaudeWorker !== false) {
+    // The `claude` binary is only the claude-cli transport's requirement. A
+    // policy on claude-agent-sdk gets its Claude Code from the SDK's own
+    // bundled binary, so a missing `claude` is not a problem there at all.
+    if (policy?.usesClaudeCli !== false) {
+      if (claudeCli.unprovable) {
+        problems.push({
+          id: "claude-cli-unprovable",
+          severity: "warning",
+          message: "Could not run `claude --version`; the Opus worker's binary is unproven from here.",
+          fix: "Run this script from a plain terminal.",
+        });
+      } else if (!claudeCli.present) {
+        problems.push({
+          id: "claude-cli",
+          severity: policy?.usesClaudeCli ? "blocking" : "warning",
+          message: `Claude Code (\`claude\`) is not on PATH — the claude-cli adapter spawns \`claude -p\` for every judgment phase${policy?.name ? ` of ${policy.name}` : ""}.`,
+          fix: "Install Claude Code (https://code.claude.com/docs) and sign in or export ANTHROPIC_API_KEY.",
+        });
+      }
     }
     if (arm.arm === "seat") {
       problems.push({
@@ -518,7 +529,7 @@ export function evaluate({
     } else if (arm.arm === "none") {
       problems.push({
         id: "claude-arm",
-        severity: policy?.usesClaudeCli ? "blocking" : "warning",
+        severity: usesClaudeWorker ? "blocking" : "warning",
         message: "No Claude wallet is selected: no ANTHROPIC_API_KEY (arm A), no CLAUDE_CODE_USE_VERTEX=1 (arm B), and Claude Code is not signed in to claude.ai (seat).",
         fix: `Export one arm's variables in ${ENV_ADVICE}, or sign in once with \`claude\`. See SETUP.md.`,
       });

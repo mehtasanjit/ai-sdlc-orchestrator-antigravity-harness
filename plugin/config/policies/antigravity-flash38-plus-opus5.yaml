@@ -1,14 +1,15 @@
 # The official antigravity harness policy: Gemini 3.8 Flash conducts on agy,
-# Opus 5 answers the judgment phases through the Claude Agent SDK (`claude -p`),
-# Gemini 3.8 Flash answers the mechanical phases. Same rule grammar, select
-# slots and cost cap as the Claude harness's opus-plus-flash-v38.yaml, which this is
-# modeled on (kept as a bridge test fixture, not shipped here).
+# Opus 5 answers the judgment phases through the Claude Agent SDK, Gemini 3.8
+# Flash answers the mechanical phases. Same rule grammar, select slots and cost
+# cap as the Claude harness's opus-plus-flash-v38.yaml, which this is modeled on
+# (kept as a bridge test fixture, not shipped here).
 #
 # Arm A (Anthropic key) and arm B (Vertex) run THIS SAME FILE. The arm is the
 # bridge's environment, not a policy field: arm A sets ANTHROPIC_API_KEY; arm B
 # sets CLAUDE_CODE_USE_VERTEX=1, ANTHROPIC_VERTEX_PROJECT_ID and
-# CLOUD_ML_REGION=global. The claude-cli adapter spawns `claude` with the
-# bridge's environment, so the same adapter reaches either wallet.
+# CLOUD_ML_REGION=global. The claude-agent-sdk adapter lets the SDK inherit the
+# bridge's environment, so the same adapter reaches either wallet — as does the
+# claude.ai seat, the third door.
 version: 1
 name: antigravity-flash38-plus-opus5
 
@@ -36,15 +37,15 @@ driver:
 
 models:
   - id: opus
-    adapter: claude-cli
+    adapter: claude-agent-sdk
     model_name: claude-opus-5
-    # Passed to `claude -p --effort`, so Opus is thinking-matched to the Claude
-    # Code harness runs. P1 check 7.
+    # Passed as the SDK's `effort` option, so Opus is thinking-matched to the
+    # Claude Code harness runs. P1 check 7.
     reasoning: { effort: high }
     # Opus 5 list card: input 5.00 / cached 0.50 / output 25.00 per 1M; cache
     # writes 1.25x (5m) or 2x (1h) of input. Arm B bills the GCP project at the
     # Vertex Claude card instead — pin that card in prices.ts before the first
-    # arm-B run; `claude -p`'s total_cost_usd is a check there, not the figure
+    # arm-B run; the SDK's own total_cost_usd is a check there, not the figure
     # of record.
     pricing: { input: 5.00, input_cached: 0.50, output: 25.00 }
     pricing_source: https://platform.claude.com/docs/en/about-claude/pricing

@@ -34,7 +34,7 @@ Any location works; the next step records the absolute path.
 node ../ai-sdlc-orchestrator-antigravity-harness/tools/setup.mjs --project-root "$(pwd)"
 ```
 
-It checks Node, `agy`, `claude` and credentials; builds `plugin/mcp/model-dispatch/dist/` (`npm ci && npm run build`, gitignored, rebuilt after every pull that touches the bridge); asks about the Gemini agent path only when Vertex ADC exists; mounts the plugin as `<project>/.agents/plugins/mmo/` (symlinks into the clone); and opens the policy console once to pick `.sdlc/project.json` → `default_policy`. Pass `--yes` to take every default, `--policy=<name>` to skip the browser, `--no-agent` to skip the door question.
+It checks Node, `agy`, `claude` and credentials; builds `plugin/mcp/model-dispatch/dist/` (`npm ci && npm run build`, gitignored, rebuilt after every pull that touches the bridge); asks about the Gemini agent path only when Vertex ADC exists; mounts the plugin as `<project>/.agents/plugins/mmo/` (symlinks into the clone); and opens the policy console to pick `.sdlc/project.json` → `default_policy`. The console opens on every run from a terminal — including when a default is already set, so you can review or change it; saving nothing there leaves the current value untouched. Pass `--yes` to take every default (it no longer skips the console), `--policy=<name>` to skip the browser, `--no-agent` to skip the door question.
 
 Report the wizard's output to the user as it stands. An item marked ✗ names what is missing and where to set it; do not work around it.
 

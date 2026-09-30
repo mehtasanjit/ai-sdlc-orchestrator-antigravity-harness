@@ -306,6 +306,16 @@ const DIST = join(HERE, "..", "mcp", "model-dispatch", "dist");
 const WINDOW_SLACK_MS = 5 * 60_000;
 
 /**
+ * Adapters that run a Claude Code session of their own for a dispatched
+ * packet, and so leave a transcript this collector's scan would count a
+ * second time. Mirrors the bridge's adapter registry
+ * (plugin/mcp/model-dispatch/src/adapters/index.ts), which is the source of
+ * truth; the two trees do not import each other. An adapter missing from here
+ * has its worker session double-counted into the orchestrator overhead.
+ */
+const CLAUDE_WORKER_ADAPTERS = new Set(["claude-agent-sdk", "claude-cli"]);
+
+/**
  * One run-lifecycle log line, as plugin/scripts/lib/log.mjs renders it:
  * `MMO: <ISO timestamp> <LEVEL>  run.start run_id=... mode=...`. The prefix
  * is configurable (MMO_LOG_PREFIX, possibly empty), so it is optional here;
@@ -1582,28 +1592,34 @@ export function inSessionDispatched(events, policy, manifest, dispatched, { clau
   const adapterById = new Map(models.map((m) => [m.id, m.adapter]));
   const adaptersByName = new Map();
   for (const m of models) adaptersByName.set(m.model_name, [...(adaptersByName.get(m.model_name) ?? []), m.adapter]);
-  // A claude-cli worker is inside the overhead only when its own `claude -p`
+  // A Claude worker is inside the overhead only when its own Claude Code
   // session was actually summed into it — i.e. the scan was not restricted to
   // the driver's session and the figure is transcript-priced. Classify by
   // the event's model_id when it carries one; by model_name only when every
-  // policy entry of that name is a claude-cli seat (an API-call event on a
-  // model that is ALSO listed as a claude-cli seat must stay in the total).
-  const viaClaudeCli = (ev) => {
+  // policy entry of that name is a Claude worker seat (an API-call event on a
+  // model that is ALSO listed as a worker seat must stay in the total).
+  //
+  // Both Claude transports qualify: claude-agent-sdk drives Claude Code
+  // in-process rather than as a subprocess, but it still persists a session
+  // transcript, so a transcript scan double-counts it exactly as it would a
+  // `claude -p` worker. The `claudeCliScanned` option name predates the
+  // second transport and now means "the worker session was scanned".
+  const viaClaudeWorker = (ev) => {
     if (!claudeCliScanned) return false;
-    if (ev.model_id != null && adapterById.has(ev.model_id)) return adapterById.get(ev.model_id) === "claude-cli";
+    if (ev.model_id != null && adapterById.has(ev.model_id)) return CLAUDE_WORKER_ADAPTERS.has(adapterById.get(ev.model_id));
     const adapters = adaptersByName.get(ev.model) ?? [];
-    return adapters.length > 0 && adapters.every((a) => a === "claude-cli");
+    return adapters.length > 0 && adapters.every((a) => CLAUDE_WORKER_ADAPTERS.has(a));
   };
   const isInside = (ev) =>
     ev.provenance === "estimated" ||
     ev.provenance === "apportioned_from_measured_total" ||
-    viaClaudeCli(ev);
+    viaClaudeWorker(ev);
   // What subtracting one inside event removes: its whole cost, except a
-  // claude-cli worker that says which share of it its transcript logged.
+  // Claude worker that says which share of it its transcript logged.
   const insideShare = (ev) => {
     const whole = ev.cost_usd ?? 0;
     const logged = ev.transcript_logged_cost_usd;
-    if (viaClaudeCli(ev) && typeof logged === "number" && Number.isFinite(logged) && logged >= 0) return Math.min(whole, logged);
+    if (viaClaudeWorker(ev) && typeof logged === "number" && Number.isFinite(logged) && logged >= 0) return Math.min(whole, logged);
     return whole;
   };
   const work = events.filter((ev) => ev && ev.tier !== "orchestrator");
@@ -2104,9 +2120,9 @@ export async function main(argv = process.argv.slice(2)) {
     derived = deriveDriverModel(policy, routingMod, overrides);
     driver = policy.models.find((m) => m.id === derived.modelId);
   } catch (err) {
-    // A claude-cli entry is a worker seat, so it is the last choice to label a driver.
+    // A Claude worker entry is a worker seat, so it is the last choice to label a driver.
     const byName = single ? policy.models.filter((m) => m.model_name === single) : [];
-    const named = byName.find((m) => m.adapter !== "claude-cli") ?? byName[0];
+    const named = byName.find((m) => !CLAUDE_WORKER_ADAPTERS.has(m.adapter)) ?? byName[0];
     const inSession = policy.models.find((m) => m.adapter === "builtin-anthropic");
     const busiest = Object.entries(observedModels).filter(([n]) => n !== "(unlabeled)").sort((a, b) => b[1] - a[1])[0]?.[0];
     if (named) {
