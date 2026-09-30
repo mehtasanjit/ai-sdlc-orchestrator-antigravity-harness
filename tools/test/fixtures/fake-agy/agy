@@ -61,6 +61,7 @@ const cwd = process.cwd();
 const r = spawnSync(process.execPath, [dispatch, "--log-phase=security_review", "--task-type=in_session", `--telemetry=${join(outputDir, "telemetry.jsonl")}`, `--out=${join(outputDir, "receipt.json")}`, "--policy=antigravity-flash38-plus-opus5", `--project-root=${cwd}`], { encoding: "utf8" });
 if (r.status !== 0) fail(`dispatch failed: ${r.stderr}`);
 writeFileSync(join(outputDir, "SUMMARY.md"), "# stub run\n\nDispatch route: fallback (dispatch.mjs). No shipped content was authored.\n");
-// Cumulative counters: this result includes the first invocation's tokens.
+// Cumulative across the resume, one of check 16's two readings: this result
+// includes the first invocation's tokens.
 emit({ event: "result", result: { conversation_id: conversationId, status: "OK", response: "done", duration_seconds: 1, num_turns: 4,
   usage: { input_tokens: 2500, output_tokens: 500, thinking_tokens: 80, cache_read_tokens: 1200, total_tokens: 3080 } } });

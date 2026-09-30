@@ -25,6 +25,7 @@ import { parse as parseYaml } from "yaml";
 
 import { buildManifest } from "../mcp/model-dispatch/dist/telemetry.js";
 import { readPin, driverSlug, pendingPinChecks } from "./telemetry/fairnessPin.mjs";
+import { driverRange, driverRangeNote } from "./telemetry/driverRange.mjs";
 
 export const HARNESS_NAME = "antigravity";
 export const RUNTIME_NAME = "antigravity-cli";
@@ -71,7 +72,15 @@ export function geminiDoor(policy, env = process.env) {
 export const CLAUDE_WORKER_ADAPTERS = new Set(["claude-agent-sdk", "claude-cli"]);
 
 /** The three lines. `dispatched` are bridge events (no orchestrator tier). */
-export function costLines({ dispatched, modeled, policy, pin, env = process.env, login = null }) {
+/**
+ * The basis an interactive run's driver line carries. The wording matches the
+ * studies console's convention for an unmeasured driver ($0, "NOT MEASURED",
+ * "unmeasured, never free"), so the dashboard never reads the $0 as free.
+ */
+export const UNMEASURED_DRIVER_BASIS =
+  "NOT MEASURED: no headless launcher record (driver-manifest.json). An interactive agy session gives the plugin no usage counters (p1 checks 1, 13), so the conductor's own tokens are in no figure — unmeasured, never free";
+
+export function costLines({ dispatched, modeled, policy, pin, env = process.env, login = null, driverUsage = null, driverMeasured = modeled.length > 0 || driverUsage != null }) {
   const claudeModels = new Set(
     (policy?.models ?? []).filter((m) => CLAUDE_WORKER_ADAPTERS.has(m.adapter)).map((m) => m.model_name),
   );
@@ -88,15 +97,19 @@ export function costLines({ dispatched, modeled, policy, pin, env = process.env,
   const wallet = claudeWallet(env, login);
   const door = geminiDoor(policy, env);
   const seat = wallet.arm === "seat";
+  const driver = driverMeasured
+    ? null
+    : { line: "driver", kind: "unmeasured", measured: false, model: pin?.model ?? null, billing_mode: pin?.billing_mode ?? null, basis: UNMEASURED_DRIVER_BASIS, ...sum([]), thinking_tokens: 0 };
   return [
-    {
+    driver ?? {
       line: "driver",
       kind: "modeled",
       model: pin?.model ?? null,
       billing_mode: pin?.billing_mode ?? null,
-      basis: `MODELED from agy stream-json usage at the ${pin?.model ?? "driver"} card (${pin?.billing_mode ?? "seat"}); thinking at the output rate, cache reads at the cached rate`,
+      basis: `MODELED from agy stream-json usage at the ${pin?.model ?? "driver"} card (${pin?.billing_mode ?? "seat"}); thinking at the output rate, cache reads at the cached rate${driverRangeNote(driverUsage)}`,
       ...sum(modeled),
       thinking_tokens: modeled.reduce((s, e) => s + (e.output_tokens_reasoning ?? 0), 0),
+      ...driverRange(driverUsage),
     },
     { line: "gemini_workers", kind: "cash", wallet: door.wallet, leaf: door.leaf, models: [...new Set(gemini.map((e) => e.model))], ...sum(gemini) },
     { line: "claude_worker", kind: seat ? "modeled" : "cash", wallet: wallet.wallet, arm: wallet.arm, models: [...new Set(claude.map((e) => e.model))], ...sum(claude),
@@ -132,7 +145,7 @@ export function buildHarnessManifest({ runDir, policyName, runId, env = process.
 
   let pin = null;
   try { pin = policy ? readPin(policy) : null; } catch { pin = null; }
-  const lines = costLines({ dispatched, modeled, policy, pin, env, login });
+  const lines = costLines({ dispatched, modeled, policy, pin, env, login, driverUsage: driverManifest?.driver_usage ?? null, driverMeasured: driverManifest != null || modeled.length > 0 });
   const driverLine = lines[0];
   const claudeLine = lines[2];
   const wallet = claudeWallet(env, login);
@@ -162,6 +175,8 @@ export function buildHarnessManifest({ runDir, policyName, runId, env = process.
     driver_cost_usd: driverLine.cost_usd,
     driver_cost_basis: driverLine.basis,
     driver_turns: modeled.length,
+    ...(driverLine.cost_usd_low !== undefined ? { driver_cost_usd_low: driverLine.cost_usd_low, driver_cost_resume_check: driverLine.resume_check } : {}),
+    ...(driverLine.invocations_without_usage ? { driver_invocations_without_usage: driverLine.invocations_without_usage } : {}),
     agy_invocations: driverManifest?.agy_invocations ?? null,
     completed: driverManifest?.completed ?? null,
     gates: driverManifest?.gates ?? null,
@@ -182,7 +197,7 @@ export function buildHarnessManifest({ runDir, policyName, runId, env = process.
       input_tokens_cached: driverLine.input_tokens_cached,
       output_tokens: driverLine.output_tokens,
       thinking_tokens: driverLine.thinking_tokens,
-      provenance: "modeled",
+      provenance: driverLine.kind,
     },
   };
   // On the seat the Claude line is modeled too, so it leaves the cash figure.
@@ -190,6 +205,8 @@ export function buildHarnessManifest({ runDir, policyName, runId, env = process.
   const cost = {
     dispatched_cash_usd: seat ? r6(base.total_cost_usd - claudeLine.cost_usd) : base.total_cost_usd,
     driver_modeled_usd: driverLine.cost_usd,
+    ...(driverLine.kind === "unmeasured" ? { driver_measured: false } : {}),
+    ...(driverLine.cost_usd_low !== undefined ? { driver_modeled_usd_low: driverLine.cost_usd_low } : {}),
     ...(seat ? { claude_seat_modeled_usd: claudeLine.cost_usd } : {}),
     lines,
     note: "dispatched_cash_usd and the modeled figures are different kinds of dollars and are not summed.",

@@ -16,4 +16,6 @@
 | A write the pipeline instructs is refused | The write contract (`.sdlc/local/write-contract.json`) | Read `.sdlc/local/guard-decisions.jsonl`; re-open Gate 0 to widen the allowlist, or set `strict: false` |
 | `manifest.md` appears instead of `manifest.json` | The model wrote its own manifest | `manifest.json` is code-written by `plugin/agy/manifest.mjs`; the model's file is advisory |
 | The modeled driver line looks several times too high | `input_tokens` counted inclusive of `cache_read_tokens` | The event reader subtracts cache reads before pricing fresh input; check `driver-cost-modeled.jsonl` |
+| The report shows a driver **Range** instead of one figure | The run resumed agy at least once, and check 16 (usage across a resume) is pending | Run `tools/p1/live-checks.sh 16` and record it; until then the headline is the upper bound and `driver_usage.cost_usd_low` the lower |
+| `run …: agy invocation(s) N ended without a result event` | agy timed out (`--print-timeout`) or crashed before its final `result` line | That invocation's driver tokens are in no figure. Raise `--print-timeout`, or read `driver-stderr.log` for the crash |
 | `npm test` reports the MCP suite NOT RUN | `plugin/mcp/model-dispatch/node_modules` absent | `npm run verify -- --fix` (or `npm run build`), then `npm test` |

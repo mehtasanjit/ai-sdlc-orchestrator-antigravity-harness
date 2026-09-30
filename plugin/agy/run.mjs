@@ -36,7 +36,7 @@ import { dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parse as parseYaml } from "yaml";
 
-import { conversationIdFrom, modeledDriverCostEvents, parseEventStream } from "./telemetry/event-reader.mjs";
+import { conversationIdFrom, driverUsage, parseEventStream, parseInvocations } from "./telemetry/event-reader.mjs";
 import { assertPinnedInvocation, driverSlug, findPinRejection, pendingPinChecks, readPin } from "./telemetry/fairnessPin.mjs";
 import { defaultRunRoot, materialiseRunRoot, removeRunRoot } from "./runRoot.mjs";
 import { buildHarnessManifest, agyVersion } from "./manifest.mjs";
@@ -216,18 +216,63 @@ export function spawnAgy(args, { spawnFn = spawn, cwd, agyBin = "agy", env = pro
   });
 }
 
-export function buildRunArtifacts({ jsonl, pin, passId, policyName, now }) {
-  const events = parseEventStream(jsonl, now);
+/** `invocations`: one `{stdout, status, wall_ms}` per agy process, in launch order. `jsonl` alone is one process. */
+export function buildRunArtifacts({ jsonl, invocations, pin, passId, policyName, now, resumeUsage }) {
+  const runs = invocations ?? [{ stdout: jsonl, status: null, wall_ms: null }];
+  const events = parseInvocations(runs.map((r) => r.stdout), now);
   const rejection = findPinRejection(events);
-  const modeled = modeledDriverCostEvents(events, {
-    pass: passId,
-    model: pin.model,
-    pricing: pin.pricing,
-    policyName,
-    billingMode: pin.billing_mode,
-    now,
+  const { modeled, summary } = driverUsage(
+    events,
+    { pass: passId, model: pin.model, pricing: pin.pricing, policyName, billingMode: pin.billing_mode, now },
+    { invocations: runs, ...(resumeUsage ? { resumeUsage } : {}) },
+  );
+  summary.invocations.forEach((s, i) => {
+    s.lines = streamLines(runs[i].stdout);
+    if (runs[i].carried) s.carried_from_earlier_launch = true;
   });
-  return { events, rejection, modeled };
+  return { events, rejection, modeled, driverUsage: summary };
+}
+
+/** A stream with a guaranteed trailing newline, so concatenated invocations never share a line. */
+export function terminated(text) {
+  const s = String(text ?? "");
+  return s && !s.endsWith("\n") ? `${s}\n` : s;
+}
+
+function streamLines(text) {
+  return (terminated(text).match(/\n/g) ?? []).length;
+}
+
+/**
+ * The earlier invocations of the conversation a `--resume` launch continues,
+ * read back from the same output directory before this launch overwrites its
+ * driver files. Boundaries come from the earlier driver-manifest.json; a
+ * manifest without them yields the whole earlier stream as one invocation.
+ */
+export function priorInvocations(outputDir, conversationId, { read = readFileSync, exists = existsSync } = {}) {
+  const manifestPath = join(outputDir, "driver-manifest.json");
+  const eventsPath = join(outputDir, "driver-events.jsonl");
+  if (!conversationId || !exists(manifestPath) || !exists(eventsPath)) return { invocations: [], started_at: null };
+  let prior;
+  try {
+    prior = JSON.parse(read(manifestPath, "utf-8"));
+  } catch {
+    return { invocations: [], started_at: null };
+  }
+  if (prior?.conversation_id !== conversationId) return { invocations: [], started_at: null };
+  const text = String(read(eventsPath, "utf-8"));
+  const recorded = prior.driver_usage?.invocations;
+  if (!Array.isArray(recorded) || !recorded.every((i) => Number.isInteger(i.lines))) {
+    return { invocations: [{ stdout: text, status: prior.agy_exit_status ?? null, wall_ms: null, carried: true }], started_at: prior.started_at ?? null };
+  }
+  const lines = text.split("\n");
+  let at = 0;
+  const invocations = recorded.map((i) => {
+    const stdout = lines.slice(at, at + i.lines).join("\n");
+    at += i.lines;
+    return { stdout, status: i.exit_status ?? null, wall_ms: i.wall_ms ?? null, carried: true };
+  });
+  return { invocations, started_at: prior.started_at ?? null };
 }
 
 /** Which reported variables are set. Never their values. */
@@ -351,16 +396,23 @@ async function main(args) {
   copyFileSync(policyPath(policyName), join(outputDir, "policy_snapshot.yaml"));
   if (runRoot) materialiseRunRoot({ runRoot, pluginRoot: PLUGIN_ROOT });
 
-  const started = new Date().toISOString();
   const agyBin = args["agy-bin"] ?? "agy";
   const resumeFrom = args.resume ?? null;
+  const prior = priorInvocations(outputDir, resumeFrom);
+  const started = prior.started_at ?? new Date().toISOString();
+  const launches = [...prior.invocations];
+  const launch = async (agyArgv) => {
+    const t0 = Date.now();
+    const r = await spawnAgy(agyArgv, { cwd, agyBin });
+    launches.push({ stdout: r.stdout, status: r.status, wall_ms: Date.now() - t0 });
+    return r;
+  };
 
   try {
-    let result = await spawnAgy(
+    let result = await launch(
       resumeFrom
         ? buildAgyArgs({ slug, promptText: RESUME_PROMPT, projectRoot, outputDir, printTimeout, resumeConversationId: resumeFrom })
         : agyArgs,
-      { cwd, agyBin },
     );
     if (result.status === null && /ENOENT/.test(result.stderr ?? "")) {
       throw new Error(
@@ -369,21 +421,19 @@ async function main(args) {
       );
     }
 
-    let stdout = result.stdout;
     let stderr = result.stderr;
     const conversationId = conversationIdFrom(parseEventStream(result.stdout)) ?? resumeFrom;
     let invocations = 1;
 
     while (invocations < maxTurns && result.status === 0 && conversationId && !runIsComplete(outputDir)) {
       console.log(`run ${runId}: session incomplete after invocation ${invocations} (no SUMMARY.md yet) — resuming ${conversationId}`);
-      result = await spawnAgy(
+      result = await launch(
         buildAgyArgs({ slug, promptText: RESUME_PROMPT, projectRoot, outputDir, printTimeout, resumeConversationId: conversationId }),
-        { cwd, agyBin },
       );
-      stdout += result.stdout;
       stderr += result.stderr;
       invocations += 1;
     }
+    const stdout = launches.map((l) => terminated(l.stdout)).join("");
 
     if (!runIsComplete(outputDir)) {
       console.log(
@@ -393,17 +443,24 @@ async function main(args) {
       );
     }
 
+    const stderrPath = join(outputDir, "driver-stderr.log");
+    const priorStderr = prior.invocations.length && existsSync(stderrPath) ? terminated(readFileSync(stderrPath, "utf-8")) : "";
     writeFileSync(join(outputDir, "driver-events.jsonl"), stdout, "utf-8");
-    writeFileSync(join(outputDir, "driver-stderr.log"), stderr, "utf-8");
+    writeFileSync(stderrPath, priorStderr + stderr, "utf-8");
 
-    const { events, rejection, modeled } = buildRunArtifacts({ jsonl: stdout, pin, passId: runId, policyName });
+    const { events, rejection, modeled, driverUsage: usageSummary } = buildRunArtifacts({ invocations: launches, pin, passId: runId, policyName });
     writeFileSync(
       join(outputDir, "driver-cost-modeled.jsonl"),
       modeled.map((e) => JSON.stringify(e)).join("\n") + (modeled.length ? "\n" : ""),
       "utf-8",
     );
+    if (usageSummary.invocations_without_usage.length) {
+      console.error(
+        `run ${runId}: agy invocation(s) ${usageSummary.invocations_without_usage.join(", ")} ended without a result event — ` +
+          "their driver tokens are missing from the modeled driver line.",
+      );
+    }
 
-    const totalModeled = modeled.reduce((sum, e) => sum + e.cost_usd, 0);
     const manifest = {
       harness: "antigravity",
       run_id: runId,
@@ -417,9 +474,10 @@ async function main(args) {
       ended_at: new Date().toISOString(),
       agy_exit_status: result.status,
       driver_turns: modeled.length,
-      agy_invocations: invocations,
+      agy_invocations: launches.length,
       completed: runIsComplete(outputDir),
-      driver_cost_usd_modeled: Math.round(totalModeled * 1e6) / 1e6,
+      driver_cost_usd_modeled: usageSummary.cost_usd,
+      driver_usage: usageSummary,
       pin_rejection: rejection,
       events_captured: events.length,
       inline_env: inlineEnv,

@@ -43,6 +43,7 @@ hooks, skills, rules, JSON configs); then `strings` over the binary; then `antig
 | 13 | Hook events and tool names | **PASS — documented.** Events: `PreToolUse`, `PostToolUse` (grouped, regex `matcher` on tool name), `PreInvocation`, `PostInvocation`, `Stop` (flat). No `SessionStart` / `UserPromptSubmit`. Tool names are lowercased step types; the binary's step types include `run_command`, `view_file`, `grep_search`, `list_directory`, `mcp_tool`, `code_action`, `propose_code`, `file_change`, `write_blob`, `invoke_subagent`, `finish`. Which of `code_action` / `propose_code` / `file_change` fires for a file write in the CLI is a live check (matcher `"*"` hook that logs `toolCall.name`); the write-contract shim is not pinned until then | Hook shim design |
 | 14 | Model slugs | **PASS — binary strings; live list pending sign-in.** `gemini-3.8-flash`, `gemini-3.8-flash-medium`, "Gemini 3.8 Flash (High)", `gemini-3.7-flash`, `gemini-3.6-flash`, `gemini-3.1-pro`, `gemini-3.1-flash-lite`, `gpt-oss-120b-maas`, `gpt-oss-20b-maas`, `claude-sonnet-`… Effort is baked into the slug (`--model gemini-3.8-flash-high`) and `--effort low\|medium\|high` is a separate session override (`--help`). The plan's section 8 passes both; the launcher passes the slug only, derived from the driver block, so the pin lives in one place | Driver pin form |
 | 15 | Built-in Claude on agy | **PASS — binary strings + public docs.** Opus 4.6 / Sonnet 4.6 only, Google-seat routed, no cost figures, no provider control for them. Never used by this harness (rule 13) | Opus 5 is a bridge worker, never agy's model |
+| 16 | Do `usage` counters carry over when `run.mjs` resumes a conversation in a new process (`agy --print --conversation <id>`) | **PENDING.** Check 8 settles one process: counters are cumulative within it. `run.mjs` resumes by starting a **new** `--print` process on the same conversation, and nothing recorded says whether that process reports the conversation's running total or restarts at zero. The stub `agy` assumes the former; nobody has observed either. Until this is recorded, `event-reader.mjs` (`RESUME_USAGE`) prices a multi-invocation run under both readings, writes the per-invocation reading (the upper bound) to `driver-cost-modeled.jsonl`, and records the lower bound and each process's raw counters in `driver-manifest.json` → `driver_usage`. `tools/p1/live-checks.sh 16` settles it | Resumed runs' driver line: one figure instead of a range |
 
 ## Findings that change the plan
 
@@ -93,3 +94,20 @@ Pass for check 5: the preflight result shows the Gemini door configured (the she
 reached the server through `mcp_config.json`); a missing-credential verdict with the key exported
 in the shell means `${VAR}` did not expand, and interactive use needs the key set another way.
 Neither check gates a headless run.
+
+### Check 16 — usage across a resume
+
+Seat quota only, no cash. From a terminal whose `agy` is signed in, in the repo root:
+
+```bash
+tools/p1/live-checks.sh 16
+```
+
+The script makes two `--print` calls on the pinned slug: one that writes about 300 words, then a resume of the same conversation that replies `ok`. It prints both `result.usage` blocks. Read `output_tokens` on the resume:
+
+| Resume `output_tokens` | Reading | Set `RESUME_USAGE.state` to |
+|---|---|---|
+| At least the first call's `output_tokens` (hundreds) | Counters carry over | `"cumulative"` |
+| A handful | Counters restart per process | `"per-invocation"` |
+
+Record the two usage blocks in the check 16 row, flip the row to **PASS**, and change `RESUME_USAGE.state` in `plugin/agy/telemetry/event-reader.mjs` in the same commit. `tools/test/telemetry.test.mjs` fails if the row and the constant disagree. Any real resumed run answers the same question from `driver-manifest.json` → `driver_usage.invocations[].cumulative_usage`.

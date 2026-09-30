@@ -5,7 +5,7 @@
 After a run finishes, the record lives under the run's output directory — `.sdlc/` for greenfield (`/mmo:greenfield`, or `run.mjs` with its default `--output-dir`), `.sdlc/runs/<YYYYMMDD-HHMMSS>-<intent>-<slug>/` for brownfield (`/mmo:brownfield`, the seven job aliases, `/mmo:pass --mode=brownfield`). Two files carry the money, and they are kept apart on purpose:
 
 - `telemetry.jsonl` — one JSON object per line, one line per **dispatched** model call: everything that went through the bridge. Vendor-metered. Real usage, and on a key or a GCP project, real money.
-- `driver-cost-modeled.jsonl` — one line per conductor turn, priced from agy's stream-json `usage` at the policy's driver card. **Modeled.** A Google seat has no per-token invoice, so this figure is what the tokens *would* cost at the published rate, not what anyone was billed. Headless runs only — an interactive session exposes no `usage` counters to the plugin.
+- `driver-cost-modeled.jsonl` — one line per conductor turn, priced from agy's stream-json `usage` at the policy's driver card. **Modeled.** A Google seat has no per-token invoice, so this figure is what the tokens *would* cost at the published rate, not what anyone was billed. Headless runs only — an interactive session exposes no `usage` counters to the plugin, so an interactive run's manifest carries the driver line as `kind: "unmeasured"`: $0 with a `NOT MEASURED` basis and `cost.driver_measured: false`, never a modeled $0.
 
 Around them:
 
@@ -129,7 +129,17 @@ Same line shape as telemetry, so the two files can be concatenated for analysis 
 }
 ```
 
-`output_tokens_reasoning` is agy's `thinking_tokens`, billed at the output rate; `input_tokens_cached` is its `cache_read_tokens`, at the cached rate. agy's `usage` is cumulative per session, so a resumed session's later results are differenced against the earlier one and each turn is priced once. No event carries a timestamp; `ts` is the reader's arrival clock.
+`output_tokens_reasoning` is agy's `thinking_tokens`, billed at the output rate; `input_tokens_cached` is its `cache_read_tokens`, at the cached rate. agy's `usage` is cumulative within one process. Each line carries `invocation` (which `agy --print` process reported it) and `usage_reading` (how a resumed process was priced). While [check 16](verification/p1-agy-runtime.md) is pending the reading is `per-invocation`: a resumed process's counters are priced as fresh, the upper bound. No event carries a timestamp; `ts` is the reader's arrival clock.
+
+`driver-manifest.json` → `driver_usage` holds the evidence behind the line:
+
+| Field | Meaning |
+|---|---|
+| `resume_check` | `{check: 16, state}`; `pending` until the live result is recorded |
+| `reading` | The reading `driver-cost-modeled.jsonl` uses |
+| `cost_usd`, `cost_usd_low`, `cost_usd_high` | The driver figure, and the same results priced under each reading. Equal for a run with one invocation |
+| `invocations[]` | Per `agy --print` process: exit status, wall clock, `result` count, `num_turns`, `duration_seconds`, the raw cumulative `usage`, and the line count that splits `driver-events.jsonl` |
+| `invocations_without_usage` | Processes that ended without a `result` event. Their driver tokens are in no figure |
 
 ### `manifest.json`
 
@@ -149,6 +159,8 @@ The dispatched rollup, then three blocks this harness adds.
 | `delegated` | Whether any packet went to the agent worker |
 | `cable` | One-paragraph description of the wiring: driver runtime and models, driver auth, worker models, `claude_worker_auth` (names the arm, the GCP project and region on arm B, or the seat), `summary` |
 | `driver_cost_usd`, `driver_cost_basis`, `driver_turns`, `agy_invocations` | The modeled driver figure and the sentence that says how it was derived; how many turns and how many `agy --print` invocations (the resume loop) |
+| `driver_cost_usd_low`, `driver_cost_resume_check` | Present while check 16 is pending on a resumed run: the lower bound of the driver range; `driver_cost_usd` is the upper |
+| `driver_invocations_without_usage` | `agy --print` processes that reported no `usage`; the driver figure is missing their tokens |
 | `completed`, `gates`, `pin_rejection` | Whether `SUMMARY.md` appeared; the gate mode; the stderr line if agy refused the pinned model |
 | `written_by`, `written_at` | `plugin/agy/manifest.mjs` and when |
 

@@ -64,7 +64,9 @@ node plugin/agy/run.mjs \
 
 ### The resume loop
 
-One `agy --print` invocation may end before the pipeline does. `run.mjs` reads the `conversation_id` from the stream, and while `SUMMARY.md` is absent and agy exited 0, re-invokes with `--conversation <id>` and a short resume prompt, up to `--max-turns`. The stream of every invocation is concatenated, and the event reader differences the cumulative `usage` counters so each turn is priced once.
+One `agy --print` invocation may end before the pipeline does. `run.mjs` reads the `conversation_id` from the stream, and while `SUMMARY.md` is absent and agy exited 0, re-invokes with `--conversation <id>` and a short resume prompt, up to `--max-turns`. Every invocation's stream lands in `driver-events.jsonl`, in order, and `driver-manifest.json` → `driver_usage.invocations` records where each one starts and ends. agy's `usage` counters are cumulative within one process (check 8); whether a resumed process continues them or restarts at zero is check 16, still pending. Until it is recorded, a run with more than one invocation carries a driver **range**: `driver-cost-modeled.jsonl` and the headline figure are the upper bound (each process priced as fresh counters), and `driver_usage.cost_usd_low` is the lower bound (each process differenced against the one before).
+
+`--resume=<conversation-id>` into the same `--output-dir` keeps the earlier launch's invocations: `run.mjs` reads them back from the directory before it writes, so the driver line covers the whole conversation, not only the resumed part.
 
 ## Choosing a policy in the console
 
@@ -98,7 +100,7 @@ node tools/report.mjs /tmp/smoke/.sdlc
 | `driver-events.jsonl` | `run.mjs` | The raw stream-json, every invocation |
 | `driver-stderr.log` | `run.mjs` | agy's stderr, where soft-denials and hook notices land |
 | `driver-cost-modeled.jsonl` | `run.mjs` | One `provenance: "modeled"` event per turn at the driver card |
-| `driver-manifest.json` | `run.mjs` | The pin, exit status, invocations, completion, modeled driver cost, the mode and the job type with how it was chosen (`flag` or `inferred`) |
+| `driver-manifest.json` | `run.mjs` | The pin, exit status, invocations, completion, modeled driver cost and its `driver_usage` evidence (range, per-invocation counters, invocations that reported no usage), the mode and the job type with how it was chosen (`flag` or `inferred`) |
 | `manifest.json` | `run.mjs` at the end, via `plugin/agy/manifest.mjs` | The code-written run record: the bridge's rollups plus `harness`, `usage` and `cost` with the three labeled lines. Rebuild any time with `node plugin/agy/manifest.mjs <dir>` |
 | `SUMMARY.md` | the conductor | The completion signal |
 
