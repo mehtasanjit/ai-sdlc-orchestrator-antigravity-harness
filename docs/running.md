@@ -34,7 +34,7 @@ node plugin/agy/run.mjs \
 | `--policy` | `antigravity-flash38-plus-opus5` | Policy name under `plugin/config/policies/` |
 | `--run-id` | timestamp | `pass_id` on every telemetry event |
 | `--gates` | `prompt` | `prompt` waits for you; `auto-approve` records `auto-approved` and continues; `auto-abort` stops at the first gate |
-| `--mode`, `--intent`, `--seed` | — | The brownfield handover the guide's step 4 reads |
+| `--mode`, `--intent`, `--seed` | — | The brownfield handover the guide's step 4 reads. `--seed` without `--intent` on a brownfield run resolves the job type at launch through `plugin/scripts/infer-intent.mjs` and records `intent.source: "inferred"`; a seed that matches no job type, or several, refuses to launch and asks for `--intent` |
 | `--resume=<conversation-id>` | — | Continue an earlier session instead of starting one |
 | `--max-turns` | 12 | Cap on agy invocations per run |
 | `--print-timeout` | `6h` | agy's own print-mode timeout; the default is 5 minutes |
@@ -98,7 +98,7 @@ node tools/report.mjs /tmp/smoke/.sdlc
 | `driver-events.jsonl` | `run.mjs` | The raw stream-json, every invocation |
 | `driver-stderr.log` | `run.mjs` | agy's stderr, where soft-denials and hook notices land |
 | `driver-cost-modeled.jsonl` | `run.mjs` | One `provenance: "modeled"` event per turn at the driver card |
-| `driver-manifest.json` | `run.mjs` | The pin, exit status, invocations, completion, modeled driver cost |
+| `driver-manifest.json` | `run.mjs` | The pin, exit status, invocations, completion, modeled driver cost, the mode and the job type with how it was chosen (`flag` or `inferred`) |
 | `manifest.json` | `run.mjs` at the end, via `plugin/agy/manifest.mjs` | The code-written run record: the bridge's rollups plus `harness`, `usage` and `cost` with the three labeled lines. Rebuild any time with `node plugin/agy/manifest.mjs <dir>` |
 | `SUMMARY.md` | the conductor | The completion signal |
 

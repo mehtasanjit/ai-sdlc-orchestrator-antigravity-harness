@@ -191,12 +191,10 @@ That's it. You don't need to pick a Gemini door yourself — setup asks. You don
 **Prompt 1 — setup.** Open `agy` in the folder you want to work in (an empty folder for greenfield, an existing repo for brownfield) and paste this verbatim:
 
 ```
-Set up this plugin from this repo - https://github.com/tl-ai-labs/ai-sdlc-orchestrator-antigravity-harness, branch feat/antigravity-harness-implementation
+Set up this plugin from this repo - https://github.com/tl-ai-labs/ai-sdlc-orchestrator-antigravity-harness, branch develop
 ```
 
-The branch matters until this work is merged: `main` has neither `tools/setup.mjs` nor the mount step, so a clone of the default branch would follow the old manual instructions and never mount the plugin.
-
-agy follows [INSTALL.md](INSTALL.md): clones that branch next to your project (or checks it out in an existing clone), builds the bundled MCP server, checks `agy`, `claude` and the credentials in your shell, asks whether to use the Antigravity SDK agent path (only when Vertex ADC is present), mounts the plugin into your project as `.agents/plugins/mmo/` (symlinks into the clone) so agy discovers it, and opens the browser once to pick this project's policy (or hit Save on `antigravity-flash38-plus-opus5`). Nothing is written under `~/.gemini/`.
+agy follows [INSTALL.md](INSTALL.md): clones `develop` next to your project (or checks it out in an existing clone), builds the bundled MCP server, checks `agy`, `claude` and the credentials in your shell, asks whether to use the Antigravity SDK agent path (only when Vertex ADC is present), mounts the plugin into your project as `.agents/plugins/mmo/` (symlinks into the clone) so agy discovers it, and opens the browser once to pick this project's policy (or hit Save on `antigravity-flash38-plus-opus5`). Nothing is written under `~/.gemini/`.
 
 **Prompt 2 — run.** Start a **new `agy` session in the same folder**, answer **yes** when agy asks whether you trust the folder, then whichever fits:
 
@@ -218,7 +216,7 @@ Fifteen skills, split by purpose. All are declared under [plugin/skills/](plugin
 | Skill | What it does | When to use it |
 |---|---|---|
 | [`/mmo:greenfield`](plugin/skills/greenfield/SKILL.md) | Runs the greenfield pipeline. Interviews you for the brief (or reads one you point at), confirms the output path, shows the routing plan, then starts spending. Takes no arguments. | Empty folder + a project brief. Generates a whole new app into `./src/`. |
-| [`/mmo:brownfield`](plugin/skills/brownfield/SKILL.md) | Runs the brownfield pipeline. Hydrates prior state, runs discovery (or resumes), asks for the intent and brief, freezes scope at Gate 0, then executes. Takes no arguments. | Existing repo. Extends the code you already have. |
+| [`/mmo:brownfield`](plugin/skills/brownfield/SKILL.md) | Runs the brownfield pipeline. Hydrates prior state, runs discovery (or resumes), asks for the intent and brief, freezes scope at Gate 0, then executes. Optional free text describes the job — `/mmo:brownfield add per-lane WIP limit to Board` — and the job type is proposed from the wording, confirmed by you before the interview and again at Gate 0. | Existing repo. Extends the code you already have. |
 | [`/mmo:pass`](plugin/skills/pass/SKILL.md) | Headless twin of the above. Every setting a flag: `--auth=vendor` (the only value this runtime accepts), `--policy`, `--study`, `--run-id`, `--mode=greenfield\|brownfield`, `--intent`, `--gates`, and more. | CI, scripted replays, batch runs. Measured runs use [plugin/agy/run.mjs](plugin/agy/run.mjs), which wraps the same pipeline in the pinned `agy` invocation. |
 
 ### Run a specific brownfield job
@@ -235,7 +233,7 @@ Seven aliases into `/mmo:brownfield`, each with the job type pre-selected — on
 | [`/mmo:test`](plugin/skills/test/SKILL.md) | `test` | backfill unit tests for src/payments to reach 80% line coverage |
 | [`/mmo:deps`](plugin/skills/deps/SKILL.md) | `deps` | upgrade jest 28 → 29 (and adapt breaking changes) |
 
-These and `pass` start a full billable run; invoke them, never expect them to fire from a matching phrase.
+These and `pass` start a full billable run; invoke them, never expect them to fire from a matching phrase. `/mmo:brownfield <text>` does the same without naming the job type; the aliases skip the proposal step.
 
 ### Setup and configuration
 
@@ -309,7 +307,7 @@ npm run verify -- --fix
 Prefer to drive it yourself, or set up a project without an agy session:
 
 ```bash
-git clone --branch feat/antigravity-harness-implementation https://github.com/tl-ai-labs/ai-sdlc-orchestrator-antigravity-harness.git
+git clone --branch develop https://github.com/tl-ai-labs/ai-sdlc-orchestrator-antigravity-harness.git
 cd ai-sdlc-orchestrator-antigravity-harness
 npm ci && npm run build && npm test
 node tools/setup.mjs --project-root /path/to/your/project

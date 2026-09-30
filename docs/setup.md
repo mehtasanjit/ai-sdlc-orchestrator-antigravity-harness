@@ -128,7 +128,7 @@ Scripted: `node tools/setup.mjs --policy=<name>`, or `node plugin/scripts/setup-
 ## Install from the clone
 
 ```bash
-git clone --branch feat/antigravity-harness-implementation https://github.com/tl-ai-labs/ai-sdlc-orchestrator-antigravity-harness.git
+git clone --branch develop https://github.com/tl-ai-labs/ai-sdlc-orchestrator-antigravity-harness.git
 cd ai-sdlc-orchestrator-antigravity-harness
 npm ci && npm run build && npm test
 node tools/setup.mjs --project-root /path/to/your/project

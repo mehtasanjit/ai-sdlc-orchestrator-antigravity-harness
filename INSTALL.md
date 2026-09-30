@@ -15,18 +15,18 @@ Steps from "Set up this plugin from this repo" to a project in which `agy` disco
 ## 2. Clone the harness beside the project
 
 ```bash
-git clone --branch feat/antigravity-harness-implementation https://github.com/tl-ai-labs/ai-sdlc-orchestrator-antigravity-harness.git ../ai-sdlc-orchestrator-antigravity-harness
+git clone --branch develop https://github.com/tl-ai-labs/ai-sdlc-orchestrator-antigravity-harness.git ../ai-sdlc-orchestrator-antigravity-harness
 ```
 
-If `../ai-sdlc-orchestrator-antigravity-harness` already exists, switch it to the branch and update it instead:
+If `../ai-sdlc-orchestrator-antigravity-harness` already exists, switch it to `develop` and update it instead:
 
 ```bash
 git -C ../ai-sdlc-orchestrator-antigravity-harness fetch origin
-git -C ../ai-sdlc-orchestrator-antigravity-harness checkout feat/antigravity-harness-implementation
+git -C ../ai-sdlc-orchestrator-antigravity-harness checkout develop
 git -C ../ai-sdlc-orchestrator-antigravity-harness pull
 ```
 
-The branch matters until this work is merged to `main`: the wizard in step 3 and the mount step do not exist on `main`. Any location works; the next step records the absolute path.
+Any location works; the next step records the absolute path.
 
 ## 3. Run the wizard against the project
 
