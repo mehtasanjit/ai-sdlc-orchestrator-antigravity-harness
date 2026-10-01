@@ -74,7 +74,17 @@ Two consequences worth knowing when reading a report:
 
 ## Output-ceiling doubling
 
-Every model entry carries `max_output_tokens_absolute`. A packet starts at the policy's default ceiling; when the vendor reports `MAX_TOKENS`, the bridge retries with the ceiling doubled, up to the absolute cap, and every attempt is billed and logged with `attempt_number` and `ceiling_used`. The report's **Packets that hit the output cap** section lists them. A packet that exhausts the absolute cap fails and, after two mechanical-tier failures, escalates to Opus 5 under the `debug` rule.
+Only the completion adapters apply an output ceiling. Whether an event's ceiling held is on the event itself:
+
+| Adapter | Ceiling sent to the vendor | `ceiling_used` | `budget_enforced` | `budget_declared` |
+|---|---|---|---|---|
+| `mcp:model-dispatch` (Gemini as a model), `builtin-anthropic` | Yes, doubled on `MAX_TOKENS` | the ceiling of that attempt | absent | absent |
+| `claude-agent-sdk` (Opus 5, the judgment tier), `claude-cli` | No output cap, no spend limit | `null` | `false` | the packet's `budget.maxOutputTokens` |
+| `antigravity-worker` (Gemini as an agent) | No; an agent session has no ceiling under the bridge's control | `null` | `false` | the packet's `budget.maxOutputTokens` |
+
+On the completion adapters, a packet starts at its `budget.maxOutputTokens`, clamped to the model entry's `max_output_tokens_absolute` (or the adapter's built-in limit when the entry sets none). When the vendor reports `MAX_TOKENS`, the bridge retries with the ceiling doubled, up to the absolute cap, and every attempt is billed and logged with `attempt_number` and `ceiling_used`. The report's **Packets that hit the output cap** section lists them. A packet that exhausts the absolute cap fails and, after two mechanical-tier failures, escalates to Opus 5 under the `debug` rule.
+
+The other adapters make one attempt with no cap, so their `output_tokens` can exceed `budget_declared`; compare the two to see by how much. Judgment output is uncapped on purpose: the Opus entry's `max_output_tokens_absolute` is not applied, and the spend limit that covers judgment phases is the run-wide `hard_cost_cap_usd` (see the [README](../README.md#routing--model-per-phase)). Events written before `budget_enforced` existed carry the packet budget in `ceiling_used` for every adapter, and on these three it was never applied.
 
 ## Two doors to the mechanical tier, and how the report tells them apart
 

@@ -22,7 +22,7 @@ import { execFileSync, spawn, type ChildProcess } from "node:child_process";
 import type { AttemptRecord, ExecutionResult, ModelConfig, TaskPacket } from "../types.js";
 import { estimateTokens } from "../pricing.js";
 import { log } from "../log.js";
-import type { ModelAdapter } from "./ModelAdapter.js";
+import { unenforcedBudget, type ModelAdapter } from "./ModelAdapter.js";
 import { splitStableFromDynamic } from "./BuiltinAnthropicAdapter.js";
 import { DispatchPricer, systemClock, unpricedRefusal, type Clock } from "./dispatchPricer.js";
 import {
@@ -166,7 +166,7 @@ export class ClaudeCliAdapter implements ModelAdapter {
 
     const attempt: AttemptRecord = {
       attempt_number: 1,
-      ceiling_used: packet.budget.maxOutputTokens,
+      ...unenforcedBudget(packet),
       stop_reason: stopReason,
       hit_output_cap: hitOutputCap,
       tokens: attemptTokens,
@@ -267,7 +267,7 @@ export class ClaudeCliAdapter implements ModelAdapter {
   ): ExecutionResult {
     const attempt: AttemptRecord = {
       attempt_number: 1,
-      ceiling_used: packet.budget.maxOutputTokens,
+      ...unenforcedBudget(packet),
       hit_output_cap: false,
       tokens,
       cost_usd: 0,

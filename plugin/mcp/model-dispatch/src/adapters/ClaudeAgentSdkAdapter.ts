@@ -38,7 +38,7 @@
 import type { AttemptRecord, ExecutionResult, ModelConfig, TaskPacket } from "../types.js";
 import { estimateTokens } from "../pricing.js";
 import { log } from "../log.js";
-import type { ModelAdapter } from "./ModelAdapter.js";
+import { unenforcedBudget, type ModelAdapter } from "./ModelAdapter.js";
 import { splitStableFromDynamic } from "./BuiltinAnthropicAdapter.js";
 import { DispatchPricer, systemClock, unpricedRefusal, type Clock } from "./dispatchPricer.js";
 import {
@@ -104,6 +104,11 @@ interface ClaudeAgentSdkOptions {
  * environment when it is, rather than merging, and inheriting is exactly how
  * this adapter reaches all three Claude wallets (key, Vertex, seat) without
  * knowing which one is configured.
+ *
+ * No output cap and no `maxBudgetUsd`: judgment output is left uncapped, and
+ * the attempt says so through unenforcedBudget(). Adding either here means
+ * the attempt must report it instead. The run-wide limit is the bridge's
+ * `hard_cost_cap_usd` check (runCostCap.ts).
  */
 export function agentSdkOptions(
   config: Pick<ModelConfig, "model_name" | "reasoning">,
@@ -197,7 +202,7 @@ export class ClaudeAgentSdkAdapter implements ModelAdapter {
 
     const attempt: AttemptRecord = {
       attempt_number: 1,
-      ceiling_used: packet.budget.maxOutputTokens,
+      ...unenforcedBudget(packet),
       stop_reason: stopReason,
       hit_output_cap: hitOutputCap,
       tokens: attemptTokens,
@@ -303,7 +308,7 @@ export class ClaudeAgentSdkAdapter implements ModelAdapter {
   ): ExecutionResult {
     const attempt: AttemptRecord = {
       attempt_number: 1,
-      ceiling_used: packet.budget.maxOutputTokens,
+      ...unenforcedBudget(packet),
       hit_output_cap: false,
       tokens,
       cost_usd: 0,
