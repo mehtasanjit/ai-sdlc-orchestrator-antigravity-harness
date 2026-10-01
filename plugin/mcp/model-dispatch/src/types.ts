@@ -185,6 +185,8 @@ export interface TelemetryEvent {
   retry_reason?: "output_cap" | "validation" | "escalation";
   artifact_path?: string;
   error?: string;
+  /** Copied from the attempt (Gemini completion only); see AttemptRecord.thinking_level. */
+  thinking_level?: string | null;
 }
 
 /** One attempt from the output-cap doubling loop. */
@@ -249,6 +251,13 @@ export interface AttemptRecord {
   ttl_split?: TtlSplit;
   /** claude-cli only: the per-model ledger behind `cost_usd`. */
   per_model?: WorkerModelCost[];
+  /**
+   * Gemini completion only: the `thinkingConfig.thinkingLevel` the request
+   * carried, or `null` when it carried none and the model's default level
+   * applied. Absent on an attempt refused before any request, and on other
+   * adapters.
+   */
+  thinking_level?: string | null;
 }
 
 export type PriceBasis = "list" | "custom";
@@ -346,7 +355,10 @@ export interface ModelConfig {
   auth?: { env: string };
   endpoint?: string;
   reasoning?: ReasoningConfig;
-  /** Vendor's absolute output-tokens limit; doubling loop clamps here. */
+  /**
+   * The policy's output ceiling for this model; the doubling loop clamps here.
+   * A configured cap, not checked against the vendor's own limit.
+   */
   max_output_tokens_absolute?: number;
   /**
    * Vertex region for this leaf. Unset → follows GOOGLE_CLOUD_LOCATION, else
@@ -441,8 +453,9 @@ export interface ExecutionResult {
   attempts?: AttemptRecord[];
   /**
    * Why the doubling loop stopped. `_budget_exhausted` means "retries used but
-   * model still had headroom" (raise the cap); `_at_model_absolute` means "hit
-   * the vendor's ceiling" (packet too big).
+   * model still had headroom" (raise the cap); `_at_model_absolute` means the
+   * ceiling reached the model entry's `max_output_tokens_absolute`, the
+   * policy's configured cap, and the model still stopped at `MAX_TOKENS`.
    */
   terminal_reason?:
     | "success"

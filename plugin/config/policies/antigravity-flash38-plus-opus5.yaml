@@ -65,6 +65,10 @@ models:
     pricing_source: https://ai.google.dev/gemini-api/docs/pricing (AI Studio + Vertex global); https://cloud.google.com/vertex-ai/generative-ai/pricing (regional +10%)
     pricing_last_verified: 2026-09-14
     auth: { env: GEMINI_API_KEY }
+    # Sent as thinkingConfig.thinkingLevel LOW. Thinking counts against the
+    # output ceiling below and bills at the output rate; each attempt records
+    # the level and its thinking tokens.
+    reasoning: { tier: low }
     max_output_tokens_absolute: 8192
 
   # The SAME model reached as an AGENT (Antigravity SDK session). Vertex ADC
