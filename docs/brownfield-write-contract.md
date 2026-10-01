@@ -45,19 +45,33 @@ stream-json output does not carry it.
 Behavior:
 
 1. On every file-writing tool call, agy invokes the hook.
-2. The hook reads `.sdlc/local/write-contract.json` from an ancestor of the current directory.
-3. If the file is missing or `active:false` → allow (greenfield mode or no active run — the
+2. The hook scans the content the call would write for a credential literal — deny if hit (see
+   [Credential literals](#credential-literals)). This step needs no contract.
+3. The hook reads `.sdlc/local/write-contract.json` from an ancestor of the current directory.
+4. If the file is missing or `active:false` → allow (greenfield mode or no active run — the
    hook silently no-ops so `/mmo:greenfield` in an empty folder is unaffected).
-4. If active:
+5. If active:
    - Check the target path against `off_limits` patterns — deny with reason if hit.
    - Check against `allowlist` patterns — allow if hit.
    - Otherwise (not in allowlist, not off-limits) — deny.
-5. `contract.strict = false` (equivalent to `--strict-write=off`) downgrades every enforcement
-   to a warning; the file is written but a warning is logged.
+6. `contract.strict = false` (equivalent to `--strict-write=off`) downgrades every path
+   enforcement to a warning; the file is written but a warning is logged. It does not lift step 2.
 
 Fail-safe: any bug in the hook (parse failures, missing fields, resolvable path issues) → allow.
-Better to permit a write than to wedge user work on a plugin bug. Denials only happen when the
-contract parses cleanly AND is active AND the path fails the check.
+Better to permit a write than to wedge user work on a plugin bug. Path denials only happen when
+the contract parses cleanly AND is active AND the path fails the check.
+
+### Credential literals
+
+The hook runs the secret patterns in
+[`plugin/scripts/dispatch-sanitize.mjs`](../plugin/scripts/dispatch-sanitize.mjs) over every
+string argument of a file-writing call and over the whole `run_command` command line, so
+`echo GEMINI_API_KEY=AIza… > x.cjs` and `export GEMINI_API_KEY=AIza…` are both refused. The
+reason names the pattern and the target file, never the value. Text a replace expects to find on
+disk (`TargetContent`) is not scanned, so an edit that removes a committed key goes through. The
+`KEY=value` assignment pattern is left out because it also matches `process.env.GEMINI_API_KEY`
+and `$GEMINI_API_KEY`, the form you want. Headless runs are not covered: `agy -p` loads no hooks
+([check 1](verification/p1-agy-runtime.md)).
 
 ## Off-limits, two tiers
 
