@@ -21,11 +21,12 @@
  *                     [--project-root=<path>] --out=<result.json>
  */
 
-import { readFileSync, writeFileSync, mkdirSync, realpathSync } from "node:fs";
+import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { readMmoSelectFile } from "./mmoSelect.mjs";
+import { isMain } from "../scripts/lib/is-main.mjs";
 
 const BRIDGE_CLIENT = resolve(
   dirname(fileURLToPath(import.meta.url)),
@@ -238,7 +239,7 @@ export async function runDispatch(args, { connect, env = process.env } = {}) {
 }
 
 // Direct-execution gate so the test suite can import the pure helpers.
-if (process.argv[1] && (fileURLToPath(import.meta.url) === process.argv[1] || fileURLToPath(import.meta.url) === realpathSync(process.argv[1]))) {
+if (isMain(import.meta.url)) {
   const args = parseArgs(process.argv.slice(2));
   const { connectBridge } = await import(BRIDGE_CLIENT);
   try {

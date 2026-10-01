@@ -23,6 +23,7 @@ import { existsSync, readFileSync, statSync } from "node:fs";
 import { resolve, relative, sep, dirname, isAbsolute, join, basename } from "node:path";
 import { HARDCODED_OFF_LIMITS } from "../../scripts/lib/off-limits.mjs";
 import { log } from "../../scripts/lib/log.mjs";
+import { isMain } from "../../scripts/lib/is-main.mjs";
 
 const CONTRACT_REL_PATH = ".sdlc/local/write-contract.json";
 const GUARD_DECISIONS_REL_PATH = ".sdlc/local/guard-decisions.jsonl";
@@ -394,7 +395,7 @@ async function checkOneTarget(target, call) {
   };
 }
 
-if (process.argv[1] && new URL(import.meta.url).pathname === process.argv[1]) {
+if (isMain(import.meta.url)) {
   main().catch(async (e) => {
     if (process.env.MMO_DEBUG === "1") console.error(`[mmo-brownfield write-contract] unhandled: ${e?.message ?? e}`);
     reply("allow");

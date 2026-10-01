@@ -23,6 +23,7 @@
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { isMain } from "./lib/is-main.mjs";
 
 export const INTENTS_PATH = join(dirname(fileURLToPath(import.meta.url)), "..", "config", "intents.json");
 
@@ -82,6 +83,6 @@ function main(argv) {
   return 2;
 }
 
-if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
+if (isMain(import.meta.url)) {
   process.exit(main(process.argv.slice(2)));
 }

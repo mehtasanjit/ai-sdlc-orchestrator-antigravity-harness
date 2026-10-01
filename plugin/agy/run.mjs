@@ -41,6 +41,7 @@ import { assertPinnedInvocation, driverSlug, findPinRejection, pendingPinChecks,
 import { defaultRunRoot, materialiseRunRoot, removeRunRoot } from "./runRoot.mjs";
 import { buildHarnessManifest, agyVersion } from "./manifest.mjs";
 import { inferIntent } from "../scripts/infer-intent.mjs";
+import { isMain } from "../scripts/lib/is-main.mjs";
 
 const AGY_DIR = dirname(fileURLToPath(import.meta.url));
 export const PLUGIN_ROOT = dirname(AGY_DIR);
@@ -511,7 +512,7 @@ async function main(args) {
   }
 }
 
-if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
+if (isMain(import.meta.url)) {
   try {
     process.exit(await main(parseArgs(process.argv.slice(2))));
   } catch (err) {

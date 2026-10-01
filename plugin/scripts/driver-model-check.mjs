@@ -57,6 +57,7 @@
 import { readFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { isMain } from "./lib/is-main.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const DIST = join(HERE, "..", "mcp", "model-dispatch", "dist");
@@ -318,9 +319,7 @@ export async function main(argv = process.argv.slice(2)) {
   return 1;
 }
 
-const invokedDirectly =
-  process.argv[1] && pathToFileURL(resolve(process.argv[1])).href === import.meta.url;
-if (invokedDirectly) {
+if (isMain(import.meta.url)) {
   main().then(
     (code) => process.exit(code),
     (err) => {
