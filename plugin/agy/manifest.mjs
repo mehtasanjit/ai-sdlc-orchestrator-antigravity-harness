@@ -31,6 +31,7 @@ import { resolveGeminiBackend } from "../mcp/model-dispatch/dist/adapters/gemini
 import { readPin, driverSlug, pendingPinChecks } from "./telemetry/fairnessPin.mjs";
 import { driverRange, driverRangeNote } from "./telemetry/driverRange.mjs";
 import { isMain } from "../scripts/lib/is-main.mjs";
+import { conductorWork } from "./telemetry/conductorWork.mjs";
 
 export const HARNESS_NAME = "antigravity";
 export const RUNTIME_NAME = "antigravity-cli";
@@ -322,6 +323,7 @@ export function buildHarnessManifest({ runDir, policyName, runId, env = process.
     completed: driverManifest?.completed ?? null,
     gates: driverManifest?.gates ?? null,
     pin_rejection: driverManifest?.pin_rejection ?? null,
+    ...conductorWork({ runDir, telemetry: dispatched, mode: driverManifest?.mode, completed: driverManifest?.completed }),
     written_by: "plugin/agy/manifest.mjs",
     written_at: now(),
   };

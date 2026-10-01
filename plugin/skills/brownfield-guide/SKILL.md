@@ -116,6 +116,23 @@ read order) and writes:
 Wait for discovery to finish. If it refuses (non-git repo), stop here — the shepherd already
 printed the git-init guidance.
 
+Then record it. Discovery is your own read — never dispatch it as a packet; the policy has no
+rule for it — so it leaves no telemetry row unless you write one. Log a zero-cost `in_session`
+row in the run's telemetry, once per run, whether the read happened here or in step 2's smoke:
+
+```bash
+node "${MMO_PLUGIN_ROOT}/agy/dispatch.mjs" \
+  --log-phase=discovery --task-type=in_session \
+  --module=repo --reason='conductor-local Tier 1 read of the repo; no dispatch' \
+  --policy=<default_policy from .sdlc/project.json> \
+  --telemetry=".sdlc/runs/<run-id>/telemetry.jsonl" \
+  --out=".sdlc/runs/<run-id>/discovery-in_session-receipt.json"
+```
+
+In an interactive session with the bridge connected, `log_telemetry` writes the same row (see the
+telemetry contract in `pipeline/SKILL.md`). Without it, the run's manifest lists `discovery`
+under `harness.unrecorded_phases`.
+
 # 4. Intent brief — pick the intent and describe the job
 
 Two things to collect from the user. Both go into `.sdlc/runs/<run-id>/intent_brief.md`.
