@@ -312,21 +312,34 @@ Phase 6.
 
 ### Phase 9 — generate_final_report
 
-Write `<output_dir>/SUMMARY.md`: total dispatched cost, the per-phase and per-model breakdown read
-from `<output_dir>/telemetry.jsonl`, and links to the key artifacts. Quote every figure from the
-telemetry rows; never compute one from memory.
+**`manifest.json` is written by code, never by you, and it comes first.** `SUMMARY.md` copies its
+cost lines; it never computes them.
 
-**`manifest.json` is written by code, never by you.** Headless, `run.mjs` builds it from
-`telemetry.jsonl` and the driver's own modeled events after you finish. Interactive, run it
-yourself as the last step and report what it printed:
+1. **Interactive: run the manifest before you write `SUMMARY.md`.**
 
-```
-node "${MMO_PLUGIN_ROOT}/agy/manifest.mjs" "<output_dir>" --policy=<policy> --run-id=<run_id>
-```
+   ```
+   node "${MMO_PLUGIN_ROOT}/agy/manifest.mjs" "<output_dir>" --policy=<policy> --run-id=<run_id>
+   ```
 
-It stamps `harness: antigravity`, the driver pin, `auth_mode`, and the three cost lines — dispatched
-cash, Opus wallet, driver modeled — each labeled. Your own loop cost is among them and is recorded
-for you (see the telemetry contract below); do not try to account for it yourself.
+   It writes `manifest.json` and prints one labelled line per wallet, for example
+   `gemini workers cash $0.59569 · claude worker modeled $5.600058 · driver NOT MEASURED`.
+   `cash` is dollars a vendor invoices. `modeled` is tokens priced at a card with no invoice behind
+   it (Opus on a claude.ai seat, the conductor on a Google seat). `NOT MEASURED` is a cost nothing
+   recorded. **Headless: do not run it.** `run.mjs` builds `manifest.json` after you exit, once it
+   has priced your own loop from the agy stream.
+2. **Write `<output_dir>/SUMMARY.md`:**
+   - **Cost.** Interactive: one bullet per line `manifest.mjs` printed, copied with its kind and
+     figure exactly as printed. Headless: one sentence saying the labelled cost lines are in
+     `manifest.json` → `cost.lines`, written by the launcher after this session. Never compute a
+     total, never add a `modeled` figure to a `cash` one, and never put a figure on a
+     `NOT MEASURED` line. They are different kinds of dollars; their sum is neither the bill nor
+     the usage.
+   - **Per phase.** The model each phase ran on, read from `<output_dir>/telemetry.jsonl`. No
+     dollar figures here: one phase can mix a cash worker and a modeled one.
+   - Links to the key artifacts.
+
+Your own loop cost is not yours to compute. Headless runs get a modeled driver line from the
+launcher; interactive runs carry the driver as `NOT MEASURED` (see the telemetry contract below).
 
 ---
 
@@ -470,7 +483,8 @@ explicitly.
 ### Gate 4
 > ⏸ **HITL Gate 4 — Final Acceptance**
 > The full SDLC pass is complete.
-> Total cost: $X.XX  ·  Files: N  ·  Tests: passing/total
+> Cost so far: Gemini workers cash $X.XX · Claude worker <cash or modeled> $Y.YY · driver <modeled $Z.ZZ or NOT MEASURED> — separate lines, never added together
+> Files: N  ·  Tests: passing/total
 > Reply `accept` to finalize the manifest, or `reject: <comments>` to revise.
 
 ---
@@ -513,13 +527,14 @@ Event shape:
 }
 ```
 
-**Your own loop cost is recorded for you.** The launcher reads the `agy --print --output-format
-stream-json` event stream after the run and derives the conductor's token usage from its `usage`
-counters, writing those events to `driver-cost-modeled.jsonl` with `provenance: "modeled"` —
-modeled from token counts at the policy's driver card, because a Google-seat driver has no
-per-token invoice (p1-agy-runtime.md check 9). An interactive session has no such stream; its
-manifest carries the driver line as `unmeasured`. Never invent token counts or cost for your own work: a guessed figure
-sitting beside measured ones is worse than no figure.
+**Your own loop cost is not yours to record.** Headless, the launcher reads the `agy --print
+--output-format stream-json` event stream after the run and derives the conductor's token usage
+from its `usage` counters, writing those events to `driver-cost-modeled.jsonl` with
+`provenance: "modeled"` — modeled from token counts at the policy's driver card, because a
+Google-seat driver has no per-token invoice (p1-agy-runtime.md check 9). Interactive, there is no
+such stream and nothing records your loop: the manifest carries the driver line as `NOT MEASURED`
+(`kind: "unmeasured"`), unmeasured and never free. Never invent token counts or cost for your own
+work: a guessed figure sitting beside measured ones is worse than no figure.
 
 **But a phase that made no model call must still leave a row.** Two cases produce one:
 

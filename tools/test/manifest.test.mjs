@@ -11,7 +11,7 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { buildHarnessManifest, costLines, claudeWallet, geminiDoor, workerLineOf, HARNESS_NAME, RUNTIME_NAME } from "../../plugin/agy/manifest.mjs";
+import { buildHarnessManifest, costLines, claudeWallet, describeCostLines, geminiDoor, workerLineOf, HARNESS_NAME, RUNTIME_NAME } from "../../plugin/agy/manifest.mjs";
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const POLICY = "antigravity-flash38-plus-opus5";
@@ -324,7 +324,43 @@ test("the CLI writes manifest.json into the run directory", () => {
     assert.ok(existsSync(join(dir, "manifest.json")));
     const m = JSON.parse(readFileSync(join(dir, "manifest.json"), "utf8"));
     assert.equal(m.harness.runtime.name, RUNTIME_NAME);
-    assert.match(r.stdout, /driver modeled \$0\.001418/);
+    assert.match(r.stdout, /— gemini workers cash \$0\.003125 · claude worker (cash|modeled) \$0\.05 · driver modeled \$0\.001418$/m, "each line with its kind, workers first");
+    assert.doesNotMatch(r.stdout, /dispatched cash/, "no figure that would read as the run's total");
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test("the CLI prints driver NOT MEASURED for an interactive run, never a modeled $0", () => {
+  const dir = runDir();
+  try {
+    rmSync(join(dir, "driver-manifest.json"));
+    rmSync(join(dir, "driver-cost-modeled.jsonl"));
+    const r = spawnSync(process.execPath, [join(ROOT, "plugin", "agy", "manifest.mjs"), dir, "--agy-version=1.2.3"], { encoding: "utf8" });
+    assert.equal(r.status, 0, r.stderr);
+    assert.match(r.stdout, /· driver NOT MEASURED$/m);
+    assert.doesNotMatch(r.stdout, /driver modeled/);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test("describeCostLines names each line's kind, puts the driver last and adds nothing up", () => {
+  const lines = [
+    { line: "driver", kind: "modeled", cost_usd: 0.004658, cost_usd_low: 0.003241 },
+    { line: "gemini_workers", kind: "cash", cost_usd: 0.6 },
+    { line: "claude_worker", kind: "modeled", cost_usd: 5.6 },
+    { line: "unclassified", kind: "cash", cost_usd: 0.1 },
+  ];
+  assert.equal(describeCostLines(lines), "gemini workers cash $0.6 · claude worker modeled $5.6 · unclassified cash $0.1 · driver modeled $0.004658 (range $0.003241–$0.004658)");
+  assert.equal(describeCostLines([{ line: "driver", kind: "unmeasured", cost_usd: 0 }]), "driver NOT MEASURED");
+});
+
+test("an injected wallet decides the Claude line's kind over the environment", () => {
+  const seat = claudeWallet({}, { loggedIn: true, method: "claude.ai", subscription: "max" });
+  const lines = costLines({ dispatched: [ev({ model: "claude-opus-5", cost_usd: 1 })], modeled: [], policy: null, pin: null, env: { ANTHROPIC_API_KEY: "k" }, wallet: seat });
+  assert.equal(lines.find((l) => l.line === "claude_worker").kind, "modeled");
+  const dir = runDir();
+  try {
+    const m = buildHarnessManifest({ runDir: dir, env: { ANTHROPIC_API_KEY: "k" }, wallet: seat });
+    assert.equal(m.harness.arm, "seat");
+    assert.equal(m.cost.claude_seat_modeled_usd, 0.05);
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
@@ -333,7 +369,8 @@ test("tools/report.mjs reads the same run directory and keeps the modeled line a
   try {
     const r = spawnSync(process.execPath, [join(ROOT, "tools", "report.mjs"), dir], { encoding: "utf8" });
     assert.equal(r.status, 0, r.stderr);
-    assert.match(r.stdout, /modeled/i);
+    assert.match(r.stdout, /driver\s+modeled\s+1\s+.*\$0\.0014/);
+    assert.match(r.stdout, /Modeled cost\s+\$0\.0014/);
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 

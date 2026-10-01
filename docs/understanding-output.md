@@ -13,7 +13,7 @@ Around them:
 - `driver-manifest.json`, `driver-events.jsonl`, `driver-stderr.log` — the launcher's own record of a headless run: the pin it asserted, agy's exit status, every raw stream-json event, agy's stderr (where soft-denials and hook notices land).
 - `policy_snapshot.yaml`, `preflight.json`, `gates.jsonl` — the policy as it was at launch; Rule 0's pricing verdict; one line per gate with the decision and its mode.
 - `skills/pipeline.md`, `skills/brownfield-guide.md` — the playbook the conductor was given, with real paths rendered in. What the model read, exactly.
-- `SUMMARY.md` — the conductor's completion signal and its own summary. Every figure in it is quoted from `telemetry.jsonl`; it is not the record.
+- `SUMMARY.md` — the conductor's completion signal and its own summary. Its cost section copies the labelled lines `manifest.mjs` printed (interactive) or points at `manifest.json` (headless); it never adds them up, and it is not the record.
 - Generated source under `src/` (greenfield) or the files named at Gate 0 (brownfield).
 
 Brownfield runs add, under `.sdlc/runs/<run-id>/`:
@@ -24,7 +24,7 @@ Brownfield runs add, under `.sdlc/runs/<run-id>/`:
 
 A `delegation/` directory appears only on runs that chose the Antigravity SDK agent path — three files per delegated packet (brief, worker usage sidecar, receipt). See [the delegation directory](#the-delegation-directory).
 
-The report emitted by `node tools/report.mjs <run-dir>` is a rendered view of these files. `--markdown` renders it as tables for pasting into an issue.
+The report emitted by `node tools/report.mjs <run-dir>` is a rendered view of these files. It computes its cost lines with `buildHarnessManifest` from [plugin/agy/manifest.mjs](../plugin/agy/manifest.mjs), the code that writes `manifest.json`, so the two never book a dollar differently; that code needs the bridge built (`npm run build`). `--markdown` renders it as tables for pasting into an issue.
 
 ## The report, section by section
 
@@ -32,28 +32,42 @@ The report emitted by `node tools/report.mjs <run-dir>` is a rendered view of th
 
 Identifies the run: id, policy, the driver pin (`gemini-3.8-flash`, effort `high`), start timestamp and duration. A run invoked with `--run-id=foo` shows `foo` here.
 
-### Dispatched work — vendor-metered
+### Cost lines — never summed
 
-One row per SDLC phase. Columns:
+One row per line of `manifest.json` → `cost.lines`, workers first:
+
+| Line | Kind | Covers |
+|---|---|---|
+| `gemini workers` | `cash` | Bridge dispatches to Gemini, the mechanical phases |
+| `claude worker` | `cash` on arm A or B, `modeled` on the claude.ai seat | Bridge dispatches to Opus 5, the judgment phases |
+| `unclassified` | `cash` | Present only when an event names no known worker adapter and no `claude-` or `gemini-` model |
+| `driver` | `modeled` on a headless run, `NOT MEASURED` on an interactive one | The conductor's own loop |
+
+**Cash** under the table is the manifest's `cost.dispatched_cash_usd`: the cash lines and nothing else. A modeled dollar never joins it, and the report prints no figure that adds the kinds together.
+
+The notes under the table name the Claude wallet that decided the Claude line's kind, and where it came from. A code-written `manifest.json` in the run directory records the wallet the run ended on, and the report uses it over the shell it runs in; without one, the report reads the shell's environment and `claude auth status`, as `manifest.mjs` does. The notes also count any `tier: "orchestrator"` line in `telemetry.jsonl`, which is left out of every figure as the manifest leaves it out. When `manifest.json` books the lines differently from what the telemetry gives now, the report says so and prints the `manifest.mjs` command that rebuilds it.
+
+### Dispatched work — by phase
+
+One named row per phase that logged an event. Known phases come in state-machine order — discovery, requirements, design, change plan, planning, codegen, tests, flow tests, docs, debug, refactor, test run, senior review, security review — and any other phase follows in the order it first appears. Columns:
 
 - **Prov** — the provenance of the row's figures. `V` vendor-metered, `E` estimated (never on this runtime), `M` modeled, `–` no model call (a phase the conductor completed in-session or skipped, logged for completeness at zero cost), `~` mixed within the phase, `?` unlabelled.
 - **Calls** — how many bridge dispatches occurred in that phase.
 - **Tokens (in / out)** — summed input and output tokens across those calls.
-- **Cost** — sum of the per-call `cost_usd` values.
+- **Cash** — the phase's dollars on cash lines.
+- **Modeled** — present only when a worker line is modeled (the claude.ai seat): the phase's dollars on that line. One phase can hold both, for example codegen with Gemini packets and an Opus escalation.
 
-The row order follows the state machine — requirements first, then design, planning, codegen, tests, docs, senior review, security review. **SDLC total** is the sum of the productive phases; **Runner overhead** (when present) is dispatched work that is not SDLC-productive — preflight, retries, shell-adjacent packets; **Vendor-metered total** is both. Every dollar in this section came through the bridge and carries a vendor-reported token count.
-
-On the Claude seat (Claude Code signed in to claude.ai, no key exported) the Opus rows are still vendor-metered *tokens*, but the dollars are modeled — no invoice exists. The manifest's `cost` block moves that line out of `dispatched_cash_usd` (see [`manifest.json`](#manifestjson)); the report's table does not, so read the manifest's `harness.arm` before quoting the total as spend.
+**All phases** sums each column on its own. The tokens in every row are vendor-metered; the kind of the dollars depends on the wallet.
 
 ### Driver loop — modeled, not measured
 
-Its own section, deliberately. Turns, tokens and the modeled cost of the conductor's own loop — reasoning, file reads, the growing conversation — derived from agy's `usage` counters at the driver card. The text under the table repeats the point every time: this is not an amount anyone was billed, and it is kept out of the vendor total. Two figures that are different kinds of dollars are never summed. Full method in [methodology.md](methodology.md#three-cost-lines).
+Its own section, deliberately. Turns, tokens and the modeled cost of the conductor's own loop — reasoning, file reads, the growing conversation — derived from agy's `usage` counters at the driver card. The text under the table repeats the point every time: this is not an amount anyone was billed, and it is kept out of the cash figure. Full method in [methodology.md](methodology.md#three-cost-lines).
 
-On an interactive run the plugin sees no `usage` counters, so the section reads _No driver turns recorded._ instead of printing zeroes.
+On an interactive run there is no `driver-manifest.json` and the plugin sees no `usage` counters, so the section reads **NOT MEASURED**: the conductor's tokens are in no figure, which is not the same as free. _No driver turns recorded._ appears only on a headless run whose launcher record exists but whose agy invocations reported no usage.
 
 ### Packets that hit the output cap
 
-Printed only when a packet was retried after hitting its `max_output_tokens` ceiling. One row per such packet: attempts, the ceiling on the final attempt, and the cost across every attempt. Absent otherwise.
+Printed only when a packet was retried after hitting its `max_output_tokens` ceiling. One row per such packet: attempts, the ceiling on the final attempt, and its cash and modeled dollars across every attempt, kept apart. Absent otherwise.
 
 ### Delegated to an agent worker
 
@@ -189,7 +203,7 @@ The dispatched rollup, then three blocks this harness adds.
 | `dispatched_cash_usd` | Bridge dispatches that a vendor invoiced. On arm A or B this equals `total_cost_usd`. Opus calls on the seat are subtracted out, because they were not invoiced either |
 | `driver_modeled_usd` | The conductor's loop at the driver card |
 | `claude_seat_modeled_usd` | Present only when Opus calls ran on the seat: those calls, priced at the Anthropic card, no invoice |
-| `lines[]` | Three entries — `driver`, `gemini_workers`, `claude_worker` — each with `kind` (`cash`, `modeled`, or `mixed` on a Claude line partly on the seat), the wallet, models, tokens, `cost_usd`, and on the modeled and mixed ones a `basis` sentence. A fourth, `unclassified`, appears only when an event names no known worker adapter and no `claude-` or `gemini-` model; its dollars stay off both worker lines |
+| `lines[]` | Three entries — `driver`, `gemini_workers`, `claude_worker` — each with `kind` (`cash`, `modeled`, `mixed` on a Claude line partly on the seat, or `unmeasured` for an interactive run's driver), the wallet, models, tokens, `cost_usd`, and on the modeled and mixed ones a `basis` sentence. A fourth, `unclassified`, appears only when an event names no known worker adapter and no `claude-` or `gemini-` model; its dollars stay off both worker lines |
 | `note` | The rule, restated in the file itself: the cash figure and the modeled figures are different kinds of dollars and are not summed |
 
 The two worker lines take their wallet from each event's `wallet` stamp:
