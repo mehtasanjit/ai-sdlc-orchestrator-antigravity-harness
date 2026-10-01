@@ -493,7 +493,7 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
             error: result.error,
           },
         ];
-        const modelName = getModel(policy, decision.modelId).model_name;
+        const { model_name: modelName, adapter: adapterId } = getModel(policy, decision.modelId);
         const baseEvent = {
           ts: new Date().toISOString(),
           pass: packet.pass_id,
@@ -514,6 +514,7 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
           // Leaf id; the only field that distinguishes two leaves that share
           // a vendor model name (e.g. flash-completion vs flash-agsdk-worker).
           model_id: decision.modelId,
+          adapter: adapterId,
           routing: {
             policy_name: policy.name,
             policy_version: policy.version,

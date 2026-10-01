@@ -79,6 +79,13 @@ export interface TelemetryEvent {
    * because events written before this field existed lack it.
    */
   model_id?: string;
+  /**
+   * The policy `adapter:` that ran the call (e.g. `claude-agent-sdk`,
+   * `mcp:model-dispatch`). The manifest books each event to a cost line from
+   * this, so a run directory with no policy snapshot still splits Claude from
+   * Gemini. Optional because events written before this field existed lack it.
+   */
+  adapter?: string;
   routed_by: "orchestrator" | "fallback" | "manual";
   /**
    * Where this event's numbers came from. `"vendor"` = measured by the
