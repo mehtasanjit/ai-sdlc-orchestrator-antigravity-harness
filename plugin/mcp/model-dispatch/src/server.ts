@@ -580,6 +580,7 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
           // and unlogged tokens stay in the true total (review finding M4).
           transcript_logged_cost_usd: att.transcript_logged_cost_usd,
           thinking_level: att.thinking_level,
+          wallet: att.wallet,
         }));
         if (a.telemetry_path) {
           for (const ev of events) appendEvent(a.telemetry_path, ev);

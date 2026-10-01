@@ -19,12 +19,13 @@
 
 import { execFileSync, spawn, type ChildProcess } from "node:child_process";
 
-import type { AttemptRecord, ExecutionResult, ModelConfig, TaskPacket } from "../types.js";
+import type { AttemptRecord, DispatchWallet, ExecutionResult, ModelConfig, TaskPacket } from "../types.js";
 import { estimateTokens } from "../pricing.js";
 import { log } from "../log.js";
 import { unenforcedBudget, type ModelAdapter } from "./ModelAdapter.js";
 import { splitStableFromDynamic } from "./BuiltinAnthropicAdapter.js";
 import { DispatchPricer, systemClock, unpricedRefusal, type Clock } from "./dispatchPricer.js";
+import { claudeDispatchWallet, reportedProviders } from "./dispatchWallet.js";
 import {
   claudeProjectsDir,
   findWorkerTranscripts,
@@ -47,6 +48,8 @@ interface ClaudeCliOptions {
   projectsDir?: string;
   /** Clock for the dispatch date the price is looked up on; tests pin it. */
   now?: Clock;
+  /** Read for the wallet stamp only; the spawned `claude` inherits process.env. Tests pin it. */
+  env?: Record<string, string | undefined>;
 }
 
 interface ClaudeCliResponse extends ClaudeCliResultLike {
@@ -87,6 +90,7 @@ export class ClaudeCliAdapter implements ModelAdapter {
   private readonly spawnFn: SpawnFn;
   private readonly timeoutMs: number;
   private readonly projectsDir: string;
+  private readonly env: Record<string, string | undefined>;
   private readonly pricer: DispatchPricer;
 
   /**
@@ -100,6 +104,7 @@ export class ClaudeCliAdapter implements ModelAdapter {
     this.spawnFn = options.spawnFn ?? spawn;
     this.timeoutMs = (options.timeoutSec ?? DEFAULT_TIMEOUT_SEC) * 1000;
     this.projectsDir = options.projectsDir ?? claudeProjectsDir();
+    this.env = options.env ?? process.env;
     this.pricer = new DispatchPricer(config, options.now ?? systemClock);
 
     const probe =
@@ -134,7 +139,7 @@ export class ClaudeCliAdapter implements ModelAdapter {
     const dispatchDate = this.pricer.now();
     const primary = this.pricer.price(dispatchDate);
     if (primary.unpriced) {
-      return this.failure(packet, { input: 0, input_cached: 0, output: 0 }, started, unpricedRefusal(this.modelConfig, dispatchDate, primary.reason));
+      return this.failure(packet, { input: 0, input_cached: 0, output: 0 }, started, unpricedRefusal(this.modelConfig, dispatchDate, primary.reason), claudeDispatchWallet(this.env));
     }
 
     const { stableBlock, userPrompt } = splitStableFromDynamic(packet, this.cachedSystem);
@@ -143,7 +148,7 @@ export class ClaudeCliAdapter implements ModelAdapter {
     const run = await this.runClaudeCli(prompt);
 
     if (!run.ok) {
-      return this.failure(packet, { input: estimateTokens(prompt), input_cached: 0, output: 0 }, started, run.error);
+      return this.failure(packet, { input: estimateTokens(prompt), input_cached: 0, output: 0 }, started, run.error, claudeDispatchWallet(this.env));
     }
 
     const response = run.response;
@@ -183,6 +188,7 @@ export class ClaudeCliAdapter implements ModelAdapter {
       ...(ledger.transcript_logged_cost_usd !== undefined ? { transcript_logged_cost_usd: ledger.transcript_logged_cost_usd } : {}),
       ttl_split: ledger.ttl_split,
       per_model: ledger.per_model,
+      wallet: claudeDispatchWallet(this.env, { providers: reportedProviders(response.modelUsage) }),
     };
 
     if (isError) {
@@ -264,6 +270,7 @@ export class ClaudeCliAdapter implements ModelAdapter {
     tokens: { input: number; input_cached: number; output: number },
     started: number,
     error: string,
+    wallet: DispatchWallet,
   ): ExecutionResult {
     const attempt: AttemptRecord = {
       attempt_number: 1,
@@ -274,6 +281,7 @@ export class ClaudeCliAdapter implements ModelAdapter {
       latency_ms: Date.now() - started,
       success: false,
       error,
+      wallet,
     };
     return {
       result: null,
