@@ -52,8 +52,8 @@ The Claude Code harness offers `--auth=vendor|estimated`, where estimated mode p
 
 - **Token counts pass through unchanged from the source.** A dispatched event's counts are exactly what the vendor's `usage` block returned. A driver line's counts are exactly what agy's `result.usage` reported, differenced per turn. Report totals are those per-event counts summed — nothing between measurement and display.
 - **Cost is computed and written at the moment of each call.** A dispatched event's `cost_usd` is (its tokens × the model's effective price on the dispatch day) / 1M, stamped into `telemetry.jsonl` at write time with `price_basis` (`list` or `custom`). A driver line's is (its tokens × the `driver.pricing` card) / 1M, stamped when `run.mjs` reads the stream.
-- **The manifest is written by code.** `plugin/agy/manifest.mjs` sums the two files, books each worker line's wallet from the bridge's per-event stamp, and writes the pin and the three lines. The conductor's `SUMMARY.md` quotes telemetry rows; it never computes a figure, and it is not the record.
-- **Telemetry covers dispatched work only.** The conductor's own loop is in `driver-cost-modeled.jsonl`, never in `telemetry.jsonl`; `buildManifest` partitions any `tier: "orchestrator"` line out of every dispatched sum if the two files are ever concatenated.
+- **The manifest is written by code.** `plugin/agy/manifest.mjs` sums the two files, books each worker line's wallet from the bridge's per-event stamp, and writes the pin and the three lines. `tools/report.mjs` renders the same lines from the same code. The conductor's `SUMMARY.md` copies the lines `manifest.mjs` printed, each with its kind; it never computes a figure, and it is not the record.
+- **Telemetry covers dispatched work only.** The conductor's own loop is in `driver-cost-modeled.jsonl`, never in `telemetry.jsonl`; `buildManifest` and the report partition any `tier: "orchestrator"` line out of every dispatched sum if the two files are ever concatenated.
 
 To verify any of these, walk the two JSONL files by hand — every line is inspectable.
 

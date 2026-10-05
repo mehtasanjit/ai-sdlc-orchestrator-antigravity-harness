@@ -1,5 +1,3 @@
-/** Kept free of the bridge's dist/ so tools/report.mjs runs without a build. */
-
 /**
  * The driver line's bounds while check 16 (usage across a resume) is pending,
  * and the invocations that reported no usage. Empty for a one-invocation run

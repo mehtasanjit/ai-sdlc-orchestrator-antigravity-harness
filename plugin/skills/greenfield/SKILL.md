@@ -230,7 +230,9 @@ on the user's behalf.
 
 When the run finishes, show:
 - tokens per phase, split into cached input, fresh input, and output
-- cost per phase and the run total
+- the cost section of `SUMMARY.md` exactly as Phase 9 wrote it: the manifest's labelled lines,
+  each with its kind (`cash`, `modeled` or `NOT MEASURED`). Never a run total and never a modeled
+  figure added to a cash one: they are different kinds of dollars
 - which model each phase ran on, so the routing is visible rather than asserted
 - where the generated code and the run record were written
 

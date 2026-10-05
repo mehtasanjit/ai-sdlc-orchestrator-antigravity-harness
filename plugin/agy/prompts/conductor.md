@@ -194,4 +194,6 @@ searched for and why. Hosted search in this runtime is invisible to the audit tr
 ## Cost
 
 Never invent model rates. Every cost figure in this run comes from the dispatch results and the
-policy's own pricing block. If you need to report cost, read it from the telemetry.
+policy's own pricing block. Never add cost figures up: the launcher writes the labelled cost
+lines (cash, modeled, and your own loop) into `manifest.json` after you finish, and a total you
+compute would mix cash with modeled dollars.

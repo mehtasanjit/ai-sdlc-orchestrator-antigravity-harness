@@ -269,10 +269,13 @@ not answer on their behalf.
 After the final report:
 
 1. Append a row to `.sdlc/ledger.md` (human-readable) and `.sdlc/ledger.json` (machine mirror).
+   Any cost in the row is the manifest's labelled lines, copied; never a single total.
 2. Update the project fingerprint record with a link to the ledger.
 3. Clear the write-contract state: set `.sdlc/local/write-contract.json` active:false.
-4. Print the report to the user with cost breakdown, files touched, and (if applicable) the
-   `git reset` command the report provides as the escape hatch.
+4. Print the report to the user: the cost section of `SUMMARY.md` exactly as Phase 9 wrote it
+   (the manifest's labelled lines, each with its kind — `cash`, `modeled` or `NOT MEASURED` —
+   never a total, never a modeled figure added to a cash one), files touched, and (if
+   applicable) the `git reset` command the report provides as the escape hatch.
 
 Do not propose a follow-up run.
 
