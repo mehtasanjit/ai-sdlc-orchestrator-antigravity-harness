@@ -13,6 +13,10 @@
  * is a live check, so every path-shaped argument is inspected and
  * `run_command` gets the shell-redirect heuristics.
  *
+ * Before any path check, the content a call would write is scanned for
+ * credential literals; a hit is denied with or without a contract, and
+ * regardless of `strict`.
+ *
  * Fail-open: any bug here must not block user work. Denials are recorded to
  * `.sdlc/local/guard-decisions.jsonl` because the stream-json output does not
  * show them.
@@ -22,8 +26,9 @@ import { readFile, appendFile, mkdir } from "node:fs/promises";
 import { existsSync, readFileSync, statSync } from "node:fs";
 import { resolve, relative, sep, dirname, isAbsolute, join, basename } from "node:path";
 import { HARDCODED_OFF_LIMITS } from "../../scripts/lib/off-limits.mjs";
-import { log } from "../../scripts/lib/log.mjs";
+import { log, redactText } from "../../scripts/lib/log.mjs";
 import { isMain } from "../../scripts/lib/is-main.mjs";
+import { scan } from "../../scripts/dispatch-sanitize.mjs";
 
 const CONTRACT_REL_PATH = ".sdlc/local/write-contract.json";
 const GUARD_DECISIONS_REL_PATH = ".sdlc/local/guard-decisions.jsonl";
@@ -199,6 +204,55 @@ export function extractTargets(call) {
   return extractPathArgs(args);
 }
 
+// ── credential literals in what a call would write ──────────────────────
+
+/**
+ * Keys holding text a replace expects to find already on disk. Scanning them
+ * would refuse the very edit that removes a committed key.
+ */
+export const EXISTING_TEXT_ARG_KEYS = new Set(["TargetContent", "target_content", "old_string"]);
+
+/**
+ * `KEY=value` with any value also matches `process.env.X`, `$X` and a config
+ * schema line like `DATABASE_URL: z.string()`, which written code must carry.
+ */
+const PROMPT_ONLY_PATTERNS = new Set(["sensitive-env-assignment"]);
+
+/**
+ * Every string argument except the text being replaced: which key carries
+ * the new content on `code_action` / `propose_code` / `file_change` /
+ * `write_blob` is unverified (check 13), so none is assumed.
+ */
+export function extractWrittenText(call) {
+  const name = call?.toolCall?.name ?? call?.tool_name;
+  const args = call?.toolCall?.args ?? call?.tool_input ?? {};
+  if (name === "run_command") {
+    const line = args.CommandLine ?? args.command;
+    return typeof line === "string" ? [line] : [];
+  }
+  if (READ_ONLY_TOOLS.has(name)) return [];
+  const out = [];
+  const walk = (v, depth) => {
+    if (depth > 8) return;
+    if (typeof v === "string") out.push(v);
+    else if (Array.isArray(v)) for (const item of v) walk(item, depth + 1);
+    else if (v && typeof v === "object") {
+      for (const [k, item] of Object.entries(v)) if (!EXISTING_TEXT_ARG_KEYS.has(k)) walk(item, depth + 1);
+    }
+  };
+  walk(args, 0);
+  return out;
+}
+
+/** The first credential finding as `{ name, kind }` — never the matched text. */
+export function findCredentialLiteral(call) {
+  for (const text of extractWrittenText(call)) {
+    const hit = scan(text).find((f) => !PROMPT_ONLY_PATTERNS.has(f.name));
+    if (hit) return { name: hit.name, kind: hit.kind };
+  }
+  return null;
+}
+
 function callCwd(call) {
   const ws = Array.isArray(call?.workspacePaths) ? call.workspacePaths[0] : undefined;
   if (typeof ws === "string" && ws) return ws;
@@ -208,9 +262,9 @@ function callCwd(call) {
 
 // ── D3: guard-decisions sidecar — the only record a denial leaves ──
 
-async function recordDecision(contractPath, decision) {
+async function recordDecision(contractPath, decision, fallbackRoot) {
   try {
-    const repoRoot = contractPath ? resolve(contractPath, "..", "..", "..") : process.cwd();
+    const repoRoot = contractPath ? resolve(contractPath, "..", "..", "..") : (fallbackRoot ?? process.cwd());
     const sidecarPath = join(repoRoot, GUARD_DECISIONS_REL_PATH);
     await mkdir(dirname(sidecarPath), { recursive: true });
     await appendFile(sidecarPath, JSON.stringify({ ts: new Date().toISOString(), ...decision }) + "\n");
@@ -251,7 +305,7 @@ async function deny(msg, ctx = {}) {
     run_id: ctx.runId,
     matched_rule: ctx.matchedRule,
     tool_name: ctx.toolName,
-  });
+  }, ctx.recordRoot);
   reply("deny", msg);
   process.exit(0);
 }
@@ -260,10 +314,33 @@ async function main() {
   const call = await readStdinJson();
   if (!call || typeof call !== "object") return allow("no parseable tool call on stdin");
 
+  const toolName = call?.toolCall?.name ?? call?.tool_name;
   const targets = extractTargets(call);
+
+  const credential = findCredentialLiteral(call);
+  if (credential) {
+    const cwd = callCwd(call);
+    const contractPath = findContractPath(cwd);
+    // A path argument could itself hold the secret; the reason must never echo it.
+    const path = targets.length ? redactText(targets.join(", ")) : undefined;
+    const where = path ?? (toolName === "run_command" ? "its command line" : "its target");
+    return deny(
+      `${toolName ?? "this tool call"} would write a ${credential.name} credential literal (${credential.kind}) into ${where}. ` +
+        `A key is never written into a file or a command line: read it from the environment the session ` +
+        `was launched with (process.env.GEMINI_API_KEY, $GEMINI_API_KEY) and re-issue the call without the value.`,
+      {
+        contractPath,
+        recordRoot: cwd,
+        path,
+        matchedRule: credential.name,
+        runId: contractPath ? readContractSafe(contractPath)?.run_id : undefined,
+        toolName,
+      },
+    );
+  }
+
   if (targets.length === 0) return allow("no write target extracted from this tool call");
 
-  const toolName = call?.toolCall?.name ?? call?.tool_name;
   for (const target of targets) {
     const verdict = await checkOneTarget(target, call);
     if (verdict.deny) return deny(verdict.msg, { ...verdict.ctx, toolName });
