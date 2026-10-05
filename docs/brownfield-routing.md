@@ -12,7 +12,8 @@ brownfield:
 
 | Kind of work | Tier | Model in the default `antigravity-flash38-plus-opus5` policy |
 |---|---|---|
-| **Judgment** — discovery, requirements, architecture / change_plan, packet planning, senior code review, security review | premium | Claude Opus 5, effort high, through the bridge |
+| **Judgment** — requirements, architecture / change_plan, packet planning, senior code review, security review | premium | Claude Opus 5, effort high, through the bridge |
+| **Discovery** — the Tier 1 read of your repo before Gate 0 | driver | The conductor's own local read, never dispatched. The policy has no `discovery` rule; the conductor logs a zero-cost `in_session` row for it |
 | **Mechanical** — codegen packets, doc packets, test-code packets, debug packets | mechanical | Gemini Flash |
 | **Escalation** — after 2 mechanical retries fail on a packet | premium | Claude Opus 5 (auto) |
 | **Test execution** — running your test command | local | Bash on your machine, no model call |
@@ -42,7 +43,7 @@ Two shipped policies represent the two ends of the trade-off:
 
 ~10× reduction on the same output because 60-80% of a full run is mechanical work that fits
 what Flash is good at (pattern-matching, in-context generation, filling schema-driven
-templates). Judgment work (understanding the repo, decomposing into packets, reviewing the
+templates). Judgment work (designing the change, decomposing it into packets, reviewing the
 output) stays on premium because that's where quality matters most.
 
 Every dispatch's actual cost lands in `.sdlc/runs/<id>/telemetry.jsonl`. Rates come from the dated
@@ -131,6 +132,6 @@ If a real run cost significantly more than expected, `final_report.md` is the fi
 look. For each phase's dollars split into cash and modeled, run
 `node tools/report.mjs <project>/.sdlc/runs/<run-id>` from the harness clone, where `<project>`
 is your repo and `<run-id>` the run's folder name. Usually the cause is either (a) many
-mechanical retries that escalated, (b) discovery
-ballooned tokens because the repo was very large, or (c) the policy YAML routed too much to
+mechanical retries that escalated, (b) packet inputs
+ballooned because the repo was very large, or (c) the policy YAML routed too much to
 premium.

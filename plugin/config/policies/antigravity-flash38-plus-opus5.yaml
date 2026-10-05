@@ -108,10 +108,8 @@ rules:
     use: opus
     reason: "Risk-bearing, low volume"
 
-  # Brownfield-mode phases — both premium.
-  - when: { phase: discovery }
-    use: opus
-    reason: "Judgment: understanding an unknown repo is high-stakes"
+  # Brownfield. No discovery rule: discovery is the conductor's own local
+  # read (brownfield-guide/discovery.md), logged as an in_session row.
   - when: { phase: change_plan }
     use: opus
     reason: "Judgment: delta design for feature-extend / refactor / deps"

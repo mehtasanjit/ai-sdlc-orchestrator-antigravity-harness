@@ -192,6 +192,8 @@ The dispatched rollup, then three blocks this harness adds.
 | `driver_cost_usd_low`, `driver_cost_resume_check` | Present while check 16 is pending on a resumed run: the lower bound of the driver range; `driver_cost_usd` is the upper |
 | `driver_invocations_without_usage` | `agy --print` processes that reported no `usage`; the driver figure is missing their tokens |
 | `completed`, `gates`, `pin_rejection` | Whether `SUMMARY.md` appeared; the gate mode; the stderr line if agy refused the pinned model |
+| `unrecorded_phases` | Judgment phases the run went through that left no telemetry row at all — neither a dispatch nor a `provenance: "none"` row. See [methodology.md](methodology.md#vendor-mode-is-the-only-mode) |
+| `conductor_edits` | Per planned `artifact_path`, whether the final file differs from the last worker result for it (`edited`, `unchanged`, `unknown` counts, `files[]`), and `unplanned` files no packet targets. `null` when the run folder cannot tell |
 | `written_by`, `written_at` | `plugin/agy/manifest.mjs` and when |
 
 **`usage`** — `dispatched` and `driver` token buckets side by side, the driver's stamped `provenance: "modeled"`.

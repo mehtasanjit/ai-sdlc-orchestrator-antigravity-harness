@@ -123,7 +123,7 @@
     <line x1="40" y1="274" x2="40" y2="330" stroke="#B91C1C" stroke-width="2" stroke-dasharray="4 3"/>
     <text x="48" y="286" class="gate">GATE 0 — scope, job type, write contract</text>
 
-    <rect x="48" y="296" width="120" height="34" rx="8" fill="#FEF3C7" stroke="#B45309" stroke-width="1.5"/>
+    <rect x="48" y="296" width="120" height="34" rx="8" fill="#EDE9FE" stroke="#6D28D9" stroke-width="1.5"/>
     <text x="108" y="317" text-anchor="middle" class="mono">discovery</text>
     <path d="M 173 313 L 203 313" stroke="#6B7280" stroke-width="1.5" marker-end="url(#pg-arr)"/>
     <text x="270" y="317" text-anchor="middle" class="s">before requirements</text>

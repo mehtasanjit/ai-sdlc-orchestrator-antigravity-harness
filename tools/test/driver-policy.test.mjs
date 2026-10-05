@@ -12,6 +12,9 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parse as parseYaml } from "yaml";
 
+import { loadPolicyFromPath } from "../../plugin/mcp/model-dispatch/dist/policy.js";
+import { pickModel } from "../../plugin/mcp/model-dispatch/dist/routing.js";
+
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const POLICIES = join(ROOT, "plugin", "config", "policies");
 const load = (name) => parseYaml(readFileSync(join(POLICIES, `${name}.yaml`), "utf8"));
@@ -52,6 +55,16 @@ for (const name of [STUDY]) {
       const rule = policy.rules.find((r) => r.when?.phase === phase);
       assert.equal(rule?.use, judgment.id, phase);
     }
+  });
+
+  test(`${name}: discovery is the conductor's own read, so no rule routes it`, () => {
+    const policy = loadPolicyFromPath(join(POLICIES, `${name}.yaml`));
+    const ctx = (phase) => ({ phase, task_type: "misc", module: "cross", retry_count: 0 });
+    assert.ok(!policy.rules.some((r) => [r.when?.phase].flat().includes("discovery")), "a discovery rule is back");
+    assert.equal(pickModel(ctx("discovery"), policy).ruleIndex, -1, "discovery matched a rule");
+    const plan = pickModel(ctx("plan_task_packets"), policy);
+    assert.notEqual(plan.ruleIndex, -1);
+    assert.equal(plan.modelId, "opus", "plan_task_packets is dispatched to the Opus worker");
   });
 }
 

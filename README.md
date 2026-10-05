@@ -77,7 +77,7 @@ flowchart LR
 
     P0 --> P1 --> P2 --> P3 --> P4 --> P5 --> P6 --> P7 --> P8 --> P9 --> P10
 
-    D[discovery<br/><i>brownfield only</i>]:::opus
+    D[discovery<br/><i>brownfield only</i>]:::cond
     C[change_plan<br/><i>brownfield only</i>]:::opus
     D -.-> P2
     C -.-> P4
@@ -120,7 +120,8 @@ Same rule applies to greenfield and brownfield. The default `antigravity-flash38
 |---|---|---|
 | `requirements_analysis` · `architecture_design` · `plan_task_packets` | premium | Claude Opus 5, effort high |
 | `senior_code_review` · `security_review` | premium | Claude Opus 5, effort high |
-| `discovery` · `change_plan` (brownfield only) | premium | Claude Opus 5, effort high |
+| `change_plan` (brownfield only) | premium | Claude Opus 5, effort high |
+| `discovery` (brownfield only) | driver | the conductor's own local read, never dispatched; logged as an `in_session` row |
 | `execute_packets` (codegen) · `tests` · `docs` | mechanical | Gemini 3.8 Flash |
 | `debug` (retry_count ≥ 2) | premium | Claude Opus 5 (auto-escalation) |
 | `test_run` | local | Bash on your machine, no model call |
@@ -131,7 +132,7 @@ Source: [plugin/config/policies/antigravity-flash38-plus-opus5.yaml:89](plugin/c
 Two guardrails ship on:
 
 - **Escalation** — a mechanical-tier packet that fails validation twice auto-routes to Opus 5 on the third attempt. Prevents infinite retries when Flash can't solve a particular puzzle.
-- **Hard cost cap** — `hard_cost_cap_usd: 50` per run ([antigravity-flash38-plus-opus5.yaml:155](plugin/config/policies/antigravity-flash38-plus-opus5.yaml)). Before each `execute_with_model` call, the bridge sums `cost_usd` over the run's `telemetry.jsonl`, leaving out `tier: "orchestrator"` lines. Once that sum reaches the cap, the bridge refuses the dispatch without calling a model and returns an error naming the cap, the spend and the file. Raise or lower the cap in your own policy, or remove the key to run without one; a value that is not a positive number fails at policy load. The console shows the cap on every card and carries it into saved policies.
+- **Hard cost cap** — `hard_cost_cap_usd: 50` per run ([antigravity-flash38-plus-opus5.yaml:157](plugin/config/policies/antigravity-flash38-plus-opus5.yaml)). Before each `execute_with_model` call, the bridge sums `cost_usd` over the run's `telemetry.jsonl`, leaving out `tier: "orchestrator"` lines. Once that sum reaches the cap, the bridge refuses the dispatch without calling a model and returns an error naming the cap, the spend and the file. Raise or lower the cap in your own policy, or remove the key to run without one; a value that is not a positive number fails at policy load. The console shows the cap on every card and carries it into saved policies.
 
   What the cap does not cover:
 
