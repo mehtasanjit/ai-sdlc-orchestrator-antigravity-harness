@@ -11,7 +11,7 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { buildHarnessManifest, costLines, claudeWallet, geminiDoor, HARNESS_NAME, RUNTIME_NAME } from "../../plugin/agy/manifest.mjs";
+import { buildHarnessManifest, costLines, claudeWallet, geminiDoor, workerLineOf, HARNESS_NAME, RUNTIME_NAME } from "../../plugin/agy/manifest.mjs";
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const POLICY = "antigravity-flash38-plus-opus5";
@@ -118,6 +118,46 @@ test("costLines partitions bridge events by the policy's Claude-worker models", 
   assert.equal(lines.find((l) => l.line === "driver").kind, "unmeasured", "no driver record: the $0 is not a measurement");
   const withNone = costLines({ dispatched: [ev({ model: null, provenance: "none", cost_usd: 0 })], modeled: [], policy, pin: null, env: {} });
   assert.equal(withNone.find((l) => l.line === "gemini_workers").calls, 0, "a provenance:none receipt is not a worker call");
+});
+
+test("workerLineOf reads the event's adapter, then its leaf or model in the policy, then the model prefix", () => {
+  const policy = { models: [{ id: "opus", adapter: "claude-agent-sdk", model_name: "claude-opus-5" }, { id: "flash-completion", adapter: "mcp:model-dispatch", model_name: "gemini-3.8-flash" }] };
+  assert.equal(workerLineOf({ model: "some-model", adapter: "claude-cli" }), "claude_worker");
+  assert.equal(workerLineOf({ model: "claude-opus-5", adapter: "antigravity-worker" }), "gemini_workers", "the stamped adapter beats the name");
+  assert.equal(workerLineOf({ model: "renamed", model_id: "opus" }, policy), "claude_worker");
+  assert.equal(workerLineOf({ model: "gemini-3.8-flash" }, { models: [{ adapter: "claude-agent-sdk", model_name: "claude-opus-5" }] }), "gemini_workers", "an entry with no id never matches an event with no model_id");
+  assert.equal(workerLineOf({ model: "claude-opus-5" }), "claude_worker", "no adapter, no policy: the name decides");
+  assert.equal(workerLineOf({ model: "gemini-3.8-flash" }), "gemini_workers");
+  assert.equal(workerLineOf({ model: "claude-opus-5", adapter: "builtin-anthropic" }), "unclassified", "not a Claude-worker wallet");
+  assert.equal(workerLineOf({ model: "mystery-1" }), "unclassified");
+});
+
+test("an event no rule recognises goes on an unclassified line, never on Gemini's", () => {
+  const lines = costLines({ dispatched: [ev({ model: "mystery-1", cost_usd: 3 }), ev({ cost_usd: 2 })], modeled: [], policy: null, pin: null, env: {} });
+  assert.equal(lines.find((l) => l.line === "gemini_workers").cost_usd, 2);
+  const unclassified = lines.find((l) => l.line === "unclassified");
+  assert.equal(unclassified.cost_usd, 3);
+  assert.deepEqual(unclassified.models, ["mystery-1"]);
+  assert.match(unclassified.basis, /^UNCLASSIFIED/);
+  assert.equal(costLines({ dispatched: [ev({})], modeled: [], policy: null, pin: null, env: {} }).length, 3, "the line is absent when every event is classified");
+});
+
+test("an interactive run with no policy snapshot still books Opus on the Claude line, and on the seat keeps it out of cash", () => {
+  const dir = runDir();
+  try {
+    for (const f of ["policy_snapshot.yaml", "driver-manifest.json", "driver-cost-modeled.jsonl"]) rmSync(join(dir, f));
+    const login = { loggedIn: true, method: "claude.ai", subscription: "max" };
+    const m = buildHarnessManifest({ runDir: dir, policyName: POLICY, runId: "r1", env: { GEMINI_API_KEY: "g" }, login });
+    const byLine = Object.fromEntries(m.cost.lines.map((l) => [l.line, l]));
+    assert.equal(byLine.claude_worker.cost_usd, 0.05);
+    assert.deepEqual(byLine.claude_worker.models, ["claude-opus-5"]);
+    assert.equal(byLine.gemini_workers.cost_usd, 0.003125);
+    assert.deepEqual(byLine.gemini_workers.models, ["gemini-3.8-flash"]);
+    assert.equal(byLine.unclassified, undefined);
+    assert.equal(m.cost.claude_seat_modeled_usd, 0.05);
+    assert.equal(m.cost.dispatched_cash_usd, 0.003125, "seat Opus is not cash");
+    assert.equal(m.harness.pin, null, "no snapshot, no pin to assert");
+  } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
 test("an interactive run (no driver-manifest.json, no modeled lines) carries the driver as NOT MEASURED, never as a modeled $0", () => {
