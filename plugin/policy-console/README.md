@@ -56,20 +56,20 @@ the recommended starting point for coding/agentic work. This console writes it a
 `reasoning.effort` (not `reasoning.tier`) so a saved rule always names the field its target model's
 adapter will eventually need to read.
 
-## Known gap: thinking capacity isn't wired to every adapter yet
+## Known gap: the picker writes a field the bridge does not read
 
 The console writes the chosen tier into the saved policy as `rules[].reasoning.tier` or
-`rules[].reasoning.effort`, per the table above. Today that value has **no effect on a real run**
-for two of the three routing options:
+`rules[].reasoning.effort`, per the table above. The bridge never reads a rule's `reasoning`: each
+adapter reads its own model entry's `models[].reasoning`, which the console copies from the base
+policy unchanged. So the picker has **no effect on a real run**, and a phase it shows as `off` can
+still be sent a level by its model entry. What each routing option does with that entry:
 
-| Routing option | Adapter | Reads `reasoning`? |
+| Routing option | Adapter | Reads `models[].reasoning`? |
 |---|---|---|
 | `opus` | `BuiltinAnthropicAdapter` | No — never read, never sent to the Anthropic API. The pinned `@anthropic-ai/sdk` (`0.32.1`) also predates `output_config.effort` entirely, so it couldn't send it even if wired |
-| `flash-completion` | `GeminiFlashAdapter` | No — not read anywhere in that adapter or `geminiTransports.ts`, despite the vendor SDK supporting `thinkingLevel` |
-| `flash-agsdk-worker` | `AntigravityWorkerAdapter` | Yes — the only adapter that reads `reasoning.tier` and passes it through |
+| `flash-completion` | `GeminiFlashAdapter` | Yes — `tier`, sent as `thinkingConfig.thinkingLevel`. The shipped policy sets `low` |
+| `flash-agsdk-worker` | `AntigravityWorkerAdapter` | Yes — `tier`, passed to the worker's `--thinking` flag |
 
-So the tiers shown are honest about what each vendor's API allows, but only `flash-agsdk-worker`
-actually acts on the choice today. Wiring `flash-completion` to send `thinkingLevel`, and bumping
-`@anthropic-ai/sdk` to send `output_config.effort` for `opus`, are backend work, not console
-changes — tracked as an open item, not fixed here since no policy from this console is driving a
-real run yet.
+So the tiers shown are honest about what each vendor's API allows, but the choice reaches a run
+only through the model entry. Writing the picked level onto the model entry, or having the bridge
+read the matched rule's `reasoning`, is backend work, not fixed here.

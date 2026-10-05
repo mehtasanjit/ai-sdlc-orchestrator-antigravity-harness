@@ -65,9 +65,11 @@ Google's `usageMetadata` has two fields that look alike and behave in opposite w
 
 The same two rules apply to the driver line: agy's `cache_read_tokens` is priced at the cached rate and its `thinking_tokens` at the output rate.
 
+**The thinking level is set on the model entry.** The shipped `flash-completion` entry carries `reasoning: { tier: low }`, which the bridge sends as `thinkingConfig.thinkingLevel: LOW`: the level the Claude Code harness's completion typists use, so mechanical-tier cost compares across the two harnesses. An entry with no `tier` sends no level, and the model thinks at its default. Every completion request records the level it sent in `thinking_level` (`null` when it sent none) and its `thoughtsTokenCount` in `output_tokens_reasoning`, a share of `output_tokens` that is never priced on its own.
+
 Two consequences worth knowing when reading a report:
 
-- **Thinking tokens count against the packet's output ceiling.** A packet can spend its whole ceiling reasoning and return no text, which the vendor reports as `MAX_TOKENS`. That is a genuine truncation and the doubling loop handles it as one — the attempt is billed, because the reasoning happened.
+- **Thinking tokens count against the packet's output ceiling.** A packet can spend its whole ceiling reasoning and return no text, which the vendor reports as `MAX_TOKENS`. That is a genuine truncation and the doubling loop handles it as one — the attempt is billed, because the reasoning happened. A `MAX_TOKENS` attempt whose `output_tokens_reasoning` is close to its `output_tokens` spent the ceiling thinking, not answering.
 - **Gemini also caches implicitly, without being asked.** A packet resembling one sent minutes earlier can come back with a non-zero cached count under no explicit cache. Costs stay correct either way, since the cached count is read from the response. But a cold-vs-warm pair measured back to back understates the gap.
 
 ## Output-ceiling doubling

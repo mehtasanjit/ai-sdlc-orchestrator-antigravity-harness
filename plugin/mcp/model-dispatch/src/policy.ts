@@ -14,7 +14,7 @@
 import { readFileSync, existsSync, readdirSync } from "node:fs";
 import { join, dirname, resolve } from "node:path";
 import { parse as parseYaml } from "yaml";
-import type { Policy, ModelConfig } from "./types.js";
+import type { Policy, ModelConfig, ReasoningConfig } from "./types.js";
 import { KNOWN_ADAPTER_IDS } from "./adapters/index.js";
 
 const SHIPPED_POLICY_DIR = resolve(
@@ -189,6 +189,7 @@ function validateModel(m: any) {
         `Register new adapters in adapters/index.ts.`
     );
   }
+  validateReasoning(m);
   // pricing_override is the only way a policy block is billed, so it must be
   // unambiguous: a string "yes" or a flag with nothing to bill is refused at
   // load, before any run could be priced on a misread intent.
@@ -218,6 +219,27 @@ function validateModel(m: any) {
     if (m.pricing[k] !== undefined && typeof m.pricing[k] !== "number") {
       throw new Error(`Policy model '${m.id}': pricing.${k} must be number`);
     }
+  }
+}
+
+const REASONING_TIERS: ReadonlyArray<NonNullable<ReasoningConfig["tier"]>> = ["minimal", "low", "medium", "high"];
+
+/**
+ * Both Gemini doors send `reasoning.tier` to the vendor, so an unknown tier is
+ * refused at load: the completion door would silently send none, and the
+ * agent worker exits on a level it does not know.
+ */
+function validateReasoning(m: any) {
+  if (m.reasoning === undefined) return;
+  if (!m.reasoning || typeof m.reasoning !== "object" || Array.isArray(m.reasoning)) {
+    throw new Error(`Policy model '${m.id}': reasoning must be a map, e.g. { tier: low } or { effort: high }`);
+  }
+  const tier = m.reasoning.tier;
+  if (tier !== undefined && !REASONING_TIERS.includes(tier)) {
+    throw new Error(
+      `Policy model '${m.id}': reasoning.tier must be one of ${REASONING_TIERS.join(", ")}, got ${JSON.stringify(tier)}. ` +
+        `Leave tier out to send no thinking level and keep the model's default.`
+    );
   }
 }
 
