@@ -102,6 +102,18 @@ Fields the report reads: `phase`, `provenance`, `input_tokens`, `input_tokens_ca
 - `model` is the vendor's model name; `model_id` is the policy leaf that dispatched. They differ when a policy offers two doors to the same model — `flash-completion` and `flash-agsdk-worker` both carry `"model": "gemini-3.8-flash"`. Group by `model_id` when the door matters; `routing.select` records the choice that led there.
 - `adapter` is the policy adapter that ran the call. The manifest books each event to a cost line from it. Events written before the field existed lack it, and the manifest falls back to the policy snapshot, then to the `claude-` or `gemini-` prefix of `model`.
 - `ceiling_used` is the output cap the vendor was given for that attempt. An adapter that gives none (`claude-agent-sdk`, `claude-cli`, `antigravity-worker`) writes `ceiling_used: null`, `budget_enforced: false`, and the packet's `budget.maxOutputTokens` as `budget_declared`; on those lines `output_tokens` can exceed `budget_declared`. See [methodology.md](methodology.md#output-ceiling-doubling).
+- `wallet` is the wallet the call billed, recorded by the bridge at dispatch. The manifest books each event's wallet from it, so rebuilding the manifest from another shell does not change it. Events written before the field existed lack it; see [`manifest.json`](#manifestjson) for the fallback.
+
+  | Key | Meaning |
+  |---|---|
+  | `name` | `anthropic`, `gcp`, `claude-seat` or `gemini-api-key`; `null` when nothing the adapter saw settled it |
+  | `source` | `reported` (Claude Code said so: the Agent SDK init frame or the result's `modelUsage`), `env` (the bridge's environment at dispatch), `transport` (the Gemini door the adapter built) |
+  | `arm` | Claude only: `A`, `B`, `seat` or `unknown` |
+  | `api_key_source`, `claude_code_version` | `claude-agent-sdk` only: the init frame's `apiKeySource` (`ANTHROPIC_API_KEY`, `none`, ...) and Claude Code version |
+  | `api_provider` | Claude only: the provider the result reports (`firstParty`, `vertex`, ...) |
+  | `project`, `region` | Arm B only: `ANTHROPIC_VERTEX_PROJECT_ID` and `CLOUD_ML_REGION` in the bridge's environment |
+  | `backend`, `location` | Gemini only: `api-key` or `vertex-adc`, and the Vertex location (empty on the key) |
+
 - `price_basis` is `list` (the dated price list in [plugin/mcp/model-dispatch/src/prices.ts](../plugin/mcp/model-dispatch/src/prices.ts)) or `custom` (the policy's `pricing:` block under `pricing_override: true`).
 - A Gemini completion line (`model_id: flash-completion`) adds `thinking_level`, the `thinkingConfig.thinkingLevel` the request carried (`LOW` under the shipped policy, `null` when it carried none), and `output_tokens_reasoning`, the attempt's `thoughtsTokenCount`. The reasoning count is already inside `output_tokens` and billed at the output rate; on an attempt that hit the output cap it shows how much of the ceiling went to thinking.
 - An Opus line (the `claude-cli` adapter) adds `cli_reported_cost_usd` — Claude Code's own figure for the call, kept as a cross-check and never booked — and `ttl_split` (`transcript`, `approximate` or `no_cache_writes`) saying how the 5-minute / 1-hour cache-write buckets were told apart. `input_tokens_cache_write_1h` holds the 1-hour share when it is known; it bills at 2× input instead of 1.25×.
@@ -157,11 +169,11 @@ The dispatched rollup, then three blocks this harness adds.
 |---|---|
 | `name`, `kind`, `runtime` | `antigravity`, `sdlc`, and `{ name: "antigravity-cli", version }` as reported by the binary |
 | `auth_mode` | `vendor` — the only mode this runtime accepts |
-| `provider_source` | Where each leg's dollars come from: `driver` (`google-seat` or `gemini-api-key`), `claude` (`anthropic-api`, `vertex` or `claude-seat`), `gemini` (`gcp` or the key) |
-| `arm` | The Claude wallet the bridge ran with: `A` (Anthropic key), `B` (Vertex), `seat` (Claude Code signed in to claude.ai), or `null` |
+| `provider_source` | Where each leg's dollars come from: `driver` (`google-seat` or `gemini-api-key`), `claude` (`anthropic-api`, `vertex`, `claude-seat` or `mixed`), `gemini` (the Gemini line's `wallet`) |
+| `arm` | The Claude line's arm: `A` (Anthropic key), `B` (Vertex), `seat` (Claude Code signed in to claude.ai), `mixed`, or `null` when no Claude call ran or no wallet could be named |
 | `pin` | `model`, `effort`, `slug`, `billing_mode`, `verified`, `pending_checks` — the driver pin `run.mjs` asserted, and whether every check it depends on has passed live |
 | `delegated` | Whether any packet went to the agent worker |
-| `cable` | One-paragraph description of the wiring: driver runtime and models, driver auth, worker models, `claude_worker_auth` (names the arm, the GCP project and region on arm B, or the seat), `summary` |
+| `cable` | One-paragraph description of the wiring: driver runtime and models, driver auth, worker models, `claude_worker_auth` (names the arm, the GCP project and region on arm B, or the seat), `summary` (each worker model and the adapter its events recorded, or `adapter not recorded`) |
 | `driver_cost_usd`, `driver_cost_basis`, `driver_turns`, `agy_invocations` | The modeled driver figure and the sentence that says how it was derived; how many turns and how many `agy --print` invocations (the resume loop) |
 | `driver_cost_usd_low`, `driver_cost_resume_check` | Present while check 16 is pending on a resumed run: the lower bound of the driver range; `driver_cost_usd` is the upper |
 | `driver_invocations_without_usage` | `agy --print` processes that reported no `usage`; the driver figure is missing their tokens |
@@ -174,13 +186,25 @@ The dispatched rollup, then three blocks this harness adds.
 
 | Field | Meaning |
 |---|---|
-| `dispatched_cash_usd` | Bridge dispatches that a vendor invoiced. On arm A or B this equals `total_cost_usd`. On the seat the Opus line is subtracted out, because it was not invoiced either |
+| `dispatched_cash_usd` | Bridge dispatches that a vendor invoiced. On arm A or B this equals `total_cost_usd`. Opus calls on the seat are subtracted out, because they were not invoiced either |
 | `driver_modeled_usd` | The conductor's loop at the driver card |
-| `claude_seat_modeled_usd` | Present only on the seat: the Opus line, priced at the Anthropic card, no invoice |
-| `lines[]` | Three entries — `driver`, `gemini_workers`, `claude_worker` — each with `kind` (`cash` or `modeled`), the wallet, models, tokens, `cost_usd`, and on the modeled ones a `basis` sentence. A fourth, `unclassified`, appears only when an event names no known worker adapter and no `claude-` or `gemini-` model; its dollars stay off both worker lines |
+| `claude_seat_modeled_usd` | Present only when Opus calls ran on the seat: those calls, priced at the Anthropic card, no invoice |
+| `lines[]` | Three entries — `driver`, `gemini_workers`, `claude_worker` — each with `kind` (`cash`, `modeled`, or `mixed` on a Claude line partly on the seat), the wallet, models, tokens, `cost_usd`, and on the modeled and mixed ones a `basis` sentence. A fourth, `unclassified`, appears only when an event names no known worker adapter and no `claude-` or `gemini-` model; its dollars stay off both worker lines |
 | `note` | The rule, restated in the file itself: the cash figure and the modeled figures are different kinds of dollars and are not summed |
 
-Rebuild the manifest any time with `node plugin/agy/manifest.mjs <run-dir> --policy=<name> --run-id=<id>`; it is idempotent over the run directory.
+The two worker lines take their wallet from each event's `wallet` stamp:
+
+| Field | Meaning |
+|---|---|
+| `wallet`, `arm` | The one wallet the line's events used, or `mixed` |
+| `wallet_source` | `events` (every event carried the stamp), `env at manifest time` (none did, so the wallet was read from the environment of the shell running `manifest.mjs`, and a claude.ai login probe for the seat), `events + env at manifest time`, or `no dispatches` |
+| `wallets[]` | Present when the line used more than one wallet: each wallet with its `calls`, `cost_usd` and `wallet_source` |
+| `mixed_wallets[]` | Present when one worker (policy leaf) shows more than one wallet in a single run. Check the run before quoting its cost |
+| `wallet_note` | Present when the fallback environment cannot name a wallet: `CLAUDE_CODE_USE_VERTEX` and `ANTHROPIC_API_KEY` both set |
+
+A Claude line whose calls ran partly on the seat has `kind: "mixed"` and a `seat_modeled_usd`; only that share leaves `dispatched_cash_usd`.
+
+Rebuild the manifest any time with `node plugin/agy/manifest.mjs <run-dir> --policy=<name> --run-id=<id> --agy-version=<v>`. The rebuild is not idempotent: `written_at` changes, `harness.runtime.version` comes from `agy --version` at rebuild time unless you pass `--agy-version`, and on events without the `wallet` stamp the wallets follow the environment you run it from.
 
 ### `provenance.json`
 

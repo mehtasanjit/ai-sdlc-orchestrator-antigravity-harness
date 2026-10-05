@@ -30,13 +30,15 @@ A metered driver is possible — `billing_mode: gemini-api-key` in the policy's 
 
 ### Why the Claude line is cash on the arms and modeled on the seat
 
-Every Opus call crosses the bridge through the `claude-cli` adapter, which spawns `claude -p` with the bridge's environment and reads the result's `usage` and `modelUsage`. The tokens are the same whichever wallet paid. The dollars differ:
+Every Opus call crosses the bridge through the `claude-agent-sdk` adapter (or `claude-cli`, which spawns `claude -p`), which runs Claude Code with the bridge's environment and reads the result's `usage` and `modelUsage`. The tokens are the same whichever wallet paid. The dollars differ:
 
 - **Arm A** — `ANTHROPIC_API_KEY` exported. Anthropic meters and invoices. Cash.
 - **Arm B** — `CLAUDE_CODE_USE_VERTEX=1`, `ANTHROPIC_VERTEX_PROJECT_ID`, `CLOUD_ML_REGION=global`. Google Cloud meters and invoices at the Vertex Claude card. Cash — but check the card in `prices.ts` before the first arm-B run; `claude -p`'s own `total_cost_usd` is a check there, not the figure of record.
 - **The seat** — nothing exported; Claude Code is signed in to claude.ai (`claude auth status` shows `authMethod: claude.ai`). No invoice. `manifest.mjs` moves the line out of `dispatched_cash_usd` into `claude_seat_modeled_usd` and labels it `kind: "modeled"`.
 
 The manifest's `harness.arm` says which applied. A key and the Vertex variables set at once is refused by `verify` and by the wizard, because the run record could not then say which wallet paid.
+
+The bridge records the wallet on every dispatched event, in its `wallet` field. For the Claude worker the arm comes from what Claude Code reports — the Agent SDK init frame's `apiKeySource` and the result's `modelUsage` provider — with the bridge's environment at dispatch filling in what those leave open. For Gemini it is the door the adapter built. `manifest.mjs` books each line's wallet from those stamps, so rebuilding the manifest from another shell does not move a dollar between cash and modeled. An event without the stamp falls back to the environment of the shell running `manifest.mjs`, and the line says `wallet_source: "env at manifest time"`.
 
 ## Vendor mode is the only mode
 
@@ -50,7 +52,7 @@ The Claude Code harness offers `--auth=vendor|estimated`, where estimated mode p
 
 - **Token counts pass through unchanged from the source.** A dispatched event's counts are exactly what the vendor's `usage` block returned. A driver line's counts are exactly what agy's `result.usage` reported, differenced per turn. Report totals are those per-event counts summed — nothing between measurement and display.
 - **Cost is computed and written at the moment of each call.** A dispatched event's `cost_usd` is (its tokens × the model's effective price on the dispatch day) / 1M, stamped into `telemetry.jsonl` at write time with `price_basis` (`list` or `custom`). A driver line's is (its tokens × the `driver.pricing` card) / 1M, stamped when `run.mjs` reads the stream.
-- **The manifest is written by code.** `plugin/agy/manifest.mjs` sums the two files and stamps the wallet, the pin and the three lines. The conductor's `SUMMARY.md` quotes telemetry rows; it never computes a figure, and it is not the record.
+- **The manifest is written by code.** `plugin/agy/manifest.mjs` sums the two files, books each worker line's wallet from the bridge's per-event stamp, and writes the pin and the three lines. The conductor's `SUMMARY.md` quotes telemetry rows; it never computes a figure, and it is not the record.
 - **Telemetry covers dispatched work only.** The conductor's own loop is in `driver-cost-modeled.jsonl`, never in `telemetry.jsonl`; `buildManifest` partitions any `tier: "orchestrator"` line out of every dispatched sum if the two files are ever concatenated.
 
 To verify any of these, walk the two JSONL files by hand — every line is inspectable.

@@ -99,14 +99,119 @@ test("the three cost lines are labeled by kind and never summed", () => {
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
-test("claudeWallet and geminiDoor read the arm and the door from the environment", () => {
+test("claudeWallet and geminiDoor read the fallback wallet from the environment, and say when it cannot decide", () => {
   assert.equal(claudeWallet({}).arm, null);
   assert.equal(claudeWallet({ ANTHROPIC_API_KEY: "k" }).wallet, "anthropic");
-  assert.equal(claudeWallet({ ANTHROPIC_API_KEY: "k", CLAUDE_CODE_USE_VERTEX: "1" }).arm, "B", "Vertex wins when both are set; verify-setup refuses that state before a run");
+  const both = claudeWallet({ ANTHROPIC_API_KEY: "k", CLAUDE_CODE_USE_VERTEX: "1" });
+  assert.equal(both.arm, null, "no silent preference for Vertex");
+  assert.equal(both.wallet, null);
+  assert.match(both.note, /both set/);
   const policy = { select: { "gemini-flash": { default: "flash-completion" } } };
   assert.deepEqual(geminiDoor(policy, { GEMINI_API_KEY: "g" }), { leaf: "flash-completion", wallet: "gemini-api-key" });
   assert.deepEqual(geminiDoor(policy, { MMO_SELECT: "gemini-flash=flash-agsdk-worker", GEMINI_API_KEY: "g" }), { leaf: "flash-agsdk-worker", wallet: "gcp" });
   assert.deepEqual(geminiDoor(policy, {}), { leaf: "flash-completion", wallet: "gcp" });
+  assert.deepEqual(geminiDoor(policy, { GEMINI_API_KEY: "g", GEMINI_BACKEND: "vertex" }), { leaf: "flash-completion", wallet: "gcp" }, "GEMINI_BACKEND beats the key, as in the bridge");
+  assert.deepEqual(geminiDoor(policy, { GEMINI_BACKEND: "api-key" }), { leaf: "flash-completion", wallet: "gemini-api-key" });
+});
+
+const STAMP = {
+  seat: { name: "claude-seat", source: "reported", arm: "seat", api_key_source: "none", api_provider: "firstParty" },
+  keyA: { name: "anthropic", source: "reported", arm: "A", api_key_source: "ANTHROPIC_API_KEY" },
+  geminiKey: { name: "gemini-api-key", source: "transport", backend: "api-key", location: "" },
+  geminiVertex: { name: "gcp", source: "transport", backend: "vertex-adc", location: "global" },
+};
+
+/** A run directory whose telemetry carries the given events, and no policy snapshot (an interactive run). */
+function stampedRunDir(events) {
+  const dir = runDir();
+  for (const f of ["policy_snapshot.yaml", "driver-manifest.json", "driver-cost-modeled.jsonl"]) rmSync(join(dir, f));
+  writeFileSync(join(dir, "telemetry.jsonl"), events.map((e) => JSON.stringify(e)).join("\n") + "\n");
+  return dir;
+}
+
+const opusOn = (wallet, over = {}) => ev({ phase: "requirements_analysis", model: "claude-opus-5", model_id: "opus", adapter: "claude-agent-sdk", cost_usd: 0.05, wallet, ...over });
+const flashOn = (wallet, over = {}) => ev({ model_id: "flash-completion", adapter: "mcp:model-dispatch", wallet, ...over });
+
+test("stamped events give the same wallets and cost lines whatever the manifest writer's environment holds", () => {
+  const dir = stampedRunDir([opusOn(STAMP.seat), flashOn(STAMP.geminiKey), flashOn(STAMP.geminiKey, { cost_usd: 0.002 })]);
+  try {
+    const build = (env, login) => buildHarnessManifest({ runDir: dir, policyName: POLICY, runId: "r1", env, login, version: "1.2.3", now: () => "N" });
+    const bare = build({}, null);
+    const views = [
+      build({ ANTHROPIC_API_KEY: "k", GEMINI_API_KEY: "g" }, null),
+      build({ CLAUDE_CODE_USE_VERTEX: "1", ANTHROPIC_VERTEX_PROJECT_ID: "p", GEMINI_BACKEND: "vertex" }, null),
+      build({}, { loggedIn: true, method: "claude.ai", subscription: "max" }),
+    ];
+    for (const m of views) {
+      assert.deepEqual(m.cost, bare.cost);
+      assert.deepEqual([m.harness.arm, m.harness.provider_source, m.harness.cable], [bare.harness.arm, bare.harness.provider_source, bare.harness.cable]);
+    }
+    const byLine = Object.fromEntries(bare.cost.lines.map((l) => [l.line, l]));
+    assert.equal(byLine.claude_worker.wallet, "claude-seat");
+    assert.equal(byLine.claude_worker.kind, "modeled");
+    assert.equal(byLine.claude_worker.wallet_source, "events");
+    assert.equal(byLine.gemini_workers.wallet, "gemini-api-key");
+    assert.equal(byLine.gemini_workers.wallet_source, "events");
+    assert.equal(bare.cost.claude_seat_modeled_usd, 0.05);
+    assert.equal(bare.cost.dispatched_cash_usd, 0.003125);
+    assert.equal(bare.harness.arm, "seat");
+    assert.equal(bare.harness.cable.summary, "antigravity-cli driver → model-dispatch bridge (claude-opus-5 via claude-agent-sdk, gemini-3.8-flash via mcp:model-dispatch)");
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test("events without the stamp fall back to the manifest writer's environment, and the line says so", () => {
+  const dir = runDir();
+  try {
+    const m = buildHarnessManifest({ runDir: dir, env: { ANTHROPIC_API_KEY: "k" } });
+    const byLine = Object.fromEntries(m.cost.lines.map((l) => [l.line, l]));
+    assert.equal(byLine.claude_worker.wallet, "anthropic");
+    assert.equal(byLine.claude_worker.wallet_source, "env at manifest time");
+    assert.equal(byLine.gemini_workers.wallet, "gcp");
+    assert.equal(byLine.gemini_workers.wallet_source, "env at manifest time");
+    assert.match(m.harness.cable.summary, /claude-opus-5 via adapter not recorded/);
+    assert.doesNotMatch(m.harness.cable.summary, /claude -p/);
+
+    const both = buildHarnessManifest({ runDir: dir, env: { ANTHROPIC_API_KEY: "k", CLAUDE_CODE_USE_VERTEX: "1" } });
+    const claude = both.cost.lines.find((l) => l.line === "claude_worker");
+    assert.equal(claude.wallet, null);
+    assert.match(claude.wallet_note, /both set/);
+    assert.equal(both.harness.arm, null);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+
+  const partly = stampedRunDir([flashOn(STAMP.geminiKey), ev({ model_id: "flash-completion" })]);
+  try {
+    const gemini = buildHarnessManifest({ runDir: partly, policyName: POLICY, runId: "r1", env: { GEMINI_API_KEY: "g" } }).cost.lines[1];
+    assert.equal(gemini.wallet, "gemini-api-key");
+    assert.equal(gemini.wallet_source, "events + env at manifest time");
+  } finally { rmSync(partly, { recursive: true, force: true }); }
+});
+
+test("a worker whose events show more than one wallet is flagged, and only its seat share leaves the cash figure", () => {
+  const dir = stampedRunDir([
+    opusOn(STAMP.keyA, { cost_usd: 0.04 }),
+    opusOn(STAMP.seat, { cost_usd: 0.05 }),
+    flashOn(STAMP.geminiKey),
+    ev({ model_id: "flash-agsdk-worker", adapter: "antigravity-worker", wallet: STAMP.geminiVertex, cost_usd: 0.002 }),
+  ]);
+  try {
+    const m = buildHarnessManifest({ runDir: dir, policyName: POLICY, runId: "r1", env: {} });
+    const byLine = Object.fromEntries(m.cost.lines.map((l) => [l.line, l]));
+    const claude = byLine.claude_worker;
+    assert.equal(claude.wallet, "mixed");
+    assert.equal(claude.arm, "mixed");
+    assert.equal(claude.kind, "mixed");
+    assert.deepEqual(claude.mixed_wallets, [{ worker: "opus", wallets: ["anthropic", "claude-seat"] }]);
+    assert.deepEqual(claude.wallets.map((w) => [w.wallet, w.calls, w.cost_usd]), [["anthropic", 1, 0.04], ["claude-seat", 1, 0.05]]);
+    assert.equal(m.cost.claude_seat_modeled_usd, 0.05);
+    assert.equal(m.total_cost_usd, 0.093125);
+    assert.equal(m.cost.dispatched_cash_usd, 0.043125, "the keyed Opus call and both Gemini calls");
+    assert.equal(m.harness.arm, "mixed");
+    assert.equal(m.harness.cable.claude_worker_auth, "mixed: Anthropic API key + claude.ai seat (OAuth) — not the metered API");
+
+    const gemini = byLine.gemini_workers;
+    assert.equal(gemini.wallet, "mixed", "two Gemini doors, one per leaf");
+    assert.equal(gemini.mixed_wallets, undefined, "each leaf kept to one wallet");
+  } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
 test("costLines partitions bridge events by the policy's Claude-worker models", () => {

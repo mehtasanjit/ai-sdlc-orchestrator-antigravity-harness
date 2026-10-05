@@ -196,6 +196,13 @@ export interface TelemetryEvent {
   error?: string;
   /** Copied from the attempt (Gemini completion only); see AttemptRecord.thinking_level. */
   thinking_level?: string | null;
+  /**
+   * Copied from the attempt: the wallet the call billed, as the bridge saw it
+   * at dispatch. The manifest books the event's wallet from this rather than
+   * from the environment of whatever shell rebuilds the manifest. Absent on
+   * events written before it existed and on direct-tier events.
+   */
+  wallet?: DispatchWallet;
 }
 
 /** One attempt from the output-cap doubling loop. */
@@ -272,6 +279,8 @@ export interface AttemptRecord {
    * adapters.
    */
   thinking_level?: string | null;
+  /** The wallet this attempt billed; see DispatchWallet. */
+  wallet?: DispatchWallet;
 }
 
 export type PriceBasis = "list" | "custom";
@@ -478,4 +487,32 @@ export interface ExecutionResult {
     | "output_cap_doubling_budget_exhausted"
     | "output_cap_at_model_absolute"
     | "vendor_error";
+}
+
+/**
+ * The wallet one dispatch billed, recorded by the adapter that ran it.
+ * `source` says how it was known: `reported` = Claude Code said so itself
+ * (the Agent SDK init frame's `apiKeySource`, or the result's
+ * `modelUsage[*].provider`); `env` = the bridge's environment at dispatch;
+ * `transport` = the Gemini door the adapter built.
+ */
+export interface DispatchWallet {
+  /** The manifest's wallet label; null when nothing the adapter saw settled it. */
+  name: "anthropic" | "gcp" | "claude-seat" | "gemini-api-key" | null;
+  source: "reported" | "env" | "transport";
+  /** Claude only: `A` Anthropic API key, `B` Vertex, `seat` claude.ai login. */
+  arm?: "A" | "B" | "seat" | "unknown";
+  /** Claude Agent SDK only: the init frame's `apiKeySource` (`ANTHROPIC_API_KEY`, `none`, ...). */
+  api_key_source?: string;
+  /** Claude only: the provider(s) the result's `modelUsage` names (`firstParty`, `vertex`, ...). */
+  api_provider?: string;
+  /** Claude Agent SDK only: the init frame's `claude_code_version`. */
+  claude_code_version?: string;
+  /** Arm B only: ANTHROPIC_VERTEX_PROJECT_ID and CLOUD_ML_REGION in the bridge's environment. */
+  project?: string;
+  region?: string;
+  /** Gemini only: the door the call went through. */
+  backend?: "api-key" | "vertex-adc";
+  /** Gemini only: the Vertex location; empty on the AI Studio key. */
+  location?: string;
 }
