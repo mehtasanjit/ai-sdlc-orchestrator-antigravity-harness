@@ -105,6 +105,7 @@ function validatePolicy(raw: any): Policy {
   if (!Array.isArray(raw.rules) || raw.rules.length === 0) {
     throw new Error("Policy: 'rules' (non-empty array) required");
   }
+  validateCostCap(raw.hard_cost_cap_usd);
   for (const m of raw.models) validateModel(m);
   const modelIds = new Set<string>(raw.models.map((m: ModelConfig) => m.id));
   const slotNames = validateSelect(raw, modelIds);
@@ -121,6 +122,22 @@ function validatePolicy(raw: any): Policy {
     }
   });
   return raw as Policy;
+}
+
+/**
+ * An empty `hard_cost_cap_usd:` key parses as null; it is refused rather than
+ * read as "no cap", because a cap that silently switches off is worse than a
+ * load error.
+ */
+function validateCostCap(cap: unknown) {
+  if (cap === undefined) return;
+  if (typeof cap !== "number" || !Number.isFinite(cap) || cap <= 0) {
+    throw new Error(
+      `Policy: 'hard_cost_cap_usd' must be a positive number of USD, got ` +
+        `${typeof cap === "number" ? String(cap) : JSON.stringify(cap)}. ` +
+        `Remove the key to run without a cap.`
+    );
+  }
 }
 
 /**

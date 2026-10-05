@@ -3,7 +3,18 @@
  * any of them uniformly.
  */
 
-import type { ExecutionResult, ModelConfig, RunContext, TaskPacket } from "../types.js";
+import type { AttemptRecord, ExecutionResult, ModelConfig, RunContext, TaskPacket } from "../types.js";
+
+/**
+ * Attempt fields for an adapter that hands the vendor no output cap and no
+ * spend limit. Reporting the packet's budget as `ceiling_used` would claim a
+ * limit that never held.
+ */
+export function unenforcedBudget(
+  packet: Pick<TaskPacket, "budget">,
+): Pick<AttemptRecord, "ceiling_used" | "budget_enforced" | "budget_declared"> {
+  return { ceiling_used: null, budget_enforced: false, budget_declared: packet.budget.maxOutputTokens };
+}
 
 export interface ModelAdapter {
   readonly id: string;

@@ -281,6 +281,33 @@ test("options disable the built-in tools and keep the worker hermetic", () => {
   assert.equal(opts.resume, undefined, "no session reuse: a resumed result would carry the session's whole spend");
 });
 
+test("no output cap reaches the SDK, so the attempt claims no ceiling and keeps the declared budget", async () => {
+  const opts = agentSdkOptions({ model_name: "claude-opus-5", reasoning: { effort: "high" } });
+  for (const key of ["maxBudgetUsd", "maxTokens", "maxOutputTokens", "maxThinkingTokens"]) {
+    assert.equal(opts[key], undefined, `${key} would be a cap the attempt does not report`);
+  }
+
+  const adapter = new ClaudeAgentSdkAdapter(BASE_CONFIG, {
+    queryFn: fakeQuery([assistantFrame({ input_tokens: 100, output_tokens: 5000 }, { stop_reason: "end_turn" }), resultFrame()]),
+    now: NOW,
+  });
+  const out = await adapter.execute(PACKET);
+  assert.equal(out.success, true);
+  const [attempt] = out.attempts;
+  assert.equal(attempt.ceiling_used, null, "the packet budget was never applied, so it is not a ceiling");
+  assert.equal(attempt.budget_enforced, false);
+  assert.equal(attempt.budget_declared, PACKET.budget.maxOutputTokens);
+
+  const refused = await new ClaudeAgentSdkAdapter(
+    { ...BASE_CONFIG, model_name: "claude-not-on-the-list", pricing: undefined },
+    { queryFn: fakeQuery([]), now: NOW },
+  ).execute(PACKET);
+  assert.equal(refused.success, false);
+  assert.equal(refused.attempts[0].ceiling_used, null);
+  assert.equal(refused.attempts[0].budget_enforced, false);
+  assert.equal(refused.attempts[0].budget_declared, PACKET.budget.maxOutputTokens);
+});
+
 test("effort is omitted when the policy sets no reasoning tier", () => {
   // Haiku 4.5 rejects an effort level, so the policy leaves `reasoning` off.
   const opts = agentSdkOptions({ model_name: "claude-haiku-4-5" });
