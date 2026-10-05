@@ -20,12 +20,12 @@
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { join, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
 import { parse as parseYaml } from "yaml";
 
 import { buildManifest } from "../mcp/model-dispatch/dist/telemetry.js";
 import { readPin, driverSlug, pendingPinChecks } from "./telemetry/fairnessPin.mjs";
 import { driverRange, driverRangeNote } from "./telemetry/driverRange.mjs";
+import { isMain } from "../scripts/lib/is-main.mjs";
 
 export const HARNESS_NAME = "antigravity";
 export const RUNTIME_NAME = "antigravity-cli";
@@ -227,7 +227,7 @@ export function parseArgs(argv) {
   return args;
 }
 
-if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
+if (isMain(import.meta.url)) {
   const args = parseArgs(process.argv.slice(2));
   const runDir = args._[0] ? resolve(args._[0]) : null;
   if (!runDir || !existsSync(runDir)) {

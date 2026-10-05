@@ -21,6 +21,7 @@ import { spawnSync } from "node:child_process";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { isMain } from "./lib/is-main.mjs";
 
 // ─── pure helpers ─────────────────────────────────────────────────────
 
@@ -935,7 +936,7 @@ export function runBrownfieldChecks(pluginRoot, { spawn = spawnSync } = {}) {
 }
 
 // Direct-execution gate so the test suite can import the pure helpers.
-if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
+if (isMain(import.meta.url)) {
   const pluginRoot = dirname(dirname(fileURLToPath(import.meta.url)));
   const log = (m) => console.log(m);
   const shouldFix = process.argv.includes("--fix");
