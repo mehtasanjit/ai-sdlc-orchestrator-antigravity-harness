@@ -21,7 +21,7 @@ mkdir first-run && cd first-run && agy
 ```
 
 ```
-Set up this plugin from this repo - https://github.com/tl-ai-labs/ai-sdlc-orchestrator-antigravity-harness, branch test/cost-audit-fixes
+Set up this plugin from this repo - https://github.com/tl-ai-labs/ai-sdlc-orchestrator-antigravity-harness, branch develop
 ```
 
 agy follows [INSTALL.md](../INSTALL.md): it clones the harness next to your folder, builds the bridge, checks `agy`, `claude` and your credentials, asks about the Antigravity SDK agent path only if Vertex ADC is present (say no on a first run), mounts the plugin into your folder as `.agents/plugins/mmo/`, and opens a browser tab for the policy pick. Click **Save** on `antigravity-flash38-plus-opus5` — the one shipped policy: Gemini 3.8 Flash conducts, Opus 5 judges, Flash executes, capped at $50.
