@@ -433,7 +433,7 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
           select_overridden: decision.selection?.overridden,
         });
 
-        const capCheck = checkRunCostCap(policy.hard_cost_cap_usd, a.telemetry_path);
+        const capCheck = checkRunCostCap(policy.hard_cost_cap_usd, a.telemetry_path, packet.pass_id);
         if (capCheck && !capCheck.allowed) {
           const message = runCostCapRefusal(capCheck, a.telemetry_path);
           log("error", "dispatch.error", {

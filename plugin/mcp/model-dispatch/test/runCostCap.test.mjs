@@ -91,6 +91,19 @@ test("unreadable lines and lines without a cost are skipped, not fatal", () => {
   assert.equal(check.events_counted, 3);
 });
 
+test("with a run id, only that run's events count toward its cap", () => {
+  withTelemetry(
+    [line({ pass: "run-1", cost_usd: 49 }), line({ pass: "run-2", cost_usd: 3 }), line({ pass: null, cost_usd: 0 })],
+    (path) => {
+      const second = checkRunCostCap(50, path, "run-2");
+      assert.equal(second.allowed, true, "run 1's spend does not refuse run 2");
+      assert.equal(second.spent_usd, 3);
+      assert.equal(second.events_counted, 2, "run 2's event and the run-less zero-cost row");
+      assert.equal(checkRunCostCap(50, path).allowed, false, "without a run id the whole file counts");
+    },
+  );
+});
+
 test("the refusal names the spend, the cap and the file, and says no model was called", () => {
   const check = evaluateRunCostCap(50, [line({ cost_usd: 51.25 })]);
   const message = runCostCapRefusal(check, "/runs/r1/telemetry.jsonl");
@@ -132,12 +145,12 @@ const CAP_PACKET = {
   pass_id: "cost-cap",
 };
 
-async function dispatchWithSpend(spentUsd) {
+async function dispatchWithSpend(spentUsd, spentBy = undefined) {
   const dir = mkdtempSync(join(tmpdir(), "mmo-cost-cap-server-"));
   const policyPath = join(dir, "policy.yaml");
   const telemetryPath = join(dir, "telemetry.jsonl");
   writeFileSync(policyPath, CAPPED_POLICY);
-  writeFileSync(telemetryPath, line({ cost_usd: spentUsd }) + "\n");
+  writeFileSync(telemetryPath, line({ cost_usd: spentUsd, ...(spentBy ? { pass: spentBy } : {}) }) + "\n");
   delete process.env[NO_KEY_ENV];
   const bridge = await connectBridge({ env: { MMO_LOG_LEVEL: "error" } });
   try {
@@ -164,6 +177,12 @@ test("under the cap the same dispatch goes on to the adapter", async () => {
   const { error } = await dispatchWithSpend(0.25);
   assert.ok(error, "the unreachable model still fails");
   assert.match(error.message, new RegExp(`${NO_KEY_ENV} not set`), "it failed in the adapter, past the cap check");
+});
+
+test("another run's spend in the same telemetry file does not refuse this run's dispatch", async () => {
+  const { error } = await dispatchWithSpend(1.5, "an-earlier-run");
+  assert.ok(error, "the unreachable model still fails");
+  assert.match(error.message, new RegExp(`${NO_KEY_ENV} not set`), "it got past the cap check");
 });
 
 // --- server wiring (dist-grep: server.js starts a Server on import) ---

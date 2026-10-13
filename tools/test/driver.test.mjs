@@ -462,6 +462,20 @@ test("buildLogEventArgs writes a zero-cost provenance:none event and refuses wit
   assert.equal(args.event.provenance, "none");
   assert.equal(args.event.cost_usd, 0);
   assert.throws(() => buildLogEventArgs({ phase: "docs" }), /--telemetry/);
+  assert.equal(args.event.pass, null);
+  assert.equal(buildLogEventArgs({ phase: "docs", taskType: "skipped", telemetryPath: "/t.jsonl", runId: "r7" }).event.pass, "r7", "--run-id stamps the run");
+});
+
+test("runDispatch refuses a packet dispatch without --telemetry, before connecting to the bridge", async () => {
+  const dir = tmp();
+  try {
+    const packetPath = join(dir, "packet.json");
+    writeFileSync(packetPath, JSON.stringify({ id: "p1", phase: "docs" }));
+    let connected = false;
+    const connect = async () => { connected = true; return { callTool: async () => ({}), close: async () => {} }; };
+    await assert.rejects(() => runDispatch({ packet: packetPath, out: join(dir, "r.json") }, { connect }), /--telemetry=<path> is required for a packet dispatch/);
+    assert.equal(connected, false, "no bridge, so no paid call");
+  } finally { cleanup(dir); }
 });
 
 test("bridgeEnv folds in the stored MMO_SELECT, but an explicit export wins", () => {
@@ -484,8 +498,9 @@ test("runDispatch writes the full result to --out and returns only a summary", a
     const fakeResult = { decision: { modelId: "opus" }, result: { success: true, cost_usd: 0.5 } };
     const calls = [];
     const connect = async () => ({ callTool: async (name, args) => { calls.push({ name, args }); return fakeResult; }, close: async () => {} });
-    const out = await runDispatch({ packet: packetPath, out: outPath, policy: DEFAULT_POLICY }, { connect });
+    const out = await runDispatch({ packet: packetPath, out: outPath, policy: DEFAULT_POLICY, telemetry: join(dir, "telemetry.jsonl") }, { connect });
     assert.equal(calls[0].name, "execute_with_model");
+    assert.equal(calls[0].args.telemetry_path, join(dir, "telemetry.jsonl"));
     assert.equal(calls[0].args.policy_name, DEFAULT_POLICY);
     assert.deepEqual(JSON.parse(readFileSync(outPath, "utf8")), fakeResult);
     assert.match(out.summary, /success=true/);

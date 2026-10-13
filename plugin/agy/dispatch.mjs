@@ -12,11 +12,11 @@
  *
  * Usage:
  *   node dispatch.mjs --packet=<packet.json> --out=<result.json> \
- *                     [--policy=<name>] [--project-root=<path>] \
- *                     [--telemetry=<path>] [--work-dir=<path>]
+ *                     --telemetry=<path> [--policy=<name>] [--project-root=<path>] \
+ *                     [--work-dir=<path>]
  *   node dispatch.mjs --log-phase=<state> --task-type=skipped|in_session \
  *                     --telemetry=<path> --out=<receipt.json> \
- *                     [--module=<name>] [--reason=<text>] [--policy=<name>]
+ *                     [--run-id=<id>] [--module=<name>] [--reason=<text>] [--policy=<name>]
  *   node dispatch.mjs --preflight --auth-mode=vendor [--policy=<name>] \
  *                     [--project-root=<path>] --out=<result.json>
  */
@@ -129,7 +129,7 @@ function writeResult(outPath, payload) {
  * and they accrue to the driver loop rather than here; the reason string
  * carries that so the row explains itself.
  */
-export function buildLogEventArgs({ phase, taskType, module, reason, policyName, telemetryPath }) {
+export function buildLogEventArgs({ phase, taskType, module, reason, policyName, telemetryPath, runId }) {
   if (!phase) throw new Error("dispatch: --log-phase=<state> is required for --log-phase.");
   if (!telemetryPath) {
     throw new Error("dispatch: --telemetry=<path> is required for --log-phase — an unwritten event is not a record.");
@@ -143,7 +143,7 @@ export function buildLogEventArgs({ phase, taskType, module, reason, policyName,
   return {
     telemetry_path: telemetryPath,
     event: {
-      pass: null,
+      pass: runId ?? null,
       phase,
       task_type: kind,
       task_id: `${phase}-${kind}`,
@@ -190,6 +190,7 @@ export async function runDispatch(args, { connect, env = process.env } = {}) {
       reason: args.reason,
       policyName: args.policy,
       telemetryPath: args.telemetry,
+      runId: typeof args["run-id"] === "string" ? args["run-id"] : undefined,
     });
   } else if (isPreflight) {
     if (!args["auth-mode"]) {
@@ -206,6 +207,12 @@ export async function runDispatch(args, { connect, env = process.env } = {}) {
     });
   } else {
     if (!args.packet) throw new Error("dispatch: --packet=<path> is required.");
+    if (typeof args.telemetry !== "string" || !args.telemetry) {
+      throw new Error(
+        "dispatch: --telemetry=<path> is required for a packet dispatch — the call is paid, and a paid call " +
+          "with no telemetry event is in no cost line. Pass the run's <output_dir>/telemetry.jsonl.",
+      );
+    }
     let packet;
     try {
       packet = JSON.parse(readFileSync(resolve(args.packet), "utf-8"));
