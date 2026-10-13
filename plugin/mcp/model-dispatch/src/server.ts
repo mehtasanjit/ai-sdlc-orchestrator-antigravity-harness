@@ -581,6 +581,7 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
           transcript_logged_cost_usd: att.transcript_logged_cost_usd,
           thinking_level: att.thinking_level,
           wallet: att.wallet,
+          claude_session: att.claude_session,
         }));
         if (a.telemetry_path) {
           for (const ev of events) appendEvent(a.telemetry_path, ev);

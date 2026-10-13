@@ -35,7 +35,7 @@
  * warning is logged when the two differ by more than 0.5%.
  */
 
-import type { AttemptRecord, DispatchWallet, ExecutionResult, ModelConfig, TaskPacket } from "../types.js";
+import type { AttemptRecord, ClaudeSessionFacts, DispatchWallet, ExecutionResult, ModelConfig, TaskPacket } from "../types.js";
 import { estimateTokens } from "../pricing.js";
 import { log } from "../log.js";
 import { unenforcedBudget, type ModelAdapter } from "./ModelAdapter.js";
@@ -69,6 +69,22 @@ export interface AgentSdkMessage {
   /** Set on subagent frames; null on the main loop. */
   parent_tool_use_id?: string | null;
   [key: string]: unknown;
+}
+
+type SdkResult = ClaudeCliResultLike & {
+  subtype?: string;
+  is_error?: boolean;
+  duration_ms?: number;
+  duration_api_ms?: number;
+  stop_reason?: string | null;
+  num_turns?: number;
+  terminal_reason?: string;
+};
+
+/** What the init frame says about the session, before any result arrives. */
+interface InitSession {
+  session_id?: string;
+  cwd?: string;
 }
 
 export type AgentSdkQuery = (args: {
@@ -111,6 +127,11 @@ interface ClaudeAgentSdkOptions {
  * the first user message on a side call to Haiku: the whole prompt in, a few
  * tokens out, once per dispatch, on a model the policy never named.
  *
+ * `persistSession: false` because a persisted session is a transcript under
+ * `~/.claude/projects`, outside the run and linked to nothing in it. Pricing
+ * reads the streamed frames, never a transcript, and the attempt records the
+ * session id in `claude_session`.
+ *
  * `env` is deliberately never set: the SDK REPLACES the subprocess
  * environment when it is, rather than merging, and inheriting is exactly how
  * this adapter reaches all three Claude wallets (key, Vertex, seat) without
@@ -132,6 +153,7 @@ export function agentSdkOptions(
     tools: [],
     settingSources: [],
     title: "mmo dispatch",
+    persistSession: false,
   };
   const effort = config.reasoning?.effort;
   // Haiku 4.5 rejects an effort level; the policy omits `reasoning` there.
@@ -199,6 +221,7 @@ export class ClaudeAgentSdkAdapter implements ModelAdapter {
         started,
         run.error,
         claudeDispatchWallet(this.env, run.init),
+        this.sessionFacts(run.session),
       );
     }
 
@@ -242,6 +265,7 @@ export class ClaudeAgentSdkAdapter implements ModelAdapter {
       ttl_split: ledger.ttl_split,
       per_model: ledger.per_model,
       wallet: claudeDispatchWallet(this.env, { ...run.init, providers: reportedProviders(result.modelUsage) }),
+      claude_session: this.sessionFacts(run.session, result),
     };
 
     if (isError) {
@@ -331,7 +355,7 @@ export class ClaudeAgentSdkAdapter implements ModelAdapter {
    */
   private partial(
     packet: TaskPacket,
-    run: { error: string; init: ClaudeDispatchFacts; writes: Map<string, TranscriptModelWrites> },
+    run: { error: string; init: ClaudeDispatchFacts; writes: Map<string, TranscriptModelWrites>; session: InitSession },
     started: number,
     dispatchDate: Date,
   ): ExecutionResult {
@@ -362,6 +386,7 @@ export class ClaudeAgentSdkAdapter implements ModelAdapter {
       ttl_split: ledger.ttl_split,
       per_model: ledger.per_model,
       wallet: claudeDispatchWallet(this.env, run.init),
+      claude_session: this.sessionFacts(run.session),
     };
     return {
       result: null,
@@ -376,6 +401,18 @@ export class ClaudeAgentSdkAdapter implements ModelAdapter {
     };
   }
 
+  private sessionFacts(session: InitSession, result?: SdkResult): ClaudeSessionFacts {
+    const sessionId = typeof result?.session_id === "string" ? result.session_id : session.session_id;
+    return {
+      session_id: sessionId ?? null,
+      num_turns: typeof result?.num_turns === "number" ? result.num_turns : null,
+      result_subtype: typeof result?.subtype === "string" ? result.subtype : null,
+      terminal_reason: typeof result?.terminal_reason === "string" ? result.terminal_reason : null,
+      // The SDK runs in the bridge's own directory when no cwd is passed.
+      cwd: session.cwd ?? this.cwd ?? process.cwd(),
+    };
+  }
+
   /** A call that billed nothing measurable: refused before running, or no result was produced. */
   private failure(
     packet: TaskPacket,
@@ -383,6 +420,7 @@ export class ClaudeAgentSdkAdapter implements ModelAdapter {
     started: number,
     error: string,
     wallet: DispatchWallet,
+    claudeSession?: ClaudeSessionFacts,
   ): ExecutionResult {
     const attempt: AttemptRecord = {
       attempt_number: 1,
@@ -394,6 +432,7 @@ export class ClaudeAgentSdkAdapter implements ModelAdapter {
       success: false,
       error,
       wallet,
+      ...(claudeSession ? { claude_session: claudeSession } : {}),
     };
     return {
       result: null,
@@ -421,8 +460,8 @@ export class ClaudeAgentSdkAdapter implements ModelAdapter {
   private async runQuery(
     prompt: string,
   ): Promise<
-    | { ok: true; result: ClaudeCliResultLike & { subtype?: string; is_error?: boolean; duration_ms?: number; duration_api_ms?: number; stop_reason?: string | null }; writes: Map<string, TranscriptModelWrites>; init: ClaudeDispatchFacts }
-    | { ok: false; error: string; init: ClaudeDispatchFacts; writes: Map<string, TranscriptModelWrites> }
+    | { ok: true; result: SdkResult; writes: Map<string, TranscriptModelWrites>; init: ClaudeDispatchFacts; session: InitSession }
+    | { ok: false; error: string; init: ClaudeDispatchFacts; writes: Map<string, TranscriptModelWrites>; session: InitSession }
   > {
     let query: AgentSdkQuery;
     try {
@@ -436,6 +475,7 @@ export class ClaudeAgentSdkAdapter implements ModelAdapter {
           `plugin/mcp/model-dispatch.`,
         init: {},
         writes: new Map(),
+        session: {},
       };
     }
 
@@ -445,6 +485,7 @@ export class ClaudeAgentSdkAdapter implements ModelAdapter {
     let lastText = "";
     let lastTextId: string | null = null;
     let init: ClaudeDispatchFacts = {};
+    let session: InitSession = {};
     const abortController = new AbortController();
     let timedOut = false;
     const timer = setTimeout(() => {
@@ -463,6 +504,10 @@ export class ClaudeAgentSdkAdapter implements ModelAdapter {
           init = {
             apiKeySource: typeof message.apiKeySource === "string" ? message.apiKeySource : undefined,
             claudeCodeVersion: typeof message.claude_code_version === "string" ? message.claude_code_version : undefined,
+          };
+          session = {
+            session_id: typeof message.session_id === "string" ? message.session_id : undefined,
+            cwd: typeof message.cwd === "string" ? message.cwd : undefined,
           };
           continue;
         }
@@ -492,7 +537,7 @@ export class ClaudeAgentSdkAdapter implements ModelAdapter {
         if (message.type === "result") {
           const result =
             typeof message.result === "string" && message.result.trim() ? message : { ...message, result: lastText };
-          return { ok: true, result: result as any, writes: acc.finish(), init };
+          return { ok: true, result: result as any, writes: acc.finish(), init, session };
         }
       }
       // The stream ended without a result message: a crash or an abort. The
@@ -504,10 +549,11 @@ export class ClaudeAgentSdkAdapter implements ModelAdapter {
           : "claude-agent-sdk stream ended with no result message",
         init,
         writes: acc.finish(),
+        session,
       };
     } catch (err: any) {
-      if (timedOut) return { ok: false, error: `claude-agent-sdk timeout after ${this.timeoutMs / 1000}s`, init, writes: acc.finish() };
-      return { ok: false, error: `claude-agent-sdk error: ${err?.message ?? err}`, init, writes: acc.finish() };
+      if (timedOut) return { ok: false, error: `claude-agent-sdk timeout after ${this.timeoutMs / 1000}s`, init, writes: acc.finish(), session };
+      return { ok: false, error: `claude-agent-sdk error: ${err?.message ?? err}`, init, writes: acc.finish(), session };
     } finally {
       clearTimeout(timer);
     }

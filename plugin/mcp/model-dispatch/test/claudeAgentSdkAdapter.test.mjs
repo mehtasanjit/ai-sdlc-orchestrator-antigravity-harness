@@ -11,6 +11,9 @@
  */
 import test from "node:test";
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 
 import { ClaudeAgentSdkAdapter, agentSdkOptions } from "../dist/adapters/ClaudeAgentSdkAdapter.js";
 import { computeCostUsd } from "../dist/pricing.js";
@@ -359,6 +362,95 @@ test("options carry a fixed session title, so the SDK makes no Haiku call to gen
   const opts = agentSdkOptions({ model_name: "claude-opus-5", reasoning: { effort: "high" } });
   assert.equal(typeof opts.title, "string");
   assert.ok(opts.title.length > 0, "an empty title would fall back to auto-generation");
+});
+
+test("options turn off session persistence, so no transcript lands under ~/.claude/projects", () => {
+  const opts = agentSdkOptions({ model_name: "claude-opus-5", reasoning: { effort: "high" } });
+  assert.equal(opts.persistSession, false);
+});
+
+/** The SDK's init frame, with the fields the adapter reads. */
+function initFrame(overrides = {}) {
+  return {
+    type: "system",
+    subtype: "init",
+    apiKeySource: "ANTHROPIC_API_KEY",
+    claude_code_version: "2.9.0",
+    session_id: "11111111-2222-3333-4444-555555555555",
+    cwd: "/work/run-dir",
+    ...overrides,
+  };
+}
+
+test("each attempt records the SDK session: id, turns, result subtype, terminal reason and cwd", async () => {
+  const adapter = new ClaudeAgentSdkAdapter(BASE_CONFIG, {
+    queryFn: fakeQuery([
+      initFrame(),
+      assistantFrame({ input_tokens: 100, output_tokens: 50 }, { stop_reason: "end_turn" }),
+      resultFrame({ terminal_reason: "completed" }),
+    ]),
+    now: NOW,
+  });
+  const out = await adapter.execute(PACKET);
+  assert.deepEqual(out.attempts[0].claude_session, {
+    session_id: "11111111-2222-3333-4444-555555555555",
+    num_turns: 1,
+    result_subtype: "success",
+    terminal_reason: "completed",
+    cwd: "/work/run-dir",
+  });
+});
+
+test("an error result keeps its subtype and terminal reason on the session record", async () => {
+  const adapter = new ClaudeAgentSdkAdapter(BASE_CONFIG, {
+    queryFn: fakeQuery([
+      initFrame(),
+      assistantFrame({ input_tokens: 100, output_tokens: 50 }, { stop_reason: "end_turn" }),
+      resultFrame({ subtype: "error_max_turns", is_error: true, result: "hit max turns", num_turns: 2, terminal_reason: "max_turns" }),
+    ]),
+    now: NOW,
+  });
+  const out = await adapter.execute(PACKET);
+  assert.equal(out.success, false);
+  const s = out.attempts[0].claude_session;
+  assert.deepEqual([s.result_subtype, s.terminal_reason, s.num_turns], ["error_max_turns", "max_turns", 2]);
+});
+
+test("a call stopped before its result keeps the init frame's session id and leaves the result facts null", async () => {
+  const adapter = new ClaudeAgentSdkAdapter(BASE_CONFIG, {
+    queryFn: fakeQuery([initFrame({ session_id: "sess-cut" }), assistantFrame({ input_tokens: 100, output_tokens: 50 })]),
+    now: NOW,
+  });
+  const out = await adapter.execute(PACKET);
+  assert.equal(out.attempts[0].usage_from_frames, true);
+  assert.deepEqual(out.attempts[0].claude_session, {
+    session_id: "sess-cut",
+    num_turns: null,
+    result_subtype: null,
+    terminal_reason: null,
+    cwd: "/work/run-dir",
+  });
+});
+
+test("with no init frame the session's cwd is the directory the adapter handed the SDK", async () => {
+  let seen;
+  const adapter = new ClaudeAgentSdkAdapter(BASE_CONFIG, {
+    queryFn: fakeQuery([], (args) => (seen = args.options.cwd)),
+    cwd: "/work/elsewhere",
+    now: NOW,
+  });
+  const out = await adapter.execute(PACKET);
+  assert.equal(seen, "/work/elsewhere");
+  assert.equal(out.attempts[0].claude_session.cwd, "/work/elsewhere");
+  assert.equal(out.attempts[0].claude_session.session_id, null);
+});
+
+test("the dispatched event copies the attempt's session record", () => {
+  const src = readFileSync(join(dirname(fileURLToPath(import.meta.url)), "..", "dist", "server.js"), "utf8");
+  const eventsIdx = src.indexOf("const events = attempts.map((att) => ({");
+  const stampIdx = src.indexOf("claude_session: att.claude_session,");
+  assert.notEqual(eventsIdx, -1);
+  assert.ok(stampIdx > eventsIdx && stampIdx - eventsIdx < 4000, "the stamp sits inside the per-attempt event");
 });
 
 test("effort is omitted when the policy sets no reasoning tier", () => {

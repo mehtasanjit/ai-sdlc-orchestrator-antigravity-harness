@@ -203,6 +203,24 @@ export interface TelemetryEvent {
    * events written before it existed and on direct-tier events.
    */
   wallet?: DispatchWallet;
+  /** Copied from the attempt (claude-agent-sdk only); see ClaudeSessionFacts. */
+  claude_session?: ClaudeSessionFacts;
+}
+
+/**
+ * The Agent SDK session a claude-agent-sdk attempt ran in. Each field is null
+ * when the stream never reported it: a call stopped before its result message
+ * has no `num_turns`, `result_subtype` or `terminal_reason`.
+ */
+export interface ClaudeSessionFacts {
+  session_id: string | null;
+  num_turns: number | null;
+  /** The result message's `subtype`: `success`, `error_max_turns`, `error_during_execution`, ... */
+  result_subtype: string | null;
+  /** The result message's `terminal_reason` (`completed`, `max_turns`, `api_error`, ...). */
+  terminal_reason: string | null;
+  /** The init frame's `cwd`, else the directory the SDK was started in (the adapter's `cwd` option, or the bridge's own). */
+  cwd: string | null;
 }
 
 /** One attempt from the output-cap doubling loop. */
@@ -286,6 +304,8 @@ export interface AttemptRecord {
    * `tokens` / `cost_usd` are the usage its assistant frames reported until then.
    */
   usage_from_frames?: boolean;
+  /** claude-agent-sdk only: the SDK session the call ran in. */
+  claude_session?: ClaudeSessionFacts;
   /** Gemini only, on a failed call: the HTTP status the vendor answered with. */
   error_status?: number;
   /** Gemini only, on a failed call: the Node/undici code of a connection that failed in transit. */
