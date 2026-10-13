@@ -203,7 +203,7 @@ export function workerLineOf(event, policy = null) {
  * "unmeasured, never free"), so the dashboard never reads the $0 as free.
  */
 export const UNMEASURED_DRIVER_BASIS =
-  "NOT MEASURED: no headless launcher record (driver-manifest.json), so no agy usage counters were captured for the conductor; the plugin reads none from an interactive session. Its tokens are in no figure — unmeasured, never free";
+  "NOT MEASURED: no headless launcher record (driver-manifest.json) and no driver-collector record (plugin/agy/collect-driver-usage.mjs reads an interactive run's calls from agy's local conversation record), so the conductor's tokens are in no figure — unmeasured, never free";
 
 export function costLines({ dispatched, modeled, policy, pin, env = process.env, login = null, wallet = claudeWallet(env, login), driverUsage = null, driverMeasured = modeled.length > 0 || driverUsage != null }) {
   const sum = (events) => ({
@@ -232,7 +232,9 @@ export function costLines({ dispatched, modeled, policy, pin, env = process.env,
       kind: "modeled",
       model: pin?.model ?? null,
       billing_mode: pin?.billing_mode ?? null,
-      basis: `MODELED from agy stream-json usage at ${driverPriceText(modeled, pin)} (${pin?.billing_mode ?? "seat"}); thinking at the output rate, cache reads at the cached rate${driverRangeNote(driverUsage)}`,
+      basis: modeled.some((e) => e.usage_source === "agy-local-record")
+        ? `MODELED from agy's local conversation record (${modeled.length} model call(s), read by plugin/agy/collect-driver-usage.mjs) at ${driverPriceText(modeled, pin)} (${pin?.billing_mode ?? "seat"}); thinking at the output rate, cache reads at the cached rate`
+        : `MODELED from agy stream-json usage at ${driverPriceText(modeled, pin)} (${pin?.billing_mode ?? "seat"}); thinking at the output rate, cache reads at the cached rate${driverRangeNote(driverUsage)}`,
       ...sum(modeled),
       thinking_tokens: modeled.reduce((s, e) => s + (e.output_tokens_reasoning ?? 0), 0),
       ...driverRange(driverUsage),
@@ -288,6 +290,8 @@ export function buildHarnessManifest({ runDir, policyName, runId, env = process.
   const telemetry = allTelemetry.filter((e) => e.pass == null || e.pass === pass);
   const modeled = allModeled.filter((e) => e.pass == null || e.pass === pass);
   const driverManifest = launcherRecord && (!launcherRecord.run_id || launcherRecord.run_id === pass) ? launcherRecord : null;
+  const collectorRecord = readJson(join(runDir, "driver-collector.json"));
+  const collector = !driverManifest && collectorRecord && (!collectorRecord.run_id || collectorRecord.run_id === pass) ? collectorRecord : null;
   const otherRuns = [...new Set([...allTelemetry, ...allModeled].map((e) => e.pass).filter((p) => p != null && p !== pass))];
   const policy_name = policyName ?? driverManifest?.policy ?? policy?.name ?? telemetry.find((e) => e.routing?.policy_name)?.routing.policy_name ?? null;
   if (!pass) throw new Error(`manifest: no run id — pass --run-id, or run the launcher so driver-manifest.json carries one (${runDir}).`);
@@ -337,6 +341,9 @@ export function buildHarnessManifest({ runDir, policyName, runId, env = process.
     ...(driverLine.resume_check ? { driver_cost_resume_check: driverLine.resume_check } : {}),
     ...(driverLine.resumed_without_earlier_record ? { driver_resumed_without_earlier_record: true } : {}),
     ...(driverLine.invocations_without_usage ? { driver_invocations_without_usage: driverLine.invocations_without_usage } : {}),
+    ...(collector ? { driver_collector: { source: collector.source, window: collector.window, conversations: collector.conversations, calls: collector.calls, fields_verified_on: collector.fields_verified_on, ...(collector.fields_unverified_for_version ? { fields_unverified_for_version: collector.fields_unverified_for_version } : {}), ...(collector.note ? { note: collector.note } : {}) } } : {}),
+    ...(collector?.reported_models ? { driver_reported_models: collector.reported_models } : {}),
+    ...(collector?.model_mismatch ? { driver_model_mismatch: collector.model_mismatch } : {}),
     ...(driverManifest && "driver_reported_models" in driverManifest ? { driver_reported_models: driverManifest.driver_reported_models } : {}),
     ...(driverManifest?.driver_model_mismatch ? { driver_model_mismatch: driverManifest.driver_model_mismatch } : {}),
     ...(driverManifest?.driver_usage?.token_readings ? { driver_token_readings: driverManifest.driver_usage.token_readings } : {}),

@@ -50,6 +50,7 @@ import { inferIntent } from "../scripts/infer-intent.mjs";
 import { isMain } from "../scripts/lib/is-main.mjs";
 import { staleBuild, staleBuildWarning } from "../scripts/lib/stale-build.mjs";
 import { finishWriteGuard, gitStatus } from "./writeGuard.mjs";
+import { agyHome, readConversationRecord } from "./telemetry/conversationUsage.mjs";
 
 const AGY_DIR = dirname(fileURLToPath(import.meta.url));
 export const PLUGIN_ROOT = dirname(AGY_DIR);
@@ -332,6 +333,25 @@ export function buildRunArtifacts({ jsonl, invocations, pin, passId, policyName,
   const reported = reportedModels(events);
   const offPin = offPinModels(reported, pin, driverSlug(pin));
   return { events, rejection, modeled, driverUsage: summary, reportedModels: reported, offPinModels: offPin };
+}
+
+/**
+ * The same conversation's usage as agy's local record holds it (check 18),
+ * beside the stream reading the driver line booked: one record, two readers.
+ * Null when the record is absent or unreadable; never changes the driver line.
+ */
+export async function crossCheckLocalRecord({ conversationId, since, modeled, home = agyHome() }) {
+  if (!conversationId) return null;
+  const path = join(home, "conversations", `${conversationId}.db`);
+  if (!existsSync(path)) return { found: false };
+  let calls;
+  try { calls = await readConversationRecord(path); } catch (err) { return { found: true, unreadable: String(err?.message ?? err) }; }
+  const inRun = calls.filter((c) => c.at && Date.parse(c.at) >= Date.parse(since) - 60_000);
+  const sum = (xs, k) => xs.reduce((s, x) => s + (x[k] ?? 0), 0);
+  const record = { input: sum(inRun, "fresh") + sum(inRun, "cached"), input_cached: sum(inRun, "cached"), output: sum(inRun, "output"), thinking: sum(inRun, "thinking") };
+  const stream = { input: sum(modeled, "input_tokens") + sum(modeled, "input_tokens_cached"), input_cached: sum(modeled, "input_tokens_cached"), output: sum(modeled, "output_tokens"), thinking: sum(modeled, "output_tokens_reasoning") };
+  const close = (a, b) => Math.abs(a - b) <= Math.max(0.01 * Math.max(a, b), 1);
+  return { found: true, calls: inRun.length, record, stream, agrees: Object.keys(record).every((k) => close(record[k], stream[k])) };
 }
 
 /** A stream with a guaranteed trailing newline, so concatenated invocations never share a line. */
@@ -636,6 +656,14 @@ async function main(args) {
       modeled.map((e) => JSON.stringify(e)).join("\n") + (modeled.length ? "\n" : ""),
       "utf-8",
     );
+    const localRecord = await crossCheckLocalRecord({ conversationId, since: started, modeled });
+    if (localRecord?.found && localRecord.agrees === false) {
+      console.error(
+        `run ${runId}: agy's local conversation record and the stream disagree on the driver's tokens ` +
+          `(record ${JSON.stringify(localRecord.record)}, stream ${JSON.stringify(localRecord.stream)}); see driver_usage.local_record.`,
+      );
+    }
+    if (localRecord) usageSummary.local_record = localRecord;
     if (offPin.length) {
       console.error(`run ${runId}: agy reported driver model(s) ${offPin.join(", ")}, not the pinned ${slug} — the run is not on the pinned driver.`);
     }

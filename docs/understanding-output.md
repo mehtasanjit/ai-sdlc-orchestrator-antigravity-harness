@@ -5,7 +5,7 @@
 After a run finishes, the record lives in the run's own folder, `.sdlc/runs/<run-id>/`: `run.mjs`'s default `--output-dir`, `/mmo:greenfield` (`<YYYYMMDD-HHMMSS>-greenfield`), and every brownfield entry (`<YYYYMMDD-HHMMSS>-<intent>-<slug>`). The manifest and the report book only the run's own lines (`pass`), so a folder reused across runs never adds one run's cost to another's; `harness.other_runs_in_directory` names the other runs found there. Two files carry the money, and they are kept apart on purpose:
 
 - `telemetry.jsonl` — one JSON object per line, one line per **dispatched** model call: everything that went through the bridge. Vendor-metered. Real usage, and on a key or a GCP project, real money.
-- `driver-cost-modeled.jsonl` — one line per conductor turn, priced from agy's stream-json `usage` at the policy's driver card. **Modeled.** A Google seat has no per-token invoice, so this figure is what the tokens *would* cost at the published rate, not what anyone was billed. Headless runs only — an interactive session exposes no `usage` counters to the plugin, so an interactive run's manifest carries the driver line as `kind: "unmeasured"`: $0 with a `NOT MEASURED` basis and `cost.driver_measured: false`, never a modeled $0.
+- `driver-cost-modeled.jsonl` — one line per conductor turn, priced through the dated price list. **Modeled.** A Google seat has no per-token invoice, so this figure is what the tokens *would* cost at the published rate, not what anyone was billed. A headless run writes it from agy's stream-json `usage`; an interactive run from agy's local conversation record, through `plugin/agy/collect-driver-usage.mjs` (its lines carry `usage_source: "agy-local-record"`, and `driver-collector.json` holds the evidence). An interactive run that never ran the collector carries the driver line as `kind: "unmeasured"`: $0 with a `NOT MEASURED` basis and `cost.driver_measured: false`, never a modeled $0.
 
 Around them:
 
@@ -196,6 +196,7 @@ Same line shape as telemetry, so the two files can be concatenated for analysis 
 | `token_readings` | How many results were booked under each `token_reading (token_reading_check)` |
 | `results_with_unproven_reading` | Results whose check is not `adds_up`; booked at the dearer reading |
 | `price_warnings` | The driver block's card differs from the dated list for a day the run spent on; the list was used |
+| `local_record` | The same conversation as agy's local record holds it ([check 18](verification/p1-agy-runtime.md)): `record` and `stream` token totals side by side, and `agrees` (within 1%). `found: false` when the record is not on this machine |
 
 `driver-manifest.json` also records `driver_reported_models` (every model name any agy event carried; empty when agy names none, which proves nothing either way), `driver_model_mismatch` (reported names that are neither the pinned model nor its slug: the run was not on the pin), and `bridge_build` (`stale: true` when the bridge's `dist/` was older than its `src/`).
 

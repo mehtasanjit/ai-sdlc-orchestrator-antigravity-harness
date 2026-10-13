@@ -366,8 +366,8 @@ if (asMarkdown) {
   p(driverNotMeasured ? `## Driver loop — not measured` : `## Driver loop — modeled, not measured`);
   p();
   if (driverNotMeasured) {
-    p(`**Not measured.** No headless launcher record (\`driver-manifest.json\`), so no agy usage counters were captured for the`);
-    p(`conductor; the plugin reads none from an interactive session. Its tokens are in no figure. Unmeasured, never free.`);
+    p(`**Not measured.** No headless launcher record (\`driver-manifest.json\`) and no \`driver-collector.json\`: run`);
+    p(`\`node plugin/agy/collect-driver-usage.mjs <run-dir>\` to read an interactive run's calls from agy's local record. Unmeasured, never free.`);
   } else {
     if (modeledEvents.length === 0) {
       p(`_No driver turns recorded._`);
@@ -390,9 +390,9 @@ if (asMarkdown) {
   p(driverNotMeasured ? `  Driver loop — not measured` : `  Driver loop — modeled, not measured`);
   p();
   if (driverNotMeasured) {
-    p(`  NOT MEASURED. No headless launcher record (driver-manifest.json), so no agy`);
-    p(`  usage counters were captured for the conductor; the plugin reads none from an`);
-    p(`  interactive session. Its tokens are in no figure. Unmeasured, never free.`);
+    p(`  NOT MEASURED. No headless launcher record (driver-manifest.json) and no`);
+    p(`  driver-collector.json: run node plugin/agy/collect-driver-usage.mjs <run-dir>`);
+    p(`  to read an interactive run's calls from agy's local record. Unmeasured, never free.`);
   } else {
     if (modeledEvents.length === 0) {
       p(`  No driver turns recorded.`);

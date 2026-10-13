@@ -356,11 +356,15 @@ needs to tell this run's changes from a later run's.
 **`manifest.json` is written by code, never by you, and it comes first.** `SUMMARY.md` copies its
 cost lines; it never computes them.
 
-1. **Interactive: run the manifest before you write `SUMMARY.md`.**
+1. **Interactive: collect your own usage, then run the manifest, before you write `SUMMARY.md`.**
 
    ```
+   node "${MMO_PLUGIN_ROOT}/agy/collect-driver-usage.mjs" "<output_dir>" --run-id=<run_id> --project-root="<project_root>"
    node "${MMO_PLUGIN_ROOT}/agy/manifest.mjs" "<output_dir>" --policy=<policy> --run-id=<run_id>
    ```
+
+   The first reads this session's model calls from agy's local conversation record and writes the
+   modeled driver line; without it the driver line is `NOT MEASURED`.
 
    It writes `manifest.json` and prints one labelled line per wallet, for example
    `gemini workers cash $0.59569 · claude worker modeled $5.600058 · driver NOT MEASURED`.
@@ -380,7 +384,8 @@ cost lines; it never computes them.
    - Links to the key artifacts.
 
 Your own loop cost is not yours to compute. Headless runs get a modeled driver line from the
-launcher; interactive runs carry the driver as `NOT MEASURED` (see the telemetry contract below).
+launcher; interactive runs get it from `collect-driver-usage.mjs`, and carry the driver as
+`NOT MEASURED` only when that found nothing.
 
 ---
 
@@ -602,8 +607,8 @@ node "${MMO_PLUGIN_ROOT}/agy/dispatch.mjs" \
 
 These carry `provenance: "none"` and all-zero tokens. That is not an estimate — it is the fact
 that no model call was made. Where such work did consume tokens, they were yours. A headless run
-counts them on the modeled driver line. An interactive run measures no driver usage at all (its
-manifest marks the driver line `NOT MEASURED`), so there they are in no figure. Either way the
+counts them on the modeled driver line; an interactive run counts them there too once
+`collect-driver-usage.mjs` has read agy's local record, and otherwise has them in no figure. Either way the
 row and its `--reason` string are the only record that the work happened and that you did it.
 
 **What is never in-session.** Packet planning (Phase 4) and the senior review's refinement
