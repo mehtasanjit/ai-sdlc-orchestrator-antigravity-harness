@@ -321,3 +321,84 @@ test("the adapter is reachable through the registry under its policy id", async 
   assert.equal(built.id, BASE_CONFIG.id);
   assert.equal(built.modelConfig.adapter, "claude-agent-sdk");
 });
+
+function textFrame(text, id) {
+  return { type: "assistant", parent_tool_use_id: null, message: { id, model: "claude-sonnet-5", content: [{ type: "text", text }] } };
+}
+
+test("narration from earlier turns never leaks into the result the SDK returned", async () => {
+  const adapter = new ClaudeAgentSdkAdapter(BASE_CONFIG, {
+    queryFn: fakeQuery([
+      textFrame("I'll read the schema first.", "msg_1"),
+      textFrame('{"ok":true}', "msg_2"),
+      resultFrame({ num_turns: 2 }),
+    ]),
+    now: NOW,
+  });
+  const out = await adapter.execute(PACKET);
+
+  assert.equal(out.success, true);
+  assert.deepEqual(out.result, { ok: true });
+});
+
+test("an empty result falls back to the last message's text, joined across its frames", async () => {
+  const adapter = new ClaudeAgentSdkAdapter(BASE_CONFIG, {
+    queryFn: fakeQuery([
+      textFrame("I'll read the schema first.", "msg_1"),
+      textFrame('{"ok":', "msg_2"),
+      textFrame("true}", "msg_2"),
+      resultFrame({ result: "", num_turns: 2 }),
+    ]),
+    now: NOW,
+  });
+  const out = await adapter.execute(PACKET);
+
+  assert.deepEqual(out.result, { ok: true });
+});
+
+test("JSON wrapped in a code fence is parsed", async () => {
+  const adapter = new ClaudeAgentSdkAdapter(BASE_CONFIG, {
+    queryFn: fakeQuery([resultFrame({ result: '```json\n{"ok":true}\n```' })]),
+    now: NOW,
+  });
+  const out = await adapter.execute(PACKET);
+
+  assert.deepEqual(out.result, { ok: true });
+});
+
+test("text that is not JSON is kept verbatim under raw", async () => {
+  const adapter = new ClaudeAgentSdkAdapter(BASE_CONFIG, {
+    queryFn: fakeQuery([resultFrame({ result: "Done. The handler returns ok." })]),
+    now: NOW,
+  });
+  const out = await adapter.execute(PACKET);
+
+  assert.equal(out.success, true);
+  assert.deepEqual(out.result, { raw: "Done. The handler returns ok." });
+});
+
+/** A query that yields nothing until the adapter aborts it. */
+function hangingQuery() {
+  return ({ options }) =>
+    (async function* () {
+      await new Promise((resolve) => options.abortController.signal.addEventListener("abort", resolve));
+    })();
+}
+
+test("the policy's worker_timeout_sec sets the deadline when no option overrides it", async () => {
+  const adapter = new ClaudeAgentSdkAdapter({ ...BASE_CONFIG, worker_timeout_sec: 0.05 }, { queryFn: hangingQuery(), now: NOW });
+  const out = await adapter.execute(PACKET);
+
+  assert.equal(out.success, false);
+  assert.match(out.error, /timeout after 0\.05s/);
+});
+
+test("an explicit timeoutSec option wins over the policy's worker_timeout_sec", async () => {
+  const adapter = new ClaudeAgentSdkAdapter(
+    { ...BASE_CONFIG, worker_timeout_sec: 600 },
+    { queryFn: hangingQuery(), timeoutSec: 0.05, now: NOW },
+  );
+  const out = await adapter.execute(PACKET);
+
+  assert.match(out.error, /timeout after 0\.05s/);
+});

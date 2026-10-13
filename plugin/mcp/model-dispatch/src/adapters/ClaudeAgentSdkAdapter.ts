@@ -50,7 +50,7 @@ import {
   type WorkerLedger,
 } from "./claudeCliLedger.js";
 
-const DEFAULT_TIMEOUT_SEC = 300;
+export const DEFAULT_AGENT_SDK_TIMEOUT_SEC = 1800;
 
 /**
  * The slice of the SDK's surface this adapter uses. Declared structurally
@@ -152,7 +152,7 @@ export class ClaudeAgentSdkAdapter implements ModelAdapter {
     this.id = config.id;
     this.modelConfig = config;
     this.queryFn = options.queryFn;
-    this.timeoutMs = (options.timeoutSec ?? DEFAULT_TIMEOUT_SEC) * 1000;
+    this.timeoutMs = (options.timeoutSec ?? config.worker_timeout_sec ?? DEFAULT_AGENT_SDK_TIMEOUT_SEC) * 1000;
     this.cwd = options.cwd;
     this.env = options.env ?? process.env;
     this.pricer = new DispatchPricer(config, options.now ?? systemClock);
@@ -253,7 +253,12 @@ export class ClaudeAgentSdkAdapter implements ModelAdapter {
     try {
       parsed = JSON.parse(text);
     } catch {
-      parsed = { raw: text };
+      const stripped = text.replace(/^```[a-zA-Z0-9_-]*\r?\n([\s\S]*?)\r?\n```$/, "$1").trim();
+      try {
+        parsed = JSON.parse(stripped);
+      } catch {
+        parsed = { raw: text };
+      }
     }
 
     return {
@@ -370,6 +375,10 @@ export class ClaudeAgentSdkAdapter implements ModelAdapter {
     }
 
     const acc = new ModelWriteAccumulator();
+    // Fallback only for a result frame with no text. Concatenating every turn
+    // would prepend tool-loop narration to the final JSON and break parsing.
+    let lastText = "";
+    let lastTextId: string | null = null;
     let init: ClaudeDispatchFacts = {};
     const abortController = new AbortController();
     let timedOut = false;
@@ -394,6 +403,17 @@ export class ClaudeAgentSdkAdapter implements ModelAdapter {
         }
         if (message.type === "assistant") {
           const msg = message.message;
+          const frameText = Array.isArray(msg?.content)
+            ? msg.content
+                .filter((part: any) => part?.type === "text" && typeof part.text === "string")
+                .map((part: any) => part.text)
+                .join("")
+            : "";
+          if (frameText) {
+            const id = typeof msg.id === "string" ? msg.id : null;
+            lastText = id !== null && id === lastTextId ? lastText + frameText : frameText;
+            lastTextId = id;
+          }
           const usage = msg?.usage;
           if (!usage || msg.model === "<synthetic>") continue;
           acc.add(
@@ -405,7 +425,9 @@ export class ClaudeAgentSdkAdapter implements ModelAdapter {
           continue;
         }
         if (message.type === "result") {
-          return { ok: true, result: message as any, writes: acc.finish(), init };
+          const result =
+            typeof message.result === "string" && message.result.trim() ? message : { ...message, result: lastText };
+          return { ok: true, result: result as any, writes: acc.finish(), init };
         }
       }
       // The stream ended without a result message: a crash or an abort. Either
