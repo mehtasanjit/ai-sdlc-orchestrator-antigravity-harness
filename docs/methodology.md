@@ -158,6 +158,21 @@ The pricing preflight (`preflight_dispatch` with `auth_mode: vendor`, Rule 0 in 
 
 ## Version notes
 
+### 0.2.0
+
+| Area | Before | From 0.2.0 |
+|---|---|---|
+| Driver tokens | `input_tokens` taken as holding `cache_read_tokens`, thinking added to output, for every result | Each result booked under the layout whose parts sum to agy's `total_tokens`; unproven results at the dearest layout, flagged |
+| Driver price | The `driver:` block's card, whatever the day | The dated price list on the day each agy process started; the block is checked against it. A run on or after 1 Jan 2027 bills Gemini 3.8 Flash's next card |
+| Interactive driver | `NOT MEASURED` | Modeled from agy's local conversation record (`collect-driver-usage.mjs`, check 18) |
+| Run scope | Every line in the output directory, every run's | The run's own lines (`pass`); one folder per run by default; the cost cap per run |
+| Opus timeout | $0 booked; 300 s default | The usage the stream reported before the stop; 1,740 s default |
+| Gemini vendor error | The prompt billed as input | $0 when Google answered with an error status or the request never left the machine |
+| Agent-door input (SDK 0.1.16) | Fresh input floored to 0 | Fresh input = `prompt_token_count`, by SDK version |
+| Pre-check smoke | Opus, unrecorded | Gemini Flash, on the run's Gemini line |
+
+Figures that move on the same tokens: a driver result whose total says the cache reads sit outside `input_tokens` (the stub's 1,650-token example) rises by the cache reads at the fresh rate; an Opus call stopped by a timeout rises from $0 to its frames' cost; a 4xx/5xx Gemini attempt falls to $0. Telemetry written by 0.1.0 keeps its figures; rebuild a manifest with `node plugin/agy/manifest.mjs <run-dir>` to apply the run-scope filter to it.
+
 ### 0.1.0
 
 First harness version. The three-line cost model, the driver pin in the policy's `driver:` block, vendor-only auth mode, the code-written manifest, and the offline smoke run against the stub `agy` under `tools/test/fixtures/fake-agy/`. No measured run has been published; every figure the stub emits is labeled modeled and is not a measurement.
