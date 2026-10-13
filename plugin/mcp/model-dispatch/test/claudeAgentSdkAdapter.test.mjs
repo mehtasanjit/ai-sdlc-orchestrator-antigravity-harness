@@ -355,6 +355,12 @@ test("no output cap reaches the SDK, so the attempt claims no ceiling and keeps 
   assert.equal(refused.attempts[0].budget_declared, PACKET.budget.maxOutputTokens);
 });
 
+test("options carry a fixed session title, so the SDK makes no Haiku call to generate one", () => {
+  const opts = agentSdkOptions({ model_name: "claude-opus-5", reasoning: { effort: "high" } });
+  assert.equal(typeof opts.title, "string");
+  assert.ok(opts.title.length > 0, "an empty title would fall back to auto-generation");
+});
+
 test("effort is omitted when the policy sets no reasoning tier", () => {
   // Haiku 4.5 rejects an effort level, so the policy leaves `reasoning` off.
   const opts = agentSdkOptions({ model_name: "claude-haiku-4-5" });

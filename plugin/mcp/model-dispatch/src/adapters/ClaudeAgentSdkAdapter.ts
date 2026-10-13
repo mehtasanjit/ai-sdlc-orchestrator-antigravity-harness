@@ -107,6 +107,10 @@ interface ClaudeAgentSdkOptions {
  * intentional difference — it removes a confound from the measurement rather
  * than adding one.
  *
+ * `title` is set because without it the SDK generates a session title from
+ * the first user message on a side call to Haiku: the whole prompt in, a few
+ * tokens out, once per dispatch, on a model the policy never named.
+ *
  * `env` is deliberately never set: the SDK REPLACES the subprocess
  * environment when it is, rather than merging, and inheriting is exactly how
  * this adapter reaches all three Claude wallets (key, Vertex, seat) without
@@ -127,6 +131,7 @@ export function agentSdkOptions(
     maxTurns: 1,
     tools: [],
     settingSources: [],
+    title: "mmo dispatch",
   };
   const effort = config.reasoning?.effort;
   // Haiku 4.5 rejects an effort level; the policy omits `reasoning` there.
