@@ -206,24 +206,38 @@ Same line shape as telemetry, so the two files can be concatenated for analysis 
 
 The dispatched rollup, then three blocks this harness adds.
 
-**Dispatched rollup** — `total_cost_usd`, `total_input_tokens`, `total_input_tokens_cached`, `total_input_tokens_cache_write`, `total_output_tokens`, `model_breakdown`, `phase_breakdown` (with `by_model` inside each phase), `module_breakdown`, `task_type_breakdown`, `duration_sec`, `pass`, `policy_name`. Dispatched work only, always.
+**Dispatched rollup** — `total_cost_usd`, `total_input_tokens`, `total_input_tokens_cached`, `total_input_tokens_cache_write`, `total_output_tokens`, `model_breakdown`, `phase_breakdown` (with `by_model` inside each phase), `module_breakdown`, `task_type_breakdown`, `pass`, `policy_name`. Dispatched work only, always.
+
+**Run window** — `started_at`, `ended_at` and `duration_sec` are the session window's, which can be longer than the dispatches'.
+
+| Field | Meaning |
+|---|---|
+| `session_window` | `{start, end, duration_sec, anchor, exact}`. `anchor` is `launcher` (headless: `driver-manifest.json`), `markers` (the run's `run.start` and `run.end` lines in `orchestrator.log`), `markers+dispatches` (one marker missing; that end is the first or last dispatch), `dispatches` (no marker), or `none`. `exact` is `true` only for `launcher` and `markers`; otherwise the window is a lower bound |
+| `dispatch_window` | `{start, end, duration_sec, basis}` from the completion stamps of the first and last dispatched event. `null` with no dispatches |
 
 **`harness`**
 
 | Field | Meaning |
 |---|---|
 | `name`, `kind`, `runtime` | `antigravity`, `sdlc`, and `{ name: "antigravity-cli", version }` as reported by the binary |
+| `schema` | The manifest layout's version. `2` adds `session_window`, `dispatch_window`, `status`, `gate_mode`, and `gates` as decisions |
 | `auth_mode` | `vendor` — the only mode this runtime accepts |
 | `provider_source` | Where each leg's dollars come from: `driver` (`google-seat` or `gemini-api-key`), `claude` (`anthropic-api`, `vertex`, `claude-seat` or `mixed`), `gemini` (the Gemini line's `wallet`) |
 | `arm` | The Claude line's arm: `A` (Anthropic key), `B` (Vertex), `seat` (Claude Code signed in to claude.ai), `mixed`, or `null` when no Claude call ran or no wallet could be named |
 | `pin` | `model`, `effort`, `slug`, `billing_mode`, `verified`, `pending_checks` — the driver pin `run.mjs` asserted, and whether every check it depends on has passed live |
 | `delegated` | Whether any packet went to the agent worker |
-| `cable` | One-paragraph description of the wiring: driver runtime and models, driver auth, worker models, `claude_worker_auth` (names the arm, the GCP project and region on arm B, or the seat), `summary` (each worker model and the adapter its events recorded, or `adapter not recorded`) |
+| `cable` | One-paragraph description of the wiring: driver runtime and models, driver auth, worker models, `claude_worker_auth` (names the arm, the GCP project and region on arm B, or the seat), `summary` (each worker model and the adapter its events recorded, or `adapter not recorded`). The studies console renders these display strings verbatim: `driver_display`, `worker_sdk` (`model-dispatch`), `worker_sdk_label`, `worker_display`, `worker_transport` (each worker line's wallet), `handoff_note`, `driver_cost_note` (modeled, or unmeasured and not free) and `billing_note` |
+| `worker_cost_usd`, `worker_cost_usd_modeled`, `worker_cost_basis` | The worker lines of `cost.lines` split by kind: cash a vendor invoices, and Claude seat calls priced at the Anthropic card. A `mixed` Claude line splits at its seat share; an `unclassified` line counts as cash. Neither includes the driver |
+| `driver_work` | The driver line in the console's units: `turns`, `input_tokens` (the whole prompt: fresh input plus cache reads), `input_tokens_cached`, `output_tokens` (thinking included), `thinking_tokens`, `what_it_spent_on`. Absent while the driver is unmeasured or reported no usage |
 | `driver_cost_usd`, `driver_cost_basis`, `driver_turns`, `agy_invocations` | The modeled driver figure and the sentence that says how it was derived; how many turns and how many `agy --print` invocations (the resume loop) |
 | `driver_cost_usd_low`, `driver_cost_resume_check` | Present while check 16 is pending on a resumed run: the lower bound of the driver range; `driver_cost_usd` is the per-invocation reading |
 | `driver_resumed_without_earlier_record` | This launch resumed a conversation without the earlier launch's record; check 16 decides whether its first counters include that launch |
 | `driver_invocations_without_usage` | `agy --print` processes that reported no usage (no `result` event, or only an all-zero error result); the true driver figure may be higher |
-| `completed`, `gates`, `pin_rejection` | Whether `SUMMARY.md` appeared; the gate mode; the stderr line if agy refused the pinned model |
+| `completed` | Headless: whether `SUMMARY.md` appeared during the run (the launcher's verdict). Interactive: `SUMMARY.md` written during the run and Gate 4's last line in `gates.jsonl` accepted |
+| `status` | `interrupted` (headless, stopped by a signal), `aborted` (a gate's last decision, or `run.end`'s `outcome`, is an abort), `completed`, `awaiting_acceptance` (`SUMMARY.md` exists, Gate 4 not accepted yet), or `incomplete` |
+| `gate_mode` | `auto-approve` or `auto-abort` on a headless run; `prompt` on an interactive one |
+| `gates` | One `{gate, decision, artifact?, ts?}` per line of `gates.jsonl`, in file order; `null` when the file is absent |
+| `pin_rejection` | The stderr line if agy refused the pinned model |
 | `unrecorded_phases` | Judgment phases the run went through that left no telemetry row at all — neither a dispatch nor a `provenance: "none"` row. See [methodology.md](methodology.md#vendor-mode-is-the-only-mode) |
 | `conductor_edits` | Per planned `artifact_path`, whether the final file differs from the last worker result for it (`edited`, `unchanged`, `unknown` counts, `files[]`), and `unplanned` files no packet targets. `null` when the run folder cannot tell |
 | `written_by`, `written_at` | `plugin/agy/manifest.mjs` and when |

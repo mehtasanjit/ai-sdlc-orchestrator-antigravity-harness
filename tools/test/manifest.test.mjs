@@ -67,7 +67,7 @@ test("buildHarnessManifest keeps the bridge's shape and adds the harness block",
     assert.equal(m.harness.pin.slug, "gemini-3.8-flash-high");
     assert.equal(m.harness.pin.verified, false);
     assert.equal(m.harness.completed, true);
-    assert.equal(m.harness.gates, "auto-approve");
+    assert.equal(m.harness.gate_mode, "auto-approve");
     assert.match(m.harness.driver_cost_basis, /^MODELED/, "the console keys its caption on this prefix");
     assert.equal(m.harness.driver_cost_usd, 0.001418);
     assert.equal(m.harness.written_by, "plugin/agy/manifest.mjs");

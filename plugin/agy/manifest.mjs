@@ -32,9 +32,13 @@ import { readPin, driverSlug, pendingPinChecks } from "./telemetry/fairnessPin.m
 import { driverRange, driverRangeNote, driverRangeNotes } from "./telemetry/driverRange.mjs";
 import { isMain } from "../scripts/lib/is-main.mjs";
 import { conductorWork } from "./telemetry/conductorWork.mjs";
+import { inferRunId, readGates, readRunMarkers, runOutcome, sessionWindow } from "./telemetry/runWindow.mjs";
+import { studiesConsoleFields } from "./telemetry/consoleFields.mjs";
 
 export const HARNESS_NAME = "antigravity";
 export const RUNTIME_NAME = "antigravity-cli";
+// 2: session_window, dispatch_window, harness.status, harness.gate_mode, harness.gates as gates.jsonl lines.
+export const MANIFEST_SCHEMA = 2;
 
 export function readJsonl(path) {
   if (!existsSync(path)) return [];
@@ -282,7 +286,7 @@ export function buildHarnessManifest({ runDir, policyName, runId, env = process.
   const snapshotPath = join(runDir, "policy_snapshot.yaml");
   const policy = existsSync(snapshotPath) ? parseYaml(readFileSync(snapshotPath, "utf8")) : null;
 
-  const pass = runId ?? launcherRecord?.run_id ?? allTelemetry.find((e) => e.pass)?.pass ?? null;
+  const pass = runId ?? launcherRecord?.run_id ?? inferRunId(runDir, allTelemetry);
   // An output directory reused across runs holds every run's lines: only this
   // run's count. A row with no run id (a zero-cost --log-phase row written
   // without --run-id) is kept, since it carries no dollars. The launcher's
@@ -302,11 +306,18 @@ export function buildHarnessManifest({ runDir, policyName, runId, env = process.
 
   const dispatched = telemetry.filter((e) => e.tier !== "orchestrator");
   const base = buildManifest(dispatched, { pass, policy_name });
-  if (driverManifest?.started_at) base.started_at = driverManifest.started_at;
-  if (driverManifest?.ended_at) base.ended_at = driverManifest.ended_at;
-  if (driverManifest?.started_at && driverManifest?.ended_at) {
-    base.duration_sec = Math.max(1, Math.round((Date.parse(base.ended_at) - Date.parse(base.started_at)) / 1000));
+  const markers = readRunMarkers(runDir, pass);
+  base.dispatch_window = dispatched.length
+    ? { start: base.started_at, end: base.ended_at, duration_sec: base.duration_sec, basis: "completion stamps (ts) of the first and last dispatched event" }
+    : null;
+  base.session_window = sessionWindow({ launcher: driverManifest, markers, dispatch: base.dispatch_window });
+  if (base.session_window.duration_sec != null) {
+    base.started_at = base.session_window.start;
+    base.ended_at = base.session_window.end;
+    base.duration_sec = Math.max(1, base.session_window.duration_sec);
   }
+  const gates = readGates(runDir);
+  const outcome = runOutcome({ runDir, gates, launcher: driverManifest, markers, since: markers.start ?? driverManifest?.started_at ?? null });
 
   let pin = null;
   try { pin = policy ? readPin(policy) : null; } catch { pin = null; }
@@ -318,6 +329,7 @@ export function buildHarnessManifest({ runDir, policyName, runId, env = process.
 
   const harness = {
     name: HARNESS_NAME,
+    schema: MANIFEST_SCHEMA,
     kind: "sdlc",
     runtime: { name: RUNTIME_NAME, version: version ?? driverManifest?.agy_version ?? null },
     auth_mode: "vendor",
@@ -354,17 +366,22 @@ export function buildHarnessManifest({ runDir, policyName, runId, env = process.
     ...(driverManifest?.driver_usage?.price_warnings ? { driver_price_warnings: driverManifest.driver_usage.price_warnings } : {}),
     ...(driverManifest?.bridge_build?.stale ? { bridge_build_stale: driverManifest.bridge_build.files } : {}),
     agy_invocations: driverManifest?.agy_invocations ?? null,
-    completed: driverManifest?.completed ?? null,
+    completed: outcome.completed,
+    status: outcome.status,
     write_guard: driverManifest
       ? (driverManifest.write_guard ?? { state: "off", reason: "headless run recorded before write_guard existed; agy print mode loads no hooks" })
       : { state: "hook", reason: "interactive session: plugin/agy/hooks/write-contract-check.mjs runs before every file write (plugin/hooks.json)" },
-    gates: driverManifest?.gates ?? null,
+    gate_mode: driverManifest ? driverManifest.gates ?? null : "prompt",
+    gates,
     pin_rejection: driverManifest?.pin_rejection ?? null,
-    ...conductorWork({ runDir, telemetry: dispatched, mode: driverManifest?.mode, completed: driverManifest?.completed }),
+    ...conductorWork({ runDir, telemetry: dispatched, mode: driverManifest?.mode, completed: outcome.completed }),
     ...(otherRuns.length ? { other_runs_in_directory: otherRuns } : {}),
     written_by: "plugin/agy/manifest.mjs",
     written_at: now(),
   };
+  const forConsole = studiesConsoleFields({ lines, dispatched, pin: harness.pin, harness });
+  Object.assign(harness.cable, forConsole.cable);
+  Object.assign(harness, forConsole.harness);
 
   const usage = {
     dispatched: {
