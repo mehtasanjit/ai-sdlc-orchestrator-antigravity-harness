@@ -97,7 +97,7 @@ node plugin/agy/manifest.mjs ../first-run/.sdlc --policy=antigravity-flash38-plu
 What you are looking at:
 
 - **Cost lines — never summed** — `gemini workers`, `claude worker` and `driver`, each with its kind, and a **Cash** figure made of the cash lines only. On the seat the Opus tokens are real and the dollars are modeled, so the `claude worker` line reads `modeled` and stays out of **Cash**.
-- **Dispatched work — by phase** — one named row per phase, tokens in / out, and the phase's dollars split into **Cash** and, on the seat, **Modeled**. The judgment rows ran on Opus 5 through `claude -p`; the mechanical rows on Gemini 3.8 Flash.
+- **Dispatched work — by phase** — one named row per phase, tokens in / out, and the phase's dollars split into **Cash** and, on the seat, **Modeled**. The judgment rows ran on Opus 5 through the Claude Agent SDK; the mechanical rows on Gemini 3.8 Flash.
 - **Driver loop — modeled, not measured** — on an interactive run this section reads **NOT MEASURED**, because agy exposes no `usage` counters to a plugin. Headless runs through `run.mjs` fill it.
 - **`manifest.json` → `cost.lines`** — the three lines, each with `kind: "cash"`, `"modeled"` or, for an interactive run's driver, `"unmeasured"`, and the note that they are not summed.
 

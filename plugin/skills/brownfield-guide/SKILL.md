@@ -242,6 +242,9 @@ template from [plugin/skills/pipeline/SKILL.md](/plugin/skills/pipeline/SKILL.md
   it is null, setup was not completed for this project — abort Gate 0 and tell the user to
   run setup first (see [SETUP.md](/SETUP.md) §5 — the one setup step that opens a browser
   for the policy console). Do not silently default and do not launch the console from here.
+  On a headless launch the conductor prompt names the policy the launcher resolved (it already
+  read `routing-policy.yaml`, `--policy` and `project.json` in the bridge's order): use that one,
+  and do not abort for a missing `default_policy`.
   Otherwise show the resolved name; accept, or accept an on-disk policy name for this run only
   (one saved from the policy console) — a per-run override does not overwrite the project default.
 - **Existing AI setup** — verbatim list from `baseline.ai_configs_detected`. Default is

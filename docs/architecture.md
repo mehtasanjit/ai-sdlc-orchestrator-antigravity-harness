@@ -16,7 +16,7 @@ agy --print <conductor.md> --output-format stream-json --model gemini-3.8-flash-
   ▼
 model-dispatch (MCP, stdio)             ← execute_with_model / preflight_dispatch / load_policy / …
   │  policy rules → adapter → model; appends telemetry.jsonl
-  ├─ claude-cli  → claude -p --model claude-opus-5 --effort high     (judgment phases; arm A key or arm B Vertex)
+  ├─ claude-agent-sdk → Claude Agent SDK, in-process → claude-opus-5, effort high  (judgment phases; arm A key, arm B Vertex, or the claude.ai seat)
   └─ mcp:model-dispatch → Gemini 3.8 Flash (flash-completion)      (mechanical phases)
        or antigravity-worker → Antigravity SDK agent on Vertex ADC
   ▼
@@ -43,9 +43,9 @@ plugin/agy/manifest.mjs builds manifest.json from telemetry.jsonl + the driver f
 
 | Line | Source | Kind |
 |---|---|---|
-| Driver (Gemini on agy) | stream-json `usage` × the policy's `driver.pricing` card. Thinking at the output rate, `cache_read_tokens` at the cached rate | modeled |
+| Driver (Gemini on agy) | Headless: stream-json `usage`; interactive: agy's local conversation record (`collect-driver-usage.mjs`). Priced at the dated list; thinking at the output rate, cache reads at the cached rate | modeled |
 | Gemini workers | bridge `telemetry.jsonl` | cash (API key or Vertex) |
-| Opus 5 | bridge `telemetry.jsonl`, from the `claude -p` result | cash (Anthropic on arm A, GCP on arm B) |
+| Opus 5 | bridge `telemetry.jsonl`, from the Claude Agent SDK's result (`claude-agent-sdk` adapter) | cash (Anthropic on arm A, GCP on arm B); modeled on the seat |
 
 The modeled line lives in `driver-cost-modeled.jsonl` with `tier: "orchestrator"` and `provenance: "modeled"`, so `buildManifest` partitions it out of dispatched sums if the two files are ever concatenated. Nothing adds modeled and cash dollars into one figure.
 

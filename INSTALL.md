@@ -9,7 +9,7 @@ Steps from "Set up this plugin from this repo" to a project in which `agy` disco
 | Node.js ≥ 22.19 | `node --version` | https://nodejs.org |
 | Antigravity CLI `agy` ≥ 1.2.3 | `agy --version` | `curl -fsSL https://antigravity.google/cli/install.sh \| bash` → `~/.local/bin/agy`; open a new shell |
 | Google Sign-In for agy | `agy models` lists models | run `agy` once with no arguments and finish the browser flow. A person does this; do not attempt it headlessly |
-| Claude Code (the Opus worker) | `claude --version` | https://code.claude.com/docs — the `claude-cli` adapter spawns `claude -p` |
+| Claude Code (the Opus worker) | `claude --version` | https://code.claude.com/docs — its sign-in is the seat wallet; the `claude-agent-sdk` adapter runs Claude Code through the Agent SDK |
 | git | `git --version` | — |
 
 ## 2. Clone the harness beside the project

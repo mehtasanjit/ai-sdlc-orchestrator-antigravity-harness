@@ -32,7 +32,7 @@ node plugin/agy/run.mjs \
 | `--code-dir` | `<project-root>/src`; the project root with `--mode=brownfield` | Where the application is written |
 | `--policy` | `.sdlc/project.json` → `default_policy`, else `antigravity-flash38-plus-opus5` | Policy name under `plugin/config/policies/`. A `<project-root>/routing-policy.yaml` wins over it, as it does in the bridge ([SETUP.md §5](../SETUP.md#5-choosing-the-policy)) |
 | `--run-id` | timestamp | `pass_id` on every telemetry event, and the run's folder name. Letters, digits, `.`, `_`, `-` |
-| `--gates` | `prompt` | `prompt` waits for you; `auto-approve` records `auto-approved` and continues; `auto-abort` stops at the first gate |
+| `--gates` | required | `auto-approve` records `auto-approved` in `gates.jsonl` and continues; `auto-abort` stops at the first gate. `prompt` is refused: print mode has no one to answer, and the resume loop would carry the run past every gate unreviewed. Answer gates yourself in an interactive session instead |
 | `--mode`, `--intent`, `--seed` | — | The brownfield handover the guide's step 4 reads. `--seed` without `--intent` on a brownfield run resolves the job type at launch through `plugin/scripts/infer-intent.mjs` and records `intent.source: "inferred"`; a seed that matches no job type, or several, refuses to launch and asks for `--intent` |
 | `--resume=<conversation-id>` | — | Continue an earlier session instead of starting one |
 | `--max-turns` | 12 | Cap on agy invocations per run |
@@ -59,13 +59,77 @@ node plugin/agy/run.mjs \
 
 ### Headless is plugin-less
 
-`agy -p` loads no workspace customization: no plugin, MCP server, hook or skill (check 1). A headless run therefore has no `/mmo:*` skills and no bridge tools in the model's toolset; the conductor prompt `run.mjs` renders tells the model to dispatch through `plugin/agy/dispatch.mjs`, which speaks MCP to the bridge itself. The write-contract hook does not fire headless — a headless brownfield run has no guard, and its record should say so.
+`agy -p` loads no workspace customization: no plugin, MCP server, hook or skill (check 1). A headless run therefore has no `/mmo:*` skills and no bridge tools in the model's toolset; the conductor prompt `run.mjs` renders tells the model to dispatch through `plugin/agy/dispatch.mjs`, which speaks MCP to the bridge itself. The write-contract hook does not fire headless: a headless brownfield run has no guard, `harness.write_guard.state` says `off`, and the after-run check lists what the run changed outside its contract ([brownfield-write-contract.md](brownfield-write-contract.md#headless-runs)).
 
 ### The resume loop
 
 One `agy --print` invocation may end before the pipeline does. `run.mjs` reads the `conversation_id` from the stream, and while `SUMMARY.md` is absent and agy exited 0, re-invokes with `--conversation <id>` and a short resume prompt, up to `--max-turns`. Every invocation's stream lands in `driver-events.jsonl`, in order, and `driver-manifest.json` → `driver_usage.invocations` records where each one starts and ends. agy's `usage` counters are cumulative within one process (check 8); whether a resumed process continues them or restarts at zero is check 16, still pending. Until it is recorded, a run with more than one invocation carries a driver **range**: `driver-cost-modeled.jsonl` and the headline figure are the upper bound (each process priced as fresh counters), and `driver_usage.cost_usd_low` is the lower bound (each process differenced against the one before).
 
 `--resume=<conversation-id>` into the same `--output-dir` keeps the earlier launch's invocations: `run.mjs` reads them back from the directory before it writes, so the driver line covers the whole conversation, not only the resumed part. The resume must use the policy and driver pin the conversation started under; `run.mjs` refuses otherwise. A resume that finds no earlier record in the directory is flagged `resumed_without_earlier_record`, because check 16 decides whether its first counters include the earlier launch.
+
+## Measured runs: the greenfield and brownfield proof runs
+
+Run cost is measured headless: `run.mjs` captures the conductor's own usage from agy's stream, every dispatch is priced at the bridge, and `manifest.json` carries the labelled lines. Each command below is copy-paste-runnable from the repo root.
+
+**1. Before anything is spent.** All free.
+
+| Step | Command | Pass when |
+|---|---|---|
+| Fresh build | `npm ci && npm run build` | No `bridge … older than its source` warning on later commands |
+| Setup check | `npm run verify` | No blocking problem; Node 22.19+ |
+| Offline suite | `npm test` | Every test passes |
+| agy signed in | `agy models` | Lists `gemini-3.8-flash-high` |
+| Stub run | the [offline smoke run](#offline-smoke-run) below | Report prints three cost lines |
+
+Export one Claude wallet and the Gemini key in the shell you launch from. Arm A (`ANTHROPIC_API_KEY`) makes the Opus line cash on an Anthropic invoice, which is the line you can reconcile; the claude.ai seat makes it modeled.
+
+```bash
+export ANTHROPIC_API_KEY=...   # arm A
+export GEMINI_API_KEY=...
+```
+
+**2. The greenfield run** — the Ping Service brief, one endpoint, every phase and gate:
+
+```bash
+mkdir -p /tmp/ping && cp examples/quick-demo/brief.md /tmp/ping/brief.md
+node plugin/agy/run.mjs --project-root=/tmp/ping --run-id=ping-1 --gates=auto-approve --dry-run
+node plugin/agy/dispatch.mjs --preflight --auth-mode=vendor --project-root=/tmp/ping --out=/tmp/ping-preflight.json; cat /tmp/ping-preflight.json
+```
+
+Read the dry run (policy, `policy_source`, driver price period, pin) and the preflight (`ok: true`, every model priced). Then, on an explicit go for the spend:
+
+```bash
+node plugin/agy/run.mjs --project-root=/tmp/ping --run-id=ping-1 --gates=auto-approve
+node tools/report.mjs /tmp/ping/.sdlc/runs/ping-1
+```
+
+**3. The brownfield run** — the shipped bugfix example, in its own git project:
+
+```bash
+cp -R plugin/examples/brownfield-bugfix /tmp/bugfix
+git -C /tmp/bugfix init -q && git -C /tmp/bugfix add -A && git -C /tmp/bugfix commit -qm baseline
+node tools/setup.mjs --project-root=/tmp/bugfix --yes --no-agent --policy=antigravity-flash38-plus-opus5
+node plugin/agy/run.mjs --project-root=/tmp/bugfix --mode=brownfield --intent=bugfix \
+  --brief=/tmp/bugfix/intent_brief.md --run-id=bugfix-1 --gates=auto-approve
+node tools/report.mjs /tmp/bugfix/.sdlc/runs/bugfix-1
+```
+
+A headless brownfield run has no write guard (print mode loads no hooks): read `harness.write_guard.after_run_check.outside_contract` in `manifest.json` and `git -C /tmp/bugfix diff` before you keep anything.
+
+**4. Check the cost.** In each run's `manifest.json`:
+
+| Field | What to check |
+|---|---|
+| `cost.lines[]` | Three lines, each with its `kind`. Never add a `modeled` figure to a `cash` one |
+| `cost.lines[driver].basis` | Names the dated price period; a range means check 16 is still pending |
+| `harness.driver_token_readings` | Every entry `(adds_up)`; anything else is booked at the dearest reading |
+| `driver-manifest.json` → `driver_usage.local_record.agrees` | `true`: agy's local record and the stream agree on the driver's tokens |
+| `harness.driver_model_mismatch` | Absent |
+| `harness.bridge_build_stale` | Absent |
+| `harness.other_runs_in_directory` | Absent |
+| `completed` | `true`; `false` means re-run with the `--resume=` command `run.mjs` printed |
+
+The Anthropic console (arm A) and the Gemini API billing page show the cash lines a day later; the run's `telemetry.jsonl` is the per-call ledger to reconcile against.
 
 ## Choosing a policy in the console
 

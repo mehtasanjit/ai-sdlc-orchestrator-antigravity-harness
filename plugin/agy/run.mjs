@@ -19,7 +19,7 @@
  * Usage:
  *   node run.mjs --brief=<path> [--output-dir=<path>] \
  *                [--project-root=<path>] [--policy=<name>] [--run-id=<id>] \
- *                [--code-dir=<path>] [--gates=prompt|auto-approve|auto-abort] \
+ *                [--code-dir=<path>] --gates=auto-approve|auto-abort \
  *                [--mode=greenfield|brownfield] [--intent=<id>] [--seed=<text>] \
  *                [--resume=<conversation-id>] [--max-turns=<n>] \
  *                [--agy-bin=<path>] [--prompt-file=<path>] [--print-timeout=6h] \
@@ -465,9 +465,17 @@ async function main(args) {
   if (!args["prompt-file"] && !existsSync(briefPath)) {
     throw new Error(`run: no brief at ${briefPath}. Pass --brief=<path>, or put brief.md at the project root.`);
   }
-  const gateMode = args.gates ?? "prompt";
+  // Print mode has no one to answer a gate: a `prompt` conductor stops at Gate 1, the session ends,
+  // and the resume loop carries it past every later gate with nobody having reviewed anything.
+  const gateMode = args.gates ?? (args["dry-run"] ? "auto-approve" : null);
+  if (!gateMode) {
+    throw new Error("run: --gates=auto-approve or --gates=auto-abort is required. A headless run has no one to answer a gate, so it never defaults to one.");
+  }
+  if (gateMode === "prompt") {
+    throw new Error("run: --gates=prompt needs a person at the keyboard, and agy's print mode has none: the run would stop at Gate 1 and the resume loop would carry it past every gate unreviewed. Use --gates=auto-approve (gates recorded as auto-approved in gates.jsonl) or --gates=auto-abort, or run interactively with /mmo:greenfield or /mmo:brownfield.");
+  }
   if (!(gateMode in GATE_MODES)) {
-    throw new Error(`run: --gates=${gateMode} is not one of ${Object.keys(GATE_MODES).join(", ")}.`);
+    throw new Error(`run: --gates=${gateMode} is not one of auto-approve, auto-abort.`);
   }
   const mode = args.mode;
   if (mode && mode !== "greenfield" && mode !== "brownfield") {

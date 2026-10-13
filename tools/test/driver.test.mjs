@@ -495,7 +495,7 @@ test("run.mjs reaches the spawn without --allow-unverified-pin now that the head
   const dir = tmp();
   try {
     writeFileSync(join(dir, "brief.md"), "# brief\n");
-    const r = spawnSync(process.execPath, [RUN, `--project-root=${dir}`, "--agy-bin=/nonexistent/agy"], { encoding: "utf8" });
+    const r = spawnSync(process.execPath, [RUN, `--project-root=${dir}`, "--gates=auto-approve", "--agy-bin=/nonexistent/agy"], { encoding: "utf8" });
     assert.equal(r.status, 1);
     assert.match(r.stderr, /could not launch/);
     assert.ok(!/not live-verified/.test(r.stderr));
@@ -507,7 +507,7 @@ test("run.mjs with the override reaches the spawn and reports a missing agy bina
   try {
     writeFileSync(join(dir, "brief.md"), "# brief\n");
     const out = join(dir, "out");
-    const r = spawnSync(process.execPath, [RUN, `--project-root=${dir}`, `--output-dir=${out}`, "--allow-unverified-pin", "--agy-bin=/nonexistent/agy", "--run-id=t"], { encoding: "utf8" });
+    const r = spawnSync(process.execPath, [RUN, `--project-root=${dir}`, `--output-dir=${out}`, "--gates=auto-approve", "--allow-unverified-pin", "--agy-bin=/nonexistent/agy", "--run-id=t"], { encoding: "utf8" });
     assert.equal(r.status, 1);
     assert.match(r.stderr, /could not launch '\/nonexistent\/agy'/);
     assert.ok(existsSync(join(out, "policy_snapshot.yaml")), "the policy is snapshotted at launch");
@@ -606,4 +606,15 @@ test("runDispatch reports ok:false when preflight fails and always closes the br
 
 test("parseDispatchArgs handles --key=value and bare flags", () => {
   assert.deepEqual(parseDispatchArgs(["--packet=/p.json", "--preflight"]), { packet: "/p.json", preflight: true });
+});
+
+test("a headless run never defaults a gate mode and refuses prompt, which nobody can answer in print mode", () => {
+  const dir = tmp();
+  try {
+    writeFileSync(join(dir, "brief.md"), "# brief\n");
+    const launch = (...flags) => spawnSync(process.execPath, [RUN, `--project-root=${dir}`, "--run-id=t", "--agy-bin=/nonexistent/agy", ...flags], { encoding: "utf8" });
+    assert.match(launch().stderr, /--gates=auto-approve or --gates=auto-abort is required/);
+    assert.match(launch("--gates=prompt").stderr, /print mode has none/);
+    assert.equal(spawnSync(process.execPath, [RUN, "--dry-run", `--project-root=${dir}`, "--run-id=t"], { encoding: "utf8" }).status, 0, "a dry run still prints the invocation");
+  } finally { cleanup(dir); }
 });

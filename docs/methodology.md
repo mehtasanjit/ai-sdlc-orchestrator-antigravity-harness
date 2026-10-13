@@ -2,7 +2,7 @@
 
 > **For:** understanding how tokens and costs are counted — which figures are vendor-metered, which are modeled, and why the two are never added. **Also see:** [understanding-output.md](understanding-output.md) · [architecture.md](architecture.md#three-cost-lines) · [logging.md](logging.md).
 
-![Three cost lines — the driver (Gemini 3.8 Flash on agy, modeled from stream-json usage), the Gemini workers (mechanical phases, cash on a key or Vertex) and the Claude worker (Opus 5 through claude -p, cash on arm A or B, modeled on the seat) — with the manifest's note that the two kinds of dollars are not summed](assets/cost-lines.svg)
+![Three cost lines — the driver (Gemini 3.8 Flash on agy, modeled from stream-json usage), the Gemini workers (mechanical phases, cash on a key or Vertex) and the Claude worker (Opus 5 through the Claude Agent SDK, cash on arm A or B, modeled on the seat) — with the manifest's note that the two kinds of dollars are not summed](assets/cost-lines.svg)
 
 How the tokens and costs on the report are derived, in plain terms.
 
@@ -14,7 +14,7 @@ A run on this harness produces three cost lines, and the report, the manifest an
 |---|---|---|---|
 | Driver | Gemini 3.8 Flash conducting on agy | stream-json `usage` × the policy's `driver.pricing` card | **modeled** |
 | Gemini workers | Gemini 3.8 Flash on the mechanical phases | bridge `telemetry.jsonl` — the vendor's `usageMetadata` | cash (API key or Vertex) |
-| Claude worker | Claude Opus 5 on the judgment phases | bridge `telemetry.jsonl` — `claude -p`'s result `usage` | cash on arm A (Anthropic) or arm B (GCP); **modeled** on the seat |
+| Claude worker | Claude Opus 5 on the judgment phases | bridge `telemetry.jsonl` — the Claude Agent SDK result's `usage` and `modelUsage` | cash on arm A (Anthropic) or arm B (GCP); **modeled** on the seat |
 
 **Modeled** means: the tokens are real counts the runtime reported, and the dollars are what those tokens would cost at the published card. No invoice exists. A conductor on a Google seat, or Claude Code signed in to a claude.ai subscription, draws on a quota that has no per-token bill; the figure describes usage, not spend.
 
@@ -35,7 +35,7 @@ A metered driver is possible — `billing_mode: gemini-api-key` in the policy's 
 Every Opus call crosses the bridge through the `claude-agent-sdk` adapter (or `claude-cli`, which spawns `claude -p`), which runs Claude Code with the bridge's environment and reads the result's `usage` and `modelUsage`. The tokens are the same whichever wallet paid. The dollars differ:
 
 - **Arm A** — `ANTHROPIC_API_KEY` exported. Anthropic meters and invoices. Cash.
-- **Arm B** — `CLAUDE_CODE_USE_VERTEX=1`, `ANTHROPIC_VERTEX_PROJECT_ID`, `CLOUD_ML_REGION=global`. Google Cloud meters and invoices at the Vertex Claude card. Cash — but check the card in `prices.ts` before the first arm-B run; `claude -p`'s own `total_cost_usd` is a check there, not the figure of record.
+- **Arm B** — `CLAUDE_CODE_USE_VERTEX=1`, `ANTHROPIC_VERTEX_PROJECT_ID`, `CLOUD_ML_REGION=global`. Google Cloud meters and invoices at the Vertex Claude card. Cash — but check the card in `prices.ts` before the first arm-B run; the SDK's own `total_cost_usd` is a check there, not the figure of record.
 - **The seat** — nothing exported; Claude Code is signed in to claude.ai (`claude auth status` shows `authMethod: claude.ai`). No invoice. `manifest.mjs` moves the line out of `dispatched_cash_usd` into `claude_seat_modeled_usd` and labels it `kind: "modeled"`.
 
 The manifest's `harness.arm` says which applied. A key and the Vertex variables set at once is refused by `verify` and by the wizard, because the run record could not then say which wallet paid.
@@ -126,7 +126,7 @@ The Claude rows were verified on 2026-09-14 against [Anthropic's pricing page](h
 |---|---|---|---|---|---|---|---|
 | `claude-opus-5` | 5.00 | 0.50 | 6.25 | 10.00 | 25.00 | 10.00 / 50.00 | yes |
 
-The list carries every other model on Anthropic's page as well; `claude-cli` prices a helper or side call on another model at that model's own rate.
+The list carries every other model on Anthropic's page as well; the Claude adapters price a helper or side call on another model at that model's own rate.
 
 The Gemini periods were verified on 2026-09-14 against both of Google's pages, the [AI Studio](https://ai.google.dev/gemini-api/docs/pricing) Standard paid tier and the [Vertex AI](https://cloud.google.com/vertex-ai/generative-ai/pricing) Global rows, which agree on every rate. Gemini has no cache-write premium, so cache writes bill at the input rate.
 
@@ -148,7 +148,7 @@ Vertex's non-global rows are the rates above ×1.10, the surcharge applied at di
 | `pricing_override: true` with a block | The block | `price_basis: "custom"` |
 | No list price for the model on that day, and no override | Nothing. `preflight_dispatch` halts the run before it starts | — |
 
-A `claude-cli` worker is priced per model from its result's `modelUsage`; Claude Code's own `total_cost_usd` is kept as `cli_reported_cost_usd`, and a difference of more than 0.5% logs `pricing.cli_cost_mismatch`.
+A `claude-agent-sdk` (or `claude-cli`) worker is priced per model from its result's `modelUsage`; Claude Code's own `total_cost_usd` is kept as `cli_reported_cost_usd`, and a difference of more than 0.5% logs `pricing.cli_cost_mismatch`.
 
 Before publishing a study that relies on these numbers, check every `pricing_source`, `pricing_last_verified` and the list's `verified` date against the current vendor page. When a vendor changes a rate, add a new period to `prices.ts` instead of editing the old one, so runs before the change keep their price; update the matching YAML cards in the same PR. Telemetry events already written keep the `cost_usd` stamped at dispatch.
 
