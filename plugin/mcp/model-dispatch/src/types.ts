@@ -281,6 +281,10 @@ export interface AttemptRecord {
   thinking_level?: string | null;
   /** The wallet this attempt billed; see DispatchWallet. */
   wallet?: DispatchWallet;
+  /** Gemini only, on a failed call: the HTTP status the vendor answered with. */
+  error_status?: number;
+  /** Gemini only, on a failed call: the Node/undici code of a connection that failed in transit. */
+  error_code?: string;
 }
 
 export type PriceBasis = "list" | "custom";
