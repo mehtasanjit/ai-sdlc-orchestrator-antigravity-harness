@@ -7,9 +7,9 @@
 # Arm A (Anthropic key) and arm B (Vertex) run THIS SAME FILE. The arm is the
 # bridge's environment, not a policy field: arm A sets ANTHROPIC_API_KEY; arm B
 # sets CLAUDE_CODE_USE_VERTEX=1, ANTHROPIC_VERTEX_PROJECT_ID and
-# CLOUD_ML_REGION=global. The claude-agent-sdk adapter lets the SDK inherit the
-# bridge's environment, so the same adapter reaches either wallet — as does the
-# claude.ai seat, the third door.
+# CLOUD_ML_REGION=global. The claude-agent-sdk adapter hands the SDK a full copy
+# of the bridge's environment, so the same adapter reaches either wallet — as
+# does the claude.ai seat, the third door.
 version: 1
 name: antigravity-flash38-plus-opus5
 

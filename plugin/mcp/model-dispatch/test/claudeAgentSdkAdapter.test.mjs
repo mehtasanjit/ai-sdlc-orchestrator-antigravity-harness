@@ -277,14 +277,31 @@ test("options disable the built-in tools and keep the worker hermetic", () => {
   assert.equal(opts.maxTurns, 1, "one-shot, matching how this tier used `claude -p`");
   assert.equal(opts.model, "claude-opus-5");
   assert.equal(opts.effort, "high");
-  assert.equal(opts.env, undefined, "env unset so the subprocess inherits all three Claude wallets");
+  assert.equal(opts.env.CLAUDE_CODE_DISABLE_TERMINAL_TITLE, "1", "no background session-title call to Haiku");
   assert.equal(opts.resume, undefined, "no session reuse: a resumed result would carry the session's whole spend");
 });
 
 test("effort is omitted when the policy sets no reasoning tier", () => {
-  // Haiku 4.5 rejects an effort level, so the policy leaves `reasoning` off.
-  const opts = agentSdkOptions({ model_name: "claude-haiku-4-5" });
+  const opts = agentSdkOptions({ model_name: "claude-opus-5" });
   assert.equal("effort" in opts, false);
+});
+
+test("env carries every wallet variable of the bridge, so setting it replaces nothing", () => {
+  const bridge = {
+    ANTHROPIC_API_KEY: "arm-a",
+    CLAUDE_CODE_USE_VERTEX: "1",
+    ANTHROPIC_VERTEX_PROJECT_ID: "arm-b",
+    CLOUD_ML_REGION: "global",
+    HOME: "/home/seat",
+  };
+  const opts = agentSdkOptions({ model_name: "claude-opus-5" }, { env: bridge });
+  assert.deepEqual(opts.env, { ...bridge, CLAUDE_CODE_DISABLE_TERMINAL_TITLE: "1" });
+  assert.equal(bridge.CLAUDE_CODE_DISABLE_TERMINAL_TITLE, undefined, "the bridge's own env is not mutated");
+});
+
+test("env defaults to the bridge process's environment", () => {
+  const opts = agentSdkOptions({ model_name: "claude-opus-5" });
+  for (const [k, v] of Object.entries(process.env)) assert.equal(opts.env[k], v, k);
 });
 
 test("the adapter is reachable through the registry under its policy id", async () => {

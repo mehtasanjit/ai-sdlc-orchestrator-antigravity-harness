@@ -82,7 +82,7 @@ mode loads no plugin, and `agy -i "<prompt>"` sends the prompt before the bridge
    the toolset once it answers `tools/list`), then paste:
 
 ```
-Using the call_mcp_tool tool, call load_policy on the MCP server named mmo_model-dispatch with {"policy_name":"antigravity-flash38-plus-haiku45"} and print the policy name and the model ids it returned. Then call preflight_dispatch on the same server with {"auth_mode":"vendor","policy_name":"antigravity-flash38-plus-haiku45"} and print its full JSON result verbatim. If call_mcp_tool is not in your toolset, list every tool you have whose name contains mcp, mmo or dispatch. Do not run any shell command, do not read files, do not create subagents.
+Using the call_mcp_tool tool, call load_policy on the MCP server named mmo_model-dispatch with {"policy_name":"antigravity-flash38-plus-opus5"} and print the policy name and the model ids it returned. Then call preflight_dispatch on the same server with {"auth_mode":"vendor","policy_name":"antigravity-flash38-plus-opus5"} and print its full JSON result verbatim. If call_mcp_tool is not in your toolset, list every tool you have whose name contains mcp, mmo or dispatch. Do not run any shell command, do not read files, do not create subagents.
 ```
 
 3. If the main agent still reports no `call_mcp_tool`, ask it once more to do the same through a

@@ -100,14 +100,17 @@ interface ClaudeAgentSdkOptions {
  * intentional difference — it removes a confound from the measurement rather
  * than adding one.
  *
- * `env` is deliberately never set: the SDK REPLACES the subprocess
- * environment when it is, rather than merging, and inheriting is exactly how
- * this adapter reaches all three Claude wallets (key, Vertex, seat) without
- * knowing which one is configured.
+ * `env` is the bridge's own environment plus one flag. The SDK REPLACES the
+ * subprocess environment when `env` is set, rather than merging, so the copy
+ * must carry every inherited variable: that is how this adapter reaches all
+ * three Claude wallets (key, Vertex, seat) without knowing which one is
+ * configured. `CLAUDE_CODE_DISABLE_TERMINAL_TITLE=1` stops Claude Code's
+ * background session-title request, a Haiku call that reads the whole prompt
+ * on every dispatch and that no policy rule routes.
  */
 export function agentSdkOptions(
   config: Pick<ModelConfig, "model_name" | "reasoning">,
-  extra: { cwd?: string; abortController?: AbortController } = {},
+  extra: { cwd?: string; abortController?: AbortController; env?: NodeJS.ProcessEnv } = {},
 ): Record<string, unknown> {
   const options: Record<string, unknown> = {
     model: config.model_name,
@@ -115,9 +118,9 @@ export function agentSdkOptions(
     maxTurns: 1,
     tools: [],
     settingSources: [],
+    env: { ...(extra.env ?? process.env), CLAUDE_CODE_DISABLE_TERMINAL_TITLE: "1" },
   };
   const effort = config.reasoning?.effort;
-  // Haiku 4.5 rejects an effort level; the policy omits `reasoning` there.
   if (effort) options.effort = effort;
   if (extra.cwd) options.cwd = extra.cwd;
   if (extra.abortController) options.abortController = extra.abortController;
