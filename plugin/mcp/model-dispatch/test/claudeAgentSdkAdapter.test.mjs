@@ -107,6 +107,21 @@ test("a successful query books modelUsage at the dated list price, not the SDK's
   assert.equal(out.attempts[0].cli_reported_cost_usd, 0.0123, "the SDK figure is kept as a check");
 });
 
+test("an SDK attempt carries no transcript_logged_cost_usd: the frames it would come from are not a transcript", async () => {
+  const adapter = new ClaudeAgentSdkAdapter(BASE_CONFIG, {
+    queryFn: fakeQuery([assistantFrame({ input_tokens: 100, output_tokens: 50 }, { stop_reason: "end_turn" }), resultFrame()]),
+    now: NOW,
+  });
+  const done = await adapter.execute(PACKET);
+  assert.equal("transcript_logged_cost_usd" in done.attempts[0], false);
+
+  const cut = await new ClaudeAgentSdkAdapter(BASE_CONFIG, {
+    queryFn: fakeQuery([assistantFrame({ input_tokens: 100, output_tokens: 50 })]),
+    now: NOW,
+  }).execute(PACKET);
+  assert.equal("transcript_logged_cost_usd" in cut.attempts[0], false);
+});
+
 test("the cache-write TTL split comes from the assistant frames, so no transcript is read", async () => {
   const adapter = new ClaudeAgentSdkAdapter(BASE_CONFIG, {
     queryFn: fakeQuery([

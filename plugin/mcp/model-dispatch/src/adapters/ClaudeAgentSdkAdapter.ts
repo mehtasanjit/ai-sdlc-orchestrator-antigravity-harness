@@ -287,13 +287,6 @@ export class ClaudeAgentSdkAdapter implements ModelAdapter {
       ...(ledger.cli_reported_cost_usd !== undefined
         ? { cli_reported_cost_usd: ledger.cli_reported_cost_usd }
         : {}),
-      // The share of cost_usd the worker's own transcript explains — the same
-      // share a post-run collector scan of that transcript will count, and so
-      // the share it must subtract (review finding M4). The SDK still writes
-      // the session transcript, so the collector's arithmetic is unchanged.
-      ...(ledger.transcript_logged_cost_usd !== undefined
-        ? { transcript_logged_cost_usd: ledger.transcript_logged_cost_usd }
-        : {}),
       ttl_split: ledger.ttl_split,
       per_model: ledger.per_model,
       wallet: claudeDispatchWallet(this.env, { ...run.init, providers: reportedProviders(result.modelUsage) }),
