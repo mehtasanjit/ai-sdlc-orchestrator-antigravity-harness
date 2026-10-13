@@ -51,6 +51,11 @@ models:
     pricing_source: https://platform.claude.com/docs/en/about-claude/pricing
     pricing_last_verified: 2026-09-14
     max_output_tokens_absolute: 32000
+    # Sent as the SDK's settings.promptCacheTtl. Unset, Claude Code caches for
+    # 1h on the seat and 5m on arms A and B, so the wallet would set the
+    # cache-write rate. 1h because cross-packet reads land 13-17 min apart.
+    # Each event records the lifetime its writes used (prompt_cache_ttl).
+    prompt_cache_ttl: 1h
 
   # Gemini 3.8 Flash as a MODEL. One completion call per packet. Works on
   # GEMINI_API_KEY (AI Studio) or, unset, Vertex ADC at the same rates.

@@ -203,6 +203,41 @@ export interface TelemetryEvent {
    * events written before it existed and on direct-tier events.
    */
   wallet?: DispatchWallet;
+  /** Copied from the attempt (claude-agent-sdk only); see ClaudeSessionFacts. */
+  claude_session?: ClaudeSessionFacts;
+  /** Copied from the attempt (claude-agent-sdk only); see PromptCacheTtlRecord. */
+  prompt_cache_ttl?: PromptCacheTtlRecord;
+}
+
+export type PromptCacheTtl = "5m" | "1h";
+
+/**
+ * The prompt-cache lifetime a claude-agent-sdk attempt asked for and the one
+ * its cache writes used, read from the assistant frames' `cache_creation`.
+ */
+export interface PromptCacheTtlRecord {
+  /** The policy's `prompt_cache_ttl`, sent as the SDK's `settings.promptCacheTtl`; null when the policy sets none. */
+  pinned: PromptCacheTtl | null;
+  /** `none` = no cache writes; `unknown` = some write carried no TTL split; `mixed` = both lifetimes. */
+  observed: PromptCacheTtl | "mixed" | "none" | "unknown";
+  /** True when a pin is set and the writes used a different lifetime. */
+  mismatch: boolean;
+}
+
+/**
+ * The Agent SDK session a claude-agent-sdk attempt ran in. Each field is null
+ * when the stream never reported it: a call stopped before its result message
+ * has no `num_turns`, `result_subtype` or `terminal_reason`.
+ */
+export interface ClaudeSessionFacts {
+  session_id: string | null;
+  num_turns: number | null;
+  /** The result message's `subtype`: `success`, `error_max_turns`, `error_during_execution`, ... */
+  result_subtype: string | null;
+  /** The result message's `terminal_reason` (`completed`, `max_turns`, `api_error`, ...). */
+  terminal_reason: string | null;
+  /** The init frame's `cwd`, else the directory the SDK was started in (the adapter's `cwd` option, or the bridge's own). */
+  cwd: string | null;
 }
 
 /** One attempt from the output-cap doubling loop. */
@@ -286,6 +321,10 @@ export interface AttemptRecord {
    * `tokens` / `cost_usd` are the usage its assistant frames reported until then.
    */
   usage_from_frames?: boolean;
+  /** claude-agent-sdk only: the SDK session the call ran in. */
+  claude_session?: ClaudeSessionFacts;
+  /** claude-agent-sdk only: the cache lifetime pinned and the one the writes used. */
+  prompt_cache_ttl?: PromptCacheTtlRecord;
   /** Gemini only, on a failed call: the HTTP status the vendor answered with. */
   error_status?: number;
   /** Gemini only, on a failed call: the Node/undici code of a connection that failed in transit. */
@@ -403,6 +442,13 @@ export interface ModelConfig {
    * a worker; ignored by completion adapters.
    */
   worker_timeout_sec?: number;
+  /**
+   * claude-agent-sdk only: the prompt-cache lifetime, sent as the SDK's
+   * `settings.promptCacheTtl`. Unset, Claude Code picks 1h on a claude.ai seat
+   * and 5m on an API key or Vertex, so the wallet would decide the cache-write
+   * rate. The CLAUDE_CODE_PROMPT_CACHE_TTL variable overrides it.
+   */
+  prompt_cache_ttl?: PromptCacheTtl;
 }
 
 /**

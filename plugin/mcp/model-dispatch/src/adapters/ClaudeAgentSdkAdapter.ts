@@ -35,7 +35,15 @@
  * warning is logged when the two differ by more than 0.5%.
  */
 
-import type { AttemptRecord, DispatchWallet, ExecutionResult, ModelConfig, TaskPacket } from "../types.js";
+import type {
+  AttemptRecord,
+  ClaudeSessionFacts,
+  DispatchWallet,
+  ExecutionResult,
+  ModelConfig,
+  PromptCacheTtlRecord,
+  TaskPacket,
+} from "../types.js";
 import { estimateTokens } from "../pricing.js";
 import { log } from "../log.js";
 import { unenforcedBudget, type ModelAdapter } from "./ModelAdapter.js";
@@ -69,6 +77,22 @@ export interface AgentSdkMessage {
   /** Set on subagent frames; null on the main loop. */
   parent_tool_use_id?: string | null;
   [key: string]: unknown;
+}
+
+type SdkResult = ClaudeCliResultLike & {
+  subtype?: string;
+  is_error?: boolean;
+  duration_ms?: number;
+  duration_api_ms?: number;
+  stop_reason?: string | null;
+  num_turns?: number;
+  terminal_reason?: string;
+};
+
+/** What the init frame says about the session, before any result arrives. */
+interface InitSession {
+  session_id?: string;
+  cwd?: string;
 }
 
 export type AgentSdkQuery = (args: {
@@ -107,6 +131,20 @@ interface ClaudeAgentSdkOptions {
  * intentional difference — it removes a confound from the measurement rather
  * than adding one.
  *
+ * `title` is set because without it the SDK generates a session title from
+ * the first user message on a side call to Haiku: the whole prompt in, a few
+ * tokens out, once per dispatch, on a model the policy never named.
+ *
+ * `persistSession: false` because a persisted session is a transcript under
+ * `~/.claude/projects`, outside the run and linked to nothing in it. Pricing
+ * reads the streamed frames, never a transcript, and the attempt records the
+ * session id in `claude_session`.
+ *
+ * `settings.promptCacheTtl` carries the policy's `prompt_cache_ttl`. It is a
+ * flag-layer setting, separate from the filesystem sources that
+ * `settingSources: []` turns off, and it is not `env`. Unset, Claude Code
+ * picks the lifetime from the wallet (1h on a seat, 5m on a key or Vertex).
+ *
  * `env` is deliberately never set: the SDK REPLACES the subprocess
  * environment when it is, rather than merging, and inheriting is exactly how
  * this adapter reaches all three Claude wallets (key, Vertex, seat) without
@@ -118,7 +156,7 @@ interface ClaudeAgentSdkOptions {
  * `hard_cost_cap_usd` check (runCostCap.ts).
  */
 export function agentSdkOptions(
-  config: Pick<ModelConfig, "model_name" | "reasoning">,
+  config: Pick<ModelConfig, "model_name" | "reasoning" | "prompt_cache_ttl">,
   extra: { cwd?: string; abortController?: AbortController } = {},
 ): Record<string, unknown> {
   const options: Record<string, unknown> = {
@@ -127,13 +165,34 @@ export function agentSdkOptions(
     maxTurns: 1,
     tools: [],
     settingSources: [],
+    title: "mmo dispatch",
+    persistSession: false,
   };
   const effort = config.reasoning?.effort;
   // Haiku 4.5 rejects an effort level; the policy omits `reasoning` there.
   if (effort) options.effort = effort;
+  if (config.prompt_cache_ttl) options.settings = { promptCacheTtl: config.prompt_cache_ttl };
   if (extra.cwd) options.cwd = extra.cwd;
   if (extra.abortController) options.abortController = extra.abortController;
   return options;
+}
+
+/**
+ * The lifetime the frames' cache writes used. A write with no
+ * `cache_creation` split makes it `unknown`: the accumulator books such a
+ * write as 5-minute, which is an assumption, not an observation.
+ */
+export function observedCacheTtl(writes: Map<string, TranscriptModelWrites>): PromptCacheTtlRecord["observed"] {
+  let fiveMin = 0;
+  let oneHour = 0;
+  for (const w of writes.values()) {
+    if (!w.split_known) return "unknown";
+    fiveMin += w.write_5m;
+    oneHour += w.write_1h;
+  }
+  if (fiveMin === 0 && oneHour === 0) return "none";
+  if (fiveMin > 0 && oneHour > 0) return "mixed";
+  return oneHour > 0 ? "1h" : "5m";
 }
 
 /** Lazily imported so a policy that never names this adapter does not load the SDK. */
@@ -194,6 +253,7 @@ export class ClaudeAgentSdkAdapter implements ModelAdapter {
         started,
         run.error,
         claudeDispatchWallet(this.env, run.init),
+        this.sessionFacts(run.session),
       );
     }
 
@@ -227,16 +287,11 @@ export class ClaudeAgentSdkAdapter implements ModelAdapter {
       ...(ledger.cli_reported_cost_usd !== undefined
         ? { cli_reported_cost_usd: ledger.cli_reported_cost_usd }
         : {}),
-      // The share of cost_usd the worker's own transcript explains — the same
-      // share a post-run collector scan of that transcript will count, and so
-      // the share it must subtract (review finding M4). The SDK still writes
-      // the session transcript, so the collector's arithmetic is unchanged.
-      ...(ledger.transcript_logged_cost_usd !== undefined
-        ? { transcript_logged_cost_usd: ledger.transcript_logged_cost_usd }
-        : {}),
       ttl_split: ledger.ttl_split,
       per_model: ledger.per_model,
       wallet: claudeDispatchWallet(this.env, { ...run.init, providers: reportedProviders(result.modelUsage) }),
+      claude_session: this.sessionFacts(run.session, result),
+      prompt_cache_ttl: this.cacheTtlRecord(writes),
     };
 
     if (isError) {
@@ -326,7 +381,7 @@ export class ClaudeAgentSdkAdapter implements ModelAdapter {
    */
   private partial(
     packet: TaskPacket,
-    run: { error: string; init: ClaudeDispatchFacts; writes: Map<string, TranscriptModelWrites> },
+    run: { error: string; init: ClaudeDispatchFacts; writes: Map<string, TranscriptModelWrites>; session: InitSession },
     started: number,
     dispatchDate: Date,
   ): ExecutionResult {
@@ -357,6 +412,8 @@ export class ClaudeAgentSdkAdapter implements ModelAdapter {
       ttl_split: ledger.ttl_split,
       per_model: ledger.per_model,
       wallet: claudeDispatchWallet(this.env, run.init),
+      claude_session: this.sessionFacts(run.session),
+      prompt_cache_ttl: this.cacheTtlRecord(run.writes),
     };
     return {
       result: null,
@@ -371,6 +428,36 @@ export class ClaudeAgentSdkAdapter implements ModelAdapter {
     };
   }
 
+  private cacheTtlRecord(writes: Map<string, TranscriptModelWrites>): PromptCacheTtlRecord {
+    const pinned = this.modelConfig.prompt_cache_ttl ?? null;
+    const observed = observedCacheTtl(writes);
+    const mismatch = pinned !== null && observed !== "none" && observed !== "unknown" && observed !== pinned;
+    if (mismatch) {
+      log("warn", "pricing.cache_ttl_mismatch", {
+        model_id: this.id,
+        pinned,
+        observed,
+        message:
+          "The policy pins this model's prompt-cache lifetime and the call's cache writes used another. " +
+          "cost_usd prices the writes as the API reported them. CLAUDE_CODE_PROMPT_CACHE_TTL in the bridge's " +
+          "environment overrides the pin.",
+      });
+    }
+    return { pinned, observed, mismatch };
+  }
+
+  private sessionFacts(session: InitSession, result?: SdkResult): ClaudeSessionFacts {
+    const sessionId = typeof result?.session_id === "string" ? result.session_id : session.session_id;
+    return {
+      session_id: sessionId ?? null,
+      num_turns: typeof result?.num_turns === "number" ? result.num_turns : null,
+      result_subtype: typeof result?.subtype === "string" ? result.subtype : null,
+      terminal_reason: typeof result?.terminal_reason === "string" ? result.terminal_reason : null,
+      // The SDK runs in the bridge's own directory when no cwd is passed.
+      cwd: session.cwd ?? this.cwd ?? process.cwd(),
+    };
+  }
+
   /** A call that billed nothing measurable: refused before running, or no result was produced. */
   private failure(
     packet: TaskPacket,
@@ -378,6 +465,7 @@ export class ClaudeAgentSdkAdapter implements ModelAdapter {
     started: number,
     error: string,
     wallet: DispatchWallet,
+    claudeSession?: ClaudeSessionFacts,
   ): ExecutionResult {
     const attempt: AttemptRecord = {
       attempt_number: 1,
@@ -389,6 +477,7 @@ export class ClaudeAgentSdkAdapter implements ModelAdapter {
       success: false,
       error,
       wallet,
+      ...(claudeSession ? { claude_session: claudeSession } : {}),
     };
     return {
       result: null,
@@ -416,8 +505,8 @@ export class ClaudeAgentSdkAdapter implements ModelAdapter {
   private async runQuery(
     prompt: string,
   ): Promise<
-    | { ok: true; result: ClaudeCliResultLike & { subtype?: string; is_error?: boolean; duration_ms?: number; duration_api_ms?: number; stop_reason?: string | null }; writes: Map<string, TranscriptModelWrites>; init: ClaudeDispatchFacts }
-    | { ok: false; error: string; init: ClaudeDispatchFacts; writes: Map<string, TranscriptModelWrites> }
+    | { ok: true; result: SdkResult; writes: Map<string, TranscriptModelWrites>; init: ClaudeDispatchFacts; session: InitSession }
+    | { ok: false; error: string; init: ClaudeDispatchFacts; writes: Map<string, TranscriptModelWrites>; session: InitSession }
   > {
     let query: AgentSdkQuery;
     try {
@@ -431,6 +520,7 @@ export class ClaudeAgentSdkAdapter implements ModelAdapter {
           `plugin/mcp/model-dispatch.`,
         init: {},
         writes: new Map(),
+        session: {},
       };
     }
 
@@ -440,6 +530,7 @@ export class ClaudeAgentSdkAdapter implements ModelAdapter {
     let lastText = "";
     let lastTextId: string | null = null;
     let init: ClaudeDispatchFacts = {};
+    let session: InitSession = {};
     const abortController = new AbortController();
     let timedOut = false;
     const timer = setTimeout(() => {
@@ -458,6 +549,10 @@ export class ClaudeAgentSdkAdapter implements ModelAdapter {
           init = {
             apiKeySource: typeof message.apiKeySource === "string" ? message.apiKeySource : undefined,
             claudeCodeVersion: typeof message.claude_code_version === "string" ? message.claude_code_version : undefined,
+          };
+          session = {
+            session_id: typeof message.session_id === "string" ? message.session_id : undefined,
+            cwd: typeof message.cwd === "string" ? message.cwd : undefined,
           };
           continue;
         }
@@ -487,7 +582,7 @@ export class ClaudeAgentSdkAdapter implements ModelAdapter {
         if (message.type === "result") {
           const result =
             typeof message.result === "string" && message.result.trim() ? message : { ...message, result: lastText };
-          return { ok: true, result: result as any, writes: acc.finish(), init };
+          return { ok: true, result: result as any, writes: acc.finish(), init, session };
         }
       }
       // The stream ended without a result message: a crash or an abort. The
@@ -499,10 +594,11 @@ export class ClaudeAgentSdkAdapter implements ModelAdapter {
           : "claude-agent-sdk stream ended with no result message",
         init,
         writes: acc.finish(),
+        session,
       };
     } catch (err: any) {
-      if (timedOut) return { ok: false, error: `claude-agent-sdk timeout after ${this.timeoutMs / 1000}s`, init, writes: acc.finish() };
-      return { ok: false, error: `claude-agent-sdk error: ${err?.message ?? err}`, init, writes: acc.finish() };
+      if (timedOut) return { ok: false, error: `claude-agent-sdk timeout after ${this.timeoutMs / 1000}s`, init, writes: acc.finish(), session };
+      return { ok: false, error: `claude-agent-sdk error: ${err?.message ?? err}`, init, writes: acc.finish(), session };
     } finally {
       clearTimeout(timer);
     }
