@@ -28,7 +28,7 @@ import { parse as parseYaml } from "yaml";
 
 import { buildManifest } from "../mcp/model-dispatch/dist/telemetry.js";
 import { resolveGeminiBackend } from "../mcp/model-dispatch/dist/adapters/geminiEndpoint.js";
-import { readPin, driverSlug, pendingPinChecks } from "./telemetry/fairnessPin.mjs";
+import { readPin, driverSlug, pendingPinChecks, pinVerification } from "./telemetry/fairnessPin.mjs";
 import { driverRange, driverRangeNote, driverRangeNotes } from "./telemetry/driverRange.mjs";
 import { isMain } from "../scripts/lib/is-main.mjs";
 import { conductorWork } from "./telemetry/conductorWork.mjs";
@@ -328,7 +328,7 @@ export function buildHarnessManifest({ runDir, policyName, runId, env = process.
       gemini: geminiLine.wallet,
     },
     arm: claudeLine.arm,
-    pin: driverManifest?.pin ?? (pin ? { model: pin.model, effort: pin.effort, slug: driverSlug(pin), billing_mode: pin.billing_mode, verified: pendingPinChecks().length === 0, pending_checks: pendingPinChecks() } : null),
+    pin: pinRecord({ driverManifest, pin, collector }),
     delegated: true,
     cable: {
       driver_runtime: `${RUNTIME_NAME} ${version ?? driverManifest?.agy_version ?? ""}`.trim(),
@@ -397,6 +397,30 @@ export function buildHarnessManifest({ runDir, policyName, runId, env = process.
   };
 
   return { ...base, harness, usage, cost };
+}
+
+/**
+ * The driver pin and whether a model agy recorded proves it held. A launcher
+ * record written before `observed_models` existed stamped `verified` from the
+ * checks alone, so it is re-derived from the models that record names. An
+ * interactive run's models are the collector's, from agy's conversation record.
+ */
+export function pinRecord({ driverManifest = null, pin = null, collector = null }) {
+  if (driverManifest?.pin) {
+    const recorded = driverManifest.pin;
+    if (recorded.observed_models) return recorded;
+    const observed = [...new Set([...(driverManifest.driver_reported_models ?? []), ...(driverManifest.driver_usage?.local_record?.models ?? [])])];
+    const pending = recorded.pending_checks ?? pendingPinChecks();
+    return { ...recorded, ...pinVerification({ pending, observed, offPin: driverManifest.driver_model_mismatch ?? [] }), observed_models: observed };
+  }
+  if (!pin) return null;
+  const pending = pendingPinChecks();
+  const observed = collector?.reported_models ?? [];
+  return {
+    model: pin.model, effort: pin.effort, slug: driverSlug(pin), billing_mode: pin.billing_mode,
+    ...pinVerification({ pending, observed, offPin: collector?.model_mismatch ?? [] }),
+    pending_checks: pending, observed_models: observed,
+  };
 }
 
 /**

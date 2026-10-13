@@ -260,10 +260,10 @@ export function driverUsage(events, opts, { invocations = [], resumeUsage = RESU
 }
 
 /**
- * Every model name the stream reports, from any event. No agy event is known
- * to name the answering model (fairnessPin.mjs findPinRejection), so an empty
- * list is the usual answer and proves nothing; a name that is there and is
- * not the pin is a run on the wrong model.
+ * Every model name the stream reports, from any event. No agy stream event is
+ * known to name the answering model, so an empty list is the usual answer;
+ * agy's local conversation record does (run.mjs crossCheckLocalRecord). A
+ * name that is there and is not the pin is a run on the wrong model.
  */
 export function reportedModels(events) {
   const seen = new Set();

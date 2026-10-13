@@ -198,7 +198,7 @@ Same line shape as telemetry, so the two files can be concatenated for analysis 
 | `price_warnings` | The driver block's card differs from the dated list for a day the run spent on; the list was used |
 | `local_record` | The same conversation as agy's local record holds it ([check 18](verification/p1-agy-runtime.md)): `record` and `stream` token totals side by side, and `agrees` (within 1%). `found: false` when the record is not on this machine |
 
-`driver-manifest.json` also records `driver_reported_models` (every model name any agy event carried; empty when agy names none, which proves nothing either way), `driver_model_mismatch` (reported names that are neither the pinned model nor its slug: the run was not on the pin), and `bridge_build` (`stale: true` when the bridge's `dist/` was older than its `src/`).
+`driver-manifest.json` also records `driver_reported_models` (every model name any agy event carried; empty when agy names none, and then only the local record's names can verify the pin), `driver_model_mismatch` (reported names that are neither the pinned model nor its slug: the run was not on the pin), and `bridge_build` (`stale: true` when the bridge's `dist/` was older than its `src/`).
 
 ### `manifest.json`
 
@@ -216,7 +216,7 @@ The dispatched rollup, then three blocks this harness adds.
 | `auth_mode` | `vendor` — the only mode this runtime accepts |
 | `provider_source` | Where each leg's dollars come from: `driver` (`google-seat` or `gemini-api-key`), `claude` (`anthropic-api`, `vertex`, `claude-seat` or `mixed`), `gemini` (the Gemini line's `wallet`) |
 | `arm` | The Claude line's arm: `A` (Anthropic key), `B` (Vertex), `seat` (Claude Code signed in to claude.ai), `mixed`, or `null` when no Claude call ran or no wallet could be named |
-| `pin` | `model`, `effort`, `slug`, `billing_mode`, `verified`, `pending_checks` — the driver pin `run.mjs` asserted, and whether every check it depends on has passed live |
+| `pin` | `model`, `effort`, `slug`, `billing_mode`, `verified`, `unverified_reason`, `pending_checks`, `observed_models` — the driver pin `run.mjs` asserted. `verified` is `true` only when no check is pending and agy named the conducting model and every name was the pin; otherwise `unverified_reason` is `model_mismatch`, `pending_checks` or `no_model_observed` ([running.md](running.md#the-pin-gate)) |
 | `delegated` | Whether any packet went to the agent worker |
 | `cable` | One-paragraph description of the wiring: driver runtime and models, driver auth, worker models, `claude_worker_auth` (names the arm, the GCP project and region on arm B, or the seat), `summary` (each worker model and the adapter its events recorded, or `adapter not recorded`) |
 | `driver_cost_usd`, `driver_cost_basis`, `driver_turns`, `agy_invocations` | The modeled driver figure and the sentence that says how it was derived; how many turns and how many `agy --print` invocations (the resume loop) |

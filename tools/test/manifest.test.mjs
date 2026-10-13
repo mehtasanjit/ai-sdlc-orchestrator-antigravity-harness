@@ -11,7 +11,7 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { buildHarnessManifest, costLines, claudeWallet, describeCostLines, fallbackRouting, geminiDoor, workerLineOf, HARNESS_NAME, RUNTIME_NAME } from "../../plugin/agy/manifest.mjs";
+import { buildHarnessManifest, costLines, claudeWallet, describeCostLines, fallbackRouting, geminiDoor, pinRecord, workerLineOf, HARNESS_NAME, RUNTIME_NAME } from "../../plugin/agy/manifest.mjs";
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const POLICY = "antigravity-flash38-plus-opus5";
@@ -472,4 +472,33 @@ test("the manifest carries fallback_cost_usd and fallback_packets beside the dis
     assert.equal(m.fallback_cost_usd, 0.04);
     assert.deepEqual(m.fallback_packets.map((p) => p.task_id), ["tp_x"]);
   } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test("an interactive run's pin is verified from the models agy's conversation record names", () => {
+  const pin = { model: "gemini-3.8-flash", effort: "high", billing_mode: "seat" };
+  const none = pinRecord({ pin });
+  assert.equal(none.verified, false);
+  assert.equal(none.unverified_reason, "no_model_observed", "no collector ran: passed checks alone are not proof");
+  assert.deepEqual(none.observed_models, []);
+  const held = pinRecord({ pin, collector: { reported_models: ["gemini-3.8-flash"] } });
+  assert.equal(held.verified, true);
+  assert.equal(held.unverified_reason, undefined);
+  assert.equal(held.slug, "gemini-3.8-flash-high");
+  const wrong = pinRecord({ pin, collector: { reported_models: ["gemini-3.1-pro"], model_mismatch: ["gemini-3.1-pro"] } });
+  assert.deepEqual([wrong.verified, wrong.unverified_reason], [false, "model_mismatch"]);
+  assert.equal(pinRecord({}), null);
+});
+
+test("a launcher record stamped verified from the checks alone is re-derived from the models it names", () => {
+  const legacy = { pin: { model: "gemini-3.8-flash", effort: "high", slug: "gemini-3.8-flash-high", billing_mode: "seat", verified: true, pending_checks: [] } };
+  const blind = pinRecord({ driverManifest: { ...legacy, driver_reported_models: [] } });
+  assert.deepEqual([blind.verified, blind.unverified_reason], [false, "no_model_observed"]);
+  const seen = pinRecord({ driverManifest: { ...legacy, driver_reported_models: ["gemini-3.8-flash-high"] } });
+  assert.deepEqual([seen.verified, seen.unverified_reason, seen.observed_models], [true, undefined, ["gemini-3.8-flash-high"]]);
+  const local = pinRecord({ driverManifest: { ...legacy, driver_reported_models: [], driver_usage: { local_record: { models: ["gemini-3.8-flash"] } } } });
+  assert.equal(local.verified, true, "the local record's model counts as observed");
+  const off = pinRecord({ driverManifest: { ...legacy, driver_reported_models: ["gemini-3.1-pro"], driver_model_mismatch: ["gemini-3.1-pro"] } });
+  assert.deepEqual([off.verified, off.unverified_reason], [false, "model_mismatch"]);
+  const current = { pin: { ...legacy.pin, verified: false, unverified_reason: "no_model_observed", observed_models: [] } };
+  assert.equal(pinRecord({ driverManifest: current }), current.pin, "a record that already names its observed models is kept as written");
 });

@@ -135,6 +135,7 @@ test("a headless run's stream reading is cross-checked against the same conversa
     const booked = [{ input_tokens: 600, input_tokens_cached: 400, output_tokens: 250, output_tokens_reasoning: 50 }];
     const agree = await crossCheckLocalRecord({ conversationId: "conv-h", since: "2026-10-13T10:00:00Z", modeled: booked, home });
     assert.equal(agree.agrees, true);
+    assert.deepEqual(agree.models, ["gemini-3.8-flash"], "the record's .1.19 names the model that conducted");
     const off = await crossCheckLocalRecord({ conversationId: "conv-h", since: "2026-10-13T10:00:00Z", modeled: [{ ...booked[0], input_tokens: 200 }], home });
     assert.equal(off.agrees, false, "a stream reading that subtracted the cache reads twice is caught");
     assert.deepEqual(await crossCheckLocalRecord({ conversationId: "absent", since: "2026-10-13T10:00:00Z", modeled: booked, home }), { found: false });

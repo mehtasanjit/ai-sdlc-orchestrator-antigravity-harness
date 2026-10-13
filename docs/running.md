@@ -40,7 +40,7 @@ node plugin/agy/run.mjs \
 | `--agy-bin` | `agy` | Path to the binary when it is not on PATH |
 | `--inline-env` | off | Check-5 fallback: build a per-run root under the OS temp dir with credentials inlined into `mcp_config.json` |
 | `--keep-run-root` | off | Keep that root after the run, for inspection |
-| `--allow-unverified-pin` | off | Run while a pin check is pending (none is today); stamps `pin.verified: false` in the manifest |
+| `--allow-unverified-pin` | off | Run while a pin check is pending (none is today); stamps `pin.verified: false`, `pin.unverified_reason: "pending_checks"` in the manifest |
 
 ### What the invocation pins
 
@@ -55,7 +55,17 @@ node plugin/agy/run.mjs \
 
 ### The pin gate
 
-`docs/verification/p1-agy-runtime.md` says nothing may be pinned on a pending check. `plugin/agy/telemetry/fairnessPin.mjs` lists the checks the headless pin depends on (2, 4, 6, 10); all four passed live on 2026-09-17, so `run.mjs` runs without `--allow-unverified-pin` and writes `pin.verified: true`. If a check is ever set back to pending, the gate closes again.
+`docs/verification/p1-agy-runtime.md` says nothing may be pinned on a pending check. `plugin/agy/telemetry/fairnessPin.mjs` lists the checks the headless pin depends on (2, 4, 6, 10); all four passed live on 2026-09-17, so `run.mjs` runs without `--allow-unverified-pin`. If a check is ever set back to pending, the gate closes again.
+
+Passed checks open the gate; they do not prove the run held the pin. `pin.verified` is `true` only when agy itself named the model that conducted, and every name it gave is the pinned model or its slug:
+
+| `pin.unverified_reason` | Meaning |
+|---|---|
+| `model_mismatch` | agy named a model that is not the pin (`driver_model_mismatch` lists it) |
+| `pending_checks` | A check in `pin.pending_checks` is pending, and the run went ahead under `--allow-unverified-pin` |
+| `no_model_observed` | Neither the stream nor agy's local conversation record named a model, so nothing shows which model conducted |
+
+`pin.observed_models` lists the names read: the stream's (`driver_reported_models`) and, on a headless run, the `.1.19` field of agy's local conversation record (`driver_usage.local_record.models`). An interactive run reads them from `driver-collector.json`; without a collection its pin stays `no_model_observed`.
 
 ### Headless is plugin-less
 

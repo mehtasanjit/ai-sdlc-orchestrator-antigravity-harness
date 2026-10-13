@@ -13,7 +13,7 @@ import { parse as parseYaml } from "yaml";
 
 import { parseEventStream, parseInvocations, extractTurnUsage, modeledDriverCostEvents, driverUsage, conversationIdFrom, extractToolCalls, reportsUsage, RESUME_USAGE } from "../../plugin/agy/telemetry/event-reader.mjs";
 import { driverRange, driverRangeNote, driverRangeNotes } from "../../plugin/agy/telemetry/driverRange.mjs";
-import { readPin, driverSlug, assertPinnedInvocation, findPinRejection, pendingPinChecks, LIVE_PIN_CHECKS } from "../../plugin/agy/telemetry/fairnessPin.mjs";
+import { readPin, driverSlug, assertPinnedInvocation, findPinRejection, pendingPinChecks, pinVerification, LIVE_PIN_CHECKS } from "../../plugin/agy/telemetry/fairnessPin.mjs";
 import { inlineMcpConfig, materialiseRunRoot, removeRunRoot, defaultRunRoot, LINKED_PLUGIN_DIRS } from "../../plugin/agy/runRoot.mjs";
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
@@ -260,4 +260,12 @@ test("materialiseRunRoot builds .agents/plugins/mmo with symlinked directories a
     removeRunRoot(runRoot);
     assert.ok(!existsSync(runRoot));
   } finally { rmSync(base, { recursive: true, force: true }); }
+});
+
+test("the pin is verified only when agy named the conducting model and every name is the pin", () => {
+  assert.deepEqual(pinVerification({ pending: [], observed: ["gemini-3.8-flash-high"], offPin: [] }), { verified: true });
+  assert.deepEqual(pinVerification({ pending: [], observed: [], offPin: [] }), { verified: false, unverified_reason: "no_model_observed" }, "passed checks alone prove nothing about the run");
+  assert.deepEqual(pinVerification({ pending: [], observed: ["gemini-3.8-flash", "gemini-3.1-pro"], offPin: ["gemini-3.1-pro"] }), { verified: false, unverified_reason: "model_mismatch" });
+  assert.deepEqual(pinVerification({ pending: [16], observed: ["gemini-3.8-flash"], offPin: [] }), { verified: false, unverified_reason: "pending_checks" });
+  assert.deepEqual(pinVerification({ pending: [16], observed: ["gemini-3.1-pro"], offPin: ["gemini-3.1-pro"] }), { verified: false, unverified_reason: "model_mismatch" }, "a wrong model outranks a pending check");
 });
