@@ -49,6 +49,7 @@ import { driverRangeNotes } from "./telemetry/driverRange.mjs";
 import { inferIntent } from "../scripts/infer-intent.mjs";
 import { isMain } from "../scripts/lib/is-main.mjs";
 import { staleBuild, staleBuildWarning } from "../scripts/lib/stale-build.mjs";
+import { finishWriteGuard, gitStatus } from "./writeGuard.mjs";
 
 const AGY_DIR = dirname(fileURLToPath(import.meta.url));
 export const PLUGIN_ROOT = dirname(AGY_DIR);
@@ -548,6 +549,7 @@ async function main(args) {
   assertResumable(prior, { slug, policyName });
   const started = prior.started_at ?? new Date().toISOString();
   const launches = [...prior.invocations];
+  const statusBefore = gitStatus(projectRoot);
 
   // The streams go to disk as they arrive: the carried invocations first,
   // exactly as an end-of-run write would put them, then each process's
@@ -617,6 +619,14 @@ async function main(args) {
       );
     }
 
+    const writeGuard = finishWriteGuard({ projectRoot, runId, statusBefore, outcome: completed ? "completed" : "stopped" });
+    if (writeGuard.after_run_check?.outside_contract.length) {
+      console.error(
+        `run ${runId}: no write guard ran (headless), and the run changed ${writeGuard.after_run_check.outside_contract.length} file(s) its contract does not allow: ` +
+          `${writeGuard.after_run_check.outside_contract.slice(0, 5).join(", ")}${writeGuard.after_run_check.outside_contract.length > 5 ? ", …" : ""}. Review them before keeping the change.`,
+      );
+    }
+
     const { events, rejection, modeled, driverUsage: usageSummary, reportedModels: driverModels, offPinModels: offPin } = buildRunArtifacts({
       invocations: launches, pin, passId: runId, policyName, driver: policy.driver, runStartedAt: started,
       resumedFirst: Boolean(resumeFrom) && prior.invocations.length === 0,
@@ -661,6 +671,7 @@ async function main(args) {
       ...(interrupted ? { interrupted } : {}),
       output_dir: outputDir,
       code_dir: codeDir,
+      write_guard: writeGuard,
       driver_cost_usd_modeled: usageSummary.cost_usd,
       driver_reported_models: driverModels,
       ...(offPin.length ? { driver_model_mismatch: offPin } : {}),

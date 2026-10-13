@@ -345,6 +345,9 @@ export function buildHarnessManifest({ runDir, policyName, runId, env = process.
     ...(driverManifest?.bridge_build?.stale ? { bridge_build_stale: driverManifest.bridge_build.files } : {}),
     agy_invocations: driverManifest?.agy_invocations ?? null,
     completed: driverManifest?.completed ?? null,
+    write_guard: driverManifest
+      ? (driverManifest.write_guard ?? { state: "off", reason: "headless run recorded before write_guard existed; agy print mode loads no hooks" })
+      : { state: "hook", reason: "interactive session: plugin/agy/hooks/write-contract-check.mjs runs before every file write (plugin/hooks.json)" },
     gates: driverManifest?.gates ?? null,
     pin_rejection: driverManifest?.pin_rejection ?? null,
     ...conductorWork({ runDir, telemetry: dispatched, mode: driverManifest?.mode, completed: driverManifest?.completed }),

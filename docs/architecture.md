@@ -89,7 +89,7 @@ Hook commands run with cwd = the directory containing `hooks.json` (the plugin d
 | `plugin/agy/verify-setup.mjs`, `plugin/agy/env-checks.mjs` | Offline setup check and repair (`npm run verify -- --fix`) |
 | `plugin/agy/manifest.mjs` | Writes `manifest.json` from the run directory: the bridge's rollups plus `harness`, `usage` and `cost` (three labeled lines) |
 | `plugin/agy/runRoot.mjs`, `plugin/agy/mmoSelect.mjs` | The `--inline-env` per-run root, and the `MMO_SELECT` door choice read from `.sdlc/local/mmo-select.json` |
-| `plugin/scripts/` | Scripts the skills call in an interactive session: `setup-policy.mjs` (the console), `write-provenance.mjs`, `write-contract-check.mjs`, `session-hydrate.mjs`, `mmo-log.mjs` and the rest |
+| `plugin/scripts/` | Scripts the skills call in an interactive session: `setup-policy.mjs` (the console), `write-provenance.mjs`, `write-contract.mjs` (freezes and ends a brownfield contract), `session-hydrate.mjs`, `mmo-log.mjs` and the rest |
 | `plugin/policy-console/` | The one UI: a local page (`npm run console`, then http://127.0.0.1:3000) to pick or customize a routing policy. Shows the agy driver pin on every card and carries it into saved policies |
 | `plugin/examples/` | The briefs the skills can offer, including the six brownfield fixtures |
 | `.agents/plugins/mmo/` | The discovery mount: symlinks into `plugin/`, which is how agy finds the plugin in a trusted workspace (check 10). Nothing is written under `~/.gemini/` |

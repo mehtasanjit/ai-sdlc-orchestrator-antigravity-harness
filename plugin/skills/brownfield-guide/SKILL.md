@@ -54,7 +54,10 @@ Read the JSON. Three cases:
   &lt;phase&gt;. Print *"A previous &lt;intent&gt; run (`&lt;run_id&gt;`) was interrupted at phase &lt;phase&gt;.
   Would you like to resume it, or start fresh?"* Accept `resume`, `discard`, or `abort`. If
   `resume`, follow the resume path in [plugin/skills/pipeline/SKILL.md](/plugin/skills/pipeline/SKILL.md).
-  If `discard`, clear `.sdlc/local/state.json` and continue to step 2.
+  If `discard`, end the interrupted run so its contract stops holding the project — ask first,
+  since ending a run is the user's decision:
+  `node "${MMO_PLUGIN_ROOT}/scripts/write-contract.mjs" --abandon --run-id=<run_id> --reason="discarded at resume" --project-root="$(pwd)"`
+  — then clear `.sdlc/local/state.json` and continue to step 2.
 
 - **`resume.pending: null`** — normal flow. Print the one-line `marker` from the hydrate
   output (e.g. *"SDLC: 3 prior runs (last: docs, 2d ago); baseline at abc1234; no open resume
@@ -260,18 +263,37 @@ extra confirmation lines with the plugin's default behavior. Example:
 >   into them. Continue? [assumed yes unless you say otherwise]
 
 On `approved`:
-1. Freeze the confirmed allowlist + off-limits into `.sdlc/local/write-contract.json`
-   ({ schema_version:1, active:true, mode:"brownfield", run_id, strict:true, allowlist,
-   off_limits }). The PreToolUse hook (plugin/scripts/write-contract-check.mjs) reads this file
-   before every Write/Edit and refuses off-limits or not-in-allowlist paths at the tool
-   boundary.
-2. Update `.sdlc/runs/<run-id>/intent_brief.md` with the final scope.
-3. Continue to step 6.
+1. Freeze the confirmed allowlist + off-limits by code — never write the contract yourself:
+   ```bash
+   node "${MMO_PLUGIN_ROOT}/scripts/write-contract.mjs" --freeze --run-id=<run-id> \
+     --allowlist='<JSON array of globs>' --off-limits='<JSON array of globs>' --project-root="$(pwd)"
+   ```
+   Add `--strict-write=off` only when the user passed it. It writes `.sdlc/local/write-contract.json`
+   and the run's freeze record `.sdlc/runs/<run-id>/contract.lock.json`. The PreToolUse hook
+   (`plugin/agy/hooks/write-contract-check.mjs`, wired in `plugin/hooks.json`) reads the contract
+   before every file write and refuses off-limits or not-in-allowlist paths at the tool boundary.
+   While the run is live it allows the run's own `.sdlc/runs/<run-id>/`, and refuses every write if
+   the contract is edited after this freeze. A refusal names the rule; do not route around it.
+   Headless (`agy -p`) loads no hooks, so a headless run has no write guard: see the run record's
+   `harness.write_guard`.
+2. Initialise the run's undo record:
+   ```bash
+   node "${MMO_PLUGIN_ROOT}/scripts/write-provenance.mjs" --init --run-id=<run-id> --intent=<intent> --project-root="$(pwd)"
+   ```
+3. Update `.sdlc/runs/<run-id>/intent_brief.md` with the final scope.
+4. Continue to step 6.
 
 On `revise: <comments>` — rewrite the affected parts and re-show Gate 0.
 
-On `abort` — clear `.sdlc/local/write-contract.json` (set active:false), do not delete the
-run directory (leave it as a partial record), and stop.
+On `abort` — nothing was frozen, so there is nothing to switch off. Do not delete the run directory
+(leave it as a partial record), and stop.
+
+If the run stops at any later gate on `abort`, or for any reason after the freeze, end it so the
+contract stops holding the project:
+
+```bash
+node "${MMO_PLUGIN_ROOT}/scripts/write-contract.mjs" --close --run-id=<run-id> --outcome=aborted --project-root="$(pwd)"
+```
 
 # 6. Run the pipeline
 
@@ -298,10 +320,14 @@ not answer on their behalf.
 
 After the final report:
 
-1. Append a row to `.sdlc/ledger.md` (human-readable) and `.sdlc/ledger.json` (machine mirror).
+1. End the run, after Gate 4 is accepted. This records the run's end and switches the contract
+   off; until it runs, the contract refuses the ledger writes below:
+   ```bash
+   node "${MMO_PLUGIN_ROOT}/scripts/write-contract.mjs" --close --run-id=<run-id> --project-root="$(pwd)"
+   ```
+2. Append a row to `.sdlc/ledger.md` (human-readable) and `.sdlc/ledger.json` (machine mirror).
    Any cost in the row is the manifest's labelled lines, copied; never a single total.
-2. Update the project fingerprint record with a link to the ledger.
-3. Clear the write-contract state: set `.sdlc/local/write-contract.json` active:false.
+3. Update the project fingerprint record with a link to the ledger.
 4. Print the report to the user: the cost section of `SUMMARY.md` exactly as Phase 9 wrote it
    (the manifest's labelled lines, each with its kind — `cash`, `modeled` or `NOT MEASURED` —
    never a total, never a modeled figure added to a cash one), files touched, and (if

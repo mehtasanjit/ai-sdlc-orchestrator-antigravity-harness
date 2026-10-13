@@ -465,9 +465,9 @@ mid-gate, session-hydrate detects a non-terminal state and re-prompts on the nex
 >
 > Reply: `approved`, `revise: <comments>`, or `abort`.
 
-On `approved`, freeze the write contract to `.sdlc/local/write-contract.json`
-(schema: `{schema_version:1, active:true, mode:"brownfield", run_id, strict:true, allowlist,
-off_limits}`). Build `off_limits` by concatenating `.sdlc/project.json.off_limits_default`
+On `approved`, freeze the write contract by code with
+`node "${MMO_PLUGIN_ROOT}/scripts/write-contract.mjs" --freeze --run-id=<run_id> --allowlist='<JSON>' --off-limits='<JSON>' --project-root="$(pwd)"`
+(the brownfield guide's step 5); never write `.sdlc/local/write-contract.json` yourself. Build `off_limits` by concatenating `.sdlc/project.json.off_limits_default`
 (the project-level constants — `.env*`, `.mcp.json`, `node_modules/**`, etc., written by setup)
 with the AI-configs from `baseline.ai_configs_detected` and any ticket-specific paths the user
 added at Gate 0. The PreToolUse hook and the packet validator both read the merged list — the
