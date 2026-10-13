@@ -113,7 +113,7 @@ test("an event without a ledger, or with one row, stays whole on its routed mode
 test("server.ts copies the attempt's ledger fields onto every dispatched event", () => {
   const src = readFileSync(SERVER, "utf8");
   const mapIdx = src.indexOf("attempts.map((att) => ({");
-  const spreadIdx = src.indexOf("...attemptEventFields(att)");
+  const spreadIdx = src.indexOf("...attemptEventFields(att");
   assert.notEqual(spreadIdx, -1);
   assert.ok(spreadIdx > mapIdx && spreadIdx - mapIdx < 200, "inside the per-attempt event construction");
 });

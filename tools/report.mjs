@@ -43,7 +43,7 @@ try {
   console.error("The cost lines are computed by the bridge's compiled code. Run: npm install && npm run build");
   process.exit(2);
 }
-const { buildHarnessManifest, claudeWallet, workerLineOf, readJsonl } = harness;
+const { buildHarnessManifest, claudeWallet, workerLineOf, readJsonl, dispatchKeys } = harness;
 
 const telemetryPath = join(runDir, "telemetry.jsonl");
 const modeledPath = join(runDir, "driver-cost-modeled.jsonl");
@@ -137,10 +137,11 @@ const kindOf = (e) => lineByName[workerLineOf(e, policy)]?.kind ?? "cash";
 
 const phaseAgg = new Map();
 const provCount = { vendor: 0, estimated: 0, modeled: 0, none: 0, unknown: 0 };
-const packetAgg = new Map();
+const dispatchAgg = new Map();
+const keys = dispatchKeys(events);
 const totals = { calls: 0, tokIn: 0, tokOut: 0, cacheRead: 0, cacheWrite: 0, cash: 0, modeled: 0 };
 
-for (const e of events) {
+for (const [i, e] of events.entries()) {
   const phase = e.phase ?? "unknown";
   const tokIn = e.input_tokens ?? 0;
   const tokOut = e.output_tokens ?? 0;
@@ -167,21 +168,29 @@ for (const e of events) {
   rec.prov[prov in rec.prov ? prov : "unknown"] += 1;
   phaseAgg.set(phase, rec);
 
-  // Collapse output-cap doubling attempts into one record per packet.
-  const tid = e.task_id;
-  if (tid && (e.attempt_number != null || e.ceiling_used != null)) {
-    const pkt = packetAgg.get(tid) ?? {
-      task_id: tid, phase, model: e.model ?? "?", attempts: 0,
-      finalCeiling: e.ceiling_used ?? null, cash: 0, modeled: 0,
+  // One record per dispatch (all its attempts), never per packet: a packet
+  // dispatched twice is two records.
+  if (e.provenance !== "none") {
+    const d = dispatchAgg.get(keys[i]) ?? {
+      task_id: e.task_id ?? "?", phase, model: e.model ?? "?", attempts: 0,
+      capped: false, finalCeiling: null, last: null, cash: 0, modeled: 0,
     };
-    pkt.attempts += 1;
-    if (e.ceiling_used != null) pkt.finalCeiling = e.ceiling_used;
-    pkt[bucket] += cost;
-    packetAgg.set(tid, pkt);
+    d.attempts += 1;
+    // Events written before hit_output_cap existed show a cap only by the retry it caused.
+    if (e.hit_output_cap === true || (e.hit_output_cap === undefined && e.retry_reason === "output_cap")) d.capped = true;
+    if (e.ceiling_used != null) d.finalCeiling = e.ceiling_used;
+    d.last = e;
+    d[bucket] += cost;
+    dispatchAgg.set(keys[i], d);
   }
 }
 
-const retried = [...packetAgg.values()].filter((p) => p.attempts > 1).sort((a, b) => b.attempts - a.attempts);
+const dispatchOutcome = (d) => (d.last.success !== false ? "converged" : d.last.hit_output_cap ? "still truncated" : "failed");
+const dispatches = [...dispatchAgg.values()];
+const retried = dispatches.filter((d) => d.capped).sort((a, b) => b.attempts - a.attempts);
+const byTask = new Map();
+for (const d of dispatches) byTask.set(d.task_id, [...(byTask.get(d.task_id) ?? []), d]);
+const redispatched = [...byTask.values()].filter((ds) => ds.length > 1);
 const showModeled = lines.some((l) => l.line !== "driver" && l.kind === "modeled" && l.calls > 0);
 
 const driverCost = modeledEvents.reduce((s, e) => s + (e.cost_usd ?? 0), 0);
@@ -274,6 +283,10 @@ if (lines.some((l) => (l.input_tokens_cached ?? 0) + (l.input_tokens_cache_write
 const oneHourWrites = lines.reduce((s, l) => s + (l.input_tokens_cache_write_1h ?? 0), 0);
 const allWrites = lines.reduce((s, l) => s + (l.input_tokens_cache_write ?? 0), 0);
 if (oneHourWrites > 0) lineNotes.push(`${oneHourWrites} of ${allWrites} cache writes are 1-hour writes, billed at 2x the input rate; 5-minute writes bill at 1.25x.`);
+for (const l of workersFirst) {
+  if (!l.failed_attempts) continue;
+  lineNotes.push(`${lineName(l)}: ${l.failed_attempts} of ${l.attempts} attempt(s) failed, ${fmtUSD(l.failed_cost_usd)} ${kindLabel(l)} of the line's ${fmtUSD(l.cost_usd)}, over ${l.dispatches} dispatch(es).`);
+}
 if (lineByName.unclassified) lineNotes.push("unclassified: events with no known worker adapter or model prefix. Counted as cash, on neither worker's line.");
 if (orchestratorEvents > 0) lineNotes.push(`${orchestratorEvents} tier:"orchestrator" event(s) in telemetry.jsonl are left out of every figure, as manifest.json leaves them out.`);
 const rebuild = manifestStale ? `node plugin/agy/manifest.mjs '${runDir}'` : null;
@@ -432,10 +445,10 @@ if (retried.length > 0) {
   if (asMarkdown) {
     p(`## Packets that hit the output cap`);
     p();
-    p(`| Packet | Phase | Attempts | Final ceiling | Cash |${showModeled ? " Modeled |" : ""}`);
-    p(`|---|---|---:|---:|---:|${showModeled ? "---:|" : ""}`);
+    p(`| Packet | Phase | Attempts | Final ceiling | Outcome | Cash |${showModeled ? " Modeled |" : ""}`);
+    p(`|---|---|---:|---:|---|---:|${showModeled ? "---:|" : ""}`);
     for (const pkt of retried) {
-      p(`| \`${pkt.task_id}\` | ${pkt.phase} | ${pkt.attempts} | ${pkt.finalCeiling ?? "—"} | ${fmtUSD(pkt.cash)} |${showModeled ? ` ${fmtUSD(pkt.modeled)} |` : ""}`);
+      p(`| \`${pkt.task_id}\` | ${pkt.phase} | ${pkt.attempts} | ${pkt.finalCeiling ?? "—"} | ${dispatchOutcome(pkt)} | ${fmtUSD(pkt.cash)} |${showModeled ? ` ${fmtUSD(pkt.modeled)} |` : ""}`);
     }
     p();
   } else {
@@ -446,7 +459,33 @@ if (retried.length > 0) {
         ...(pkt.cash > 0 || pkt.modeled === 0 ? [`cash ${fmtUSD(pkt.cash)}`] : []),
         ...(pkt.modeled > 0 ? [`modeled ${fmtUSD(pkt.modeled)}`] : []),
       ].join(" · ");
-      p(`  ${gutter(ACTOR.handoff)}${pkt.task_id.padEnd(22)} ${pkt.phase.padEnd(22)} ${String(pkt.attempts) + " attempts"} → ${cost}`);
+      p(`  ${gutter(ACTOR.handoff)}${pkt.task_id.padEnd(22)} ${pkt.phase.padEnd(22)} ${String(pkt.attempts) + " attempts"} → ${dispatchOutcome(pkt)} · ${cost}`);
+    }
+    p();
+  }
+}
+
+// ─── packets dispatched more than once ────────────────────────────────
+
+if (redispatched.length > 0) {
+  const costOf = (d) => [
+    ...(d.cash > 0 || d.modeled === 0 ? [`cash ${fmtUSD(d.cash)}`] : []),
+    ...(d.modeled > 0 ? [`modeled ${fmtUSD(d.modeled)}`] : []),
+  ].join(" · ");
+  if (asMarkdown) {
+    p(`## Packets dispatched more than once`);
+    p();
+    p(`| Packet | Dispatch | Model | Attempts | Outcome | Cash |${showModeled ? " Modeled |" : ""}`);
+    p(`|---|---:|---|---:|---|---:|${showModeled ? "---:|" : ""}`);
+    for (const ds of redispatched) {
+      ds.forEach((d, n) => p(`| \`${d.task_id}\` | ${n + 1} of ${ds.length} | ${d.model} | ${d.attempts} | ${dispatchOutcome(d)} | ${fmtUSD(d.cash)} |${showModeled ? ` ${fmtUSD(d.modeled)} |` : ""}`));
+    }
+    p();
+  } else {
+    p(`  Packets dispatched more than once`);
+    p();
+    for (const ds of redispatched) {
+      ds.forEach((d, n) => p(`  ${gutter(ACTOR.handoff)}${d.task_id.padEnd(22)} ${`dispatch ${n + 1} of ${ds.length}`.padEnd(16)} ${d.model.padEnd(18)} ${d.attempts} attempt(s) → ${dispatchOutcome(d)} · ${costOf(d)}`));
     }
     p();
   }

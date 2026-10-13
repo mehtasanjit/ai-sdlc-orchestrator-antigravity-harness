@@ -67,7 +67,13 @@ On an interactive run there is no `driver-manifest.json` and the plugin sees no 
 
 ### Packets that hit the output cap
 
-Printed only when a packet was retried after hitting its `max_output_tokens` ceiling. One row per such packet: attempts, the ceiling on the final attempt, and its cash and modeled dollars across every attempt, kept apart. Absent otherwise.
+Printed only when a dispatch stopped at its `max_output_tokens` ceiling. One row per such dispatch: attempts, the ceiling on the final attempt, the outcome (`converged`, `still truncated` or `failed`), and its cash and modeled dollars across every attempt, kept apart. Attempts are grouped by `dispatch_id`, so a packet the conductor dispatched again is not counted here. Absent otherwise.
+
+### Packets dispatched more than once
+
+Printed only when one packet (`task_id`) went through more than one dispatch: a re-dispatch after a failure, or two dispatches running at once. One row per dispatch, in the order they were written: the model, its attempts, the outcome and its dollars. Every dispatch is billed.
+
+The notes under the cost lines name each worker line's failed attempts: how many of its attempts failed, and their dollars in the line's own kind.
 
 ### Delegated to an agent worker
 
@@ -131,6 +137,7 @@ Fields the report reads: `phase`, `provenance`, `input_tokens`, `input_tokens_ca
 - `price_basis` is `list` (the dated price list in [plugin/mcp/model-dispatch/src/prices.ts](../plugin/mcp/model-dispatch/src/prices.ts)) or `custom` (the policy's `pricing:` block under `pricing_override: true`).
 - A Gemini completion line (`model_id: flash-completion`) adds `thinking_level`, the `thinkingConfig.thinkingLevel` the request carried (`LOW` under the shipped policy, `null` when it carried none), and `output_tokens_reasoning`, the attempt's `thoughtsTokenCount`. The reasoning count is already inside `output_tokens` and billed at the output rate; on an attempt that hit the output cap it shows how much of the ceiling went to thinking.
 - An Opus line (the `claude-agent-sdk` adapter, or `claude-cli`) adds `cli_reported_cost_usd` — the SDK's own figure for the call, kept as a cross-check and never booked — and `ttl_split` (`transcript`, `approximate` or `no_cache_writes`) saying how the 5-minute / 1-hour cache-write buckets were told apart. `input_tokens_cache_write_1h` holds the 1-hour share when it is known; it bills at 2× input instead of 1.25×.
+- `dispatch_id` is one id per `execute_with_model` call, shared by all its attempts. `stop_reason` is the vendor's reason for the attempt's stop (`MAX_TOKENS`, `end_turn`, ...), `hit_output_cap` whether it stopped at its ceiling, and `terminal_reason` (on the dispatch's last attempt) why the dispatch ended: `success`, `output_cap_doubling_budget_exhausted`, `output_cap_at_model_absolute` or `vendor_error`. Events written before `dispatch_id` existed are grouped by `task_id`, with `attempt_number: 1` starting a new dispatch.
 - `worker_per_model` is a Claude worker attempt's ledger: one row per model the call billed, with that model's `tokens` (`input_cache_write` is the 5-minute share, disjoint from `input_cache_write_1h`) and `cost_usd`. A `claude-agent-sdk` call that also billed a Haiku call carries a `claude-haiku-4-5` row, and the manifest books those tokens and dollars on Haiku's own `model_breakdown` row instead of Opus's.
 - `provenance: "none"` with `task_type: "in_session"` or `"skipped"` is a phase the conductor logged without dispatching (`dispatch.mjs --log-phase`). Zero tokens, zero cost; its work, if any, accrues to the driver loop.
 - `latency_ms` is a real wall-clock figure on dispatched calls and `null` on logged-only lines.
@@ -209,7 +216,7 @@ The dispatched rollup, then three blocks this harness adds.
 
 Every `model_breakdown` row, `phase_breakdown` row and `by_model` row, every `cost.lines[]` entry and `usage.dispatched` carry the same token columns, so you re-price any row from its own tokens:
 
-A `model_breakdown` or `by_model` row's `calls` counts attempts routed to that model; `side_calls` counts attempts routed to another model that also billed this one, such as the Agent SDK's Haiku call under an Opus dispatch.
+A `model_breakdown` or `by_model` row's `calls` counts attempts routed to that model and `dispatches` the dispatches they came from; `failed_attempts` and `failed_cost_usd` are the attempts that did not succeed (output-cap retries included) and that model's dollars on them. `side_calls` counts attempts routed to another model that also billed this one, such as the Agent SDK's Haiku call under an Opus dispatch.
 
 | Column | Billed at |
 |---|---|
@@ -251,7 +258,7 @@ A `model_breakdown` or `by_model` row's `calls` counts attempts routed to that m
 | `driver_modeled_usd_low` | Present while check 16 is pending on a resumed run: the lower bound |
 | `driver_measured` | `false` on an interactive run: no agy usage counters were captured, and the $0 is not a measurement |
 | `claude_seat_modeled_usd` | Present only when Opus calls ran on the seat: those calls, priced at the Anthropic card, no invoice |
-| `lines[]` | Three entries — `driver`, `gemini_workers`, `claude_worker` — each with `kind` (`cash`, `modeled`, `mixed` on a Claude line partly on the seat, or `unmeasured` for an interactive run's driver), the wallet, models, tokens, `cost_usd`, and on the modeled, mixed and unmeasured ones a `basis` sentence. The driver line also carries `cost_usd_low`, `cost_usd_high`, `tokens_low`, `resume_check`, `resumed_without_earlier_record` and `invocations_without_usage` when they apply. A fourth, `unclassified`, appears only when an event names no known worker adapter and no `claude-` or `gemini-` model; its dollars stay off both worker lines |
+| `lines[]` | Three entries — `driver`, `gemini_workers`, `claude_worker` — each with `kind` (`cash`, `modeled`, `mixed` on a Claude line partly on the seat, or `unmeasured` for an interactive run's driver), the wallet, models, tokens, `cost_usd`, and on the modeled, mixed and unmeasured ones a `basis` sentence. The driver line also carries `cost_usd_low`, `cost_usd_high`, `tokens_low`, `resume_check`, `resumed_without_earlier_record` and `invocations_without_usage` when they apply. A fourth, `unclassified`, appears only when an event names no known worker adapter and no `claude-` or `gemini-` model; its dollars stay off both worker lines. Each worker line also carries `attempts` (equal to `calls`), `dispatches`, `failed_attempts` and `failed_cost_usd` |
 | `note` | The rule, restated in the file itself: the cash figure and the modeled figures are different kinds of dollars and are not summed |
 
 The two worker lines take their wallet from each event's `wallet` stamp:

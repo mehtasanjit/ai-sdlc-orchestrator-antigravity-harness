@@ -4,7 +4,7 @@
 
 import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
-import type { AttemptRecord, ModelPricing, PriceBasis, TelemetryEvent, WorkerModelCost } from "./types.js";
+import type { AttemptRecord, ExecutionResult, ModelPricing, PriceBasis, TelemetryEvent, WorkerModelCost } from "./types.js";
 import type { AppliedModifiers, PeriodRef } from "./prices.js";
 
 declare module "./types.js" {
@@ -17,14 +17,49 @@ declare module "./types.js" {
      * `input_cache_write_1h`. Absent on adapters that keep no ledger.
      */
     worker_per_model?: WorkerModelCost[];
+    /**
+     * One id per execute_with_model call, shared by all its attempts. Two
+     * dispatches of one packet share a task_id and differ here. Absent on
+     * events written before it existed; readers fall back to dispatchKeys().
+     */
+    dispatch_id?: string;
+    /** The vendor's stop reason for this attempt (`MAX_TOKENS`, `end_turn`, ...), as the adapter recorded it. */
+    stop_reason?: string;
+    /** Whether this attempt stopped at its output ceiling. */
+    hit_output_cap?: boolean;
+    /** Why the dispatch ended; on its last attempt only. */
+    terminal_reason?: ExecutionResult["terminal_reason"];
   }
 }
 
 /** The fields a dispatched event takes from its attempt beyond the token buckets. */
-export function attemptEventFields(att: AttemptRecord): Pick<TelemetryEvent, "worker_per_model"> {
+export function attemptEventFields(
+  att: AttemptRecord,
+  dispatch: { dispatch_id?: string; terminal_reason?: ExecutionResult["terminal_reason"] } = {},
+): Pick<TelemetryEvent, "worker_per_model" | "dispatch_id" | "stop_reason" | "hit_output_cap" | "terminal_reason"> {
   return {
+    dispatch_id: dispatch.dispatch_id,
+    stop_reason: att.stop_reason,
+    hit_output_cap: att.hit_output_cap,
+    terminal_reason: dispatch.terminal_reason,
     worker_per_model: att.per_model?.length ? att.per_model : undefined,
   };
+}
+
+/**
+ * The dispatch each event belongs to, in file order: its dispatch_id, else
+ * its task_id numbered by dispatch, where an attempt_number of 1 (or none)
+ * starts a new dispatch. A dispatch appends its attempts together, so the
+ * fallback holds for events written before dispatch_id existed.
+ */
+export function dispatchKeys(events: Array<Pick<TelemetryEvent, "dispatch_id" | "task_id" | "attempt_number">>): string[] {
+  const count = new Map<string, number>();
+  return events.map((ev, i) => {
+    if (ev.dispatch_id) return ev.dispatch_id;
+    const task = ev.task_id ?? `#${i}`;
+    if (ev.attempt_number == null || ev.attempt_number <= 1 || !count.has(task)) count.set(task, (count.get(task) ?? 0) + 1);
+    return `${task}#${count.get(task)}`;
+  });
 }
 
 export function appendEvent(jsonlPath: string, ev: TelemetryEvent): void {
@@ -213,7 +248,20 @@ export function addTokenColumns(row: Partial<TokenColumns>, tokens: Partial<Toke
   row.output_tokens_reasoning = (row.output_tokens_reasoning ?? 0) + (tokens.output_tokens_reasoning ?? 0);
 }
 
-export type ModelRow = { calls: number; side_calls?: number; cost_usd: number } & TokenColumns;
+/**
+ * `calls` counts attempts routed to the model and `dispatches` the
+ * execute_with_model calls they came from; `failed_attempts` and
+ * `failed_cost_usd` are the attempts that did not succeed (an output-cap
+ * retry included) and this model's dollars on them.
+ */
+export type ModelRow = {
+  calls: number;
+  dispatches: number;
+  side_calls?: number;
+  cost_usd: number;
+  failed_attempts: number;
+  failed_cost_usd: number;
+} & TokenColumns;
 
 /** One model's share of an event: its tokens and dollars, and whether it is the model the event was routed to. */
 export interface ModelShare {
@@ -447,11 +495,26 @@ export function cacheWriteBuckets(tokens: { input_cache_write?: number; input_ca
   };
 }
 
-function addModelShare(rows: Record<string, ModelRow>, share: ModelShare): void {
-  const row = (rows[share.model] ??= { calls: 0, cost_usd: 0, ...emptyTokenColumns() });
-  if (share.routed) row.calls++;
-  else row.side_calls = (row.side_calls ?? 0) + 1;
+function addModelShare(
+  rows: Record<string, ModelRow>,
+  share: ModelShare,
+  attempt: { dispatch: string; failed: boolean; seen: Map<ModelRow, Set<string>> },
+): void {
+  const row = (rows[share.model] ??= { calls: 0, dispatches: 0, cost_usd: 0, failed_attempts: 0, failed_cost_usd: 0, ...emptyTokenColumns() });
+  if (share.routed) {
+    row.calls++;
+    const seen = attempt.seen.get(row) ?? new Set<string>();
+    attempt.seen.set(row, seen);
+    if (!seen.has(attempt.dispatch)) {
+      seen.add(attempt.dispatch);
+      row.dispatches++;
+    }
+    if (attempt.failed) row.failed_attempts++;
+  } else {
+    row.side_calls = (row.side_calls ?? 0) + 1;
+  }
   row.cost_usd += share.cost_usd;
+  if (attempt.failed) row.failed_cost_usd += share.cost_usd;
   addTokenColumns(row, share.tokens);
 }
 
@@ -500,14 +563,17 @@ export function buildManifest(allEvents: TelemetryEvent[], opts: {
   const task_type_breakdown: Manifest["task_type_breakdown"] = {};
   let total_cost_usd = 0;
   const totals = emptyTokenColumns();
+  const keys = dispatchKeys(events);
+  const seen = new Map<ModelRow, Set<string>>();
 
-  for (const ev of events) {
+  for (const [i, ev] of events.entries()) {
     const tokens = eventTokenColumns(ev);
+    const attempt = { dispatch: keys[i], failed: ev.success === false, seen };
     total_cost_usd += ev.cost_usd;
     addTokenColumns(totals, tokens);
 
     const shares = modelShares(ev);
-    for (const share of shares) addModelShare(model_breakdown, share);
+    for (const share of shares) addModelShare(model_breakdown, share, attempt);
 
     const pb = (phase_breakdown[ev.phase] ??= {
       calls: 0, cost_usd: 0, models: [],
@@ -519,7 +585,7 @@ export function buildManifest(allEvents: TelemetryEvent[], opts: {
     addTokenColumns(pb, tokens);
     for (const share of shares) {
       if (!pb.models.includes(share.model)) pb.models.push(share.model);
-      addModelShare((pb.by_model ??= {}), share);
+      addModelShare((pb.by_model ??= {}), share, attempt);
     }
 
     const modb = (module_breakdown[ev.module] ??= { calls: 0, cost_usd: 0 });
@@ -533,12 +599,17 @@ export function buildManifest(allEvents: TelemetryEvent[], opts: {
 
   const r6 = (n: number) => Math.round(n * 1_000_000) / 1_000_000;
   total_cost_usd = r6(total_cost_usd);
-  for (const k of Object.keys(model_breakdown))
-    model_breakdown[k].cost_usd = r6(model_breakdown[k].cost_usd);
+  for (const row of Object.values(model_breakdown)) {
+    row.cost_usd = r6(row.cost_usd);
+    row.failed_cost_usd = r6(row.failed_cost_usd);
+  }
   for (const k of Object.keys(phase_breakdown)) {
     phase_breakdown[k].cost_usd = r6(phase_breakdown[k].cost_usd);
     const bm = phase_breakdown[k].by_model;
-    if (bm) for (const mk of Object.keys(bm)) bm[mk].cost_usd = r6(bm[mk].cost_usd);
+    if (bm) for (const row of Object.values(bm)) {
+      row.cost_usd = r6(row.cost_usd);
+      row.failed_cost_usd = r6(row.failed_cost_usd);
+    }
   }
   for (const k of Object.keys(module_breakdown))
     module_breakdown[k].cost_usd = r6(module_breakdown[k].cost_usd);
