@@ -377,11 +377,20 @@ test("text that is not JSON is kept verbatim under raw", async () => {
   assert.deepEqual(out.result, { raw: "Done. The handler returns ok." });
 });
 
-/** A query that yields nothing until the adapter aborts it. */
+/**
+ * A query that yields nothing until the adapter aborts it. The adapter's
+ * deadline timer is unref'd, so the interval keeps the event loop alive until
+ * the abort lands; without it node can exit with the test still pending.
+ */
 function hangingQuery() {
   return ({ options }) =>
     (async function* () {
-      await new Promise((resolve) => options.abortController.signal.addEventListener("abort", resolve));
+      const keepAlive = setInterval(() => {}, 1000);
+      try {
+        await new Promise((resolve) => options.abortController.signal.addEventListener("abort", resolve));
+      } finally {
+        clearInterval(keepAlive);
+      }
     })();
 }
 
