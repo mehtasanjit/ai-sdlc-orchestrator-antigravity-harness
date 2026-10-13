@@ -276,6 +276,10 @@ if (claudeLine.kind === "modeled" && claudeLine.calls > 0) {
 } else if (!wallet.arm && claudeLine.calls > 0) {
   lineNotes.push("No wallet is known for the claude worker, so its line is booked as cash, as manifest.mjs books it.");
 }
+if (manifest.harness?.driver_collection_incomplete) {
+  const gap = manifest.harness.driver_collection_incomplete;
+  lineNotes.push(`The driver line was collected up to ${gap.collected_until}; the run ended ${gap.uncollected_sec} s later at ${gap.run_ended_at}. The conductor's calls in between are in no figure: re-run collect-driver-usage.mjs, then manifest.mjs.`);
+}
 if (driverUnmeasured) lineNotes.push("The driver is NOT MEASURED: no headless launcher record and no driver-collector.json, so the conductor's tokens are in no figure. Unmeasured, never free.");
 if (lines.some((l) => (l.input_tokens_cached ?? 0) + (l.input_tokens_cache_write ?? 0) > 0)) {
   lineNotes.push("Tokens in is fresh input. Cache reads and cache writes are billed at their own rates and counted apart from it.");

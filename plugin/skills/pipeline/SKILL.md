@@ -85,17 +85,23 @@ Before Phase -1 on greenfield (on brownfield the guide logged it at Gate 0; do n
 node "${MMO_PLUGIN_ROOT}/scripts/mmo-log.mjs" --event=run.start --run-id=<run_id> --started-at=<run_started_at> --mode=greenfield --policy=<policy> --project-root="<project_root>"
 ```
 
-After Gate 4 is answered `accept`, or when the run stops at any gate on `abort`, log the end and
-rebuild the manifest:
+After Gate 4 is answered `accept`, or when the run stops at any gate on `abort`, log the end,
+collect your own usage again, and rebuild the manifest, in this order:
 
 ```
 node "${MMO_PLUGIN_ROOT}/scripts/mmo-log.mjs" --event=run.end --run-id=<run_id> --outcome=<completed|aborted> --project-root="<project_root>"
+node "${MMO_PLUGIN_ROOT}/agy/collect-driver-usage.mjs" "<output_dir>" --run-id=<run_id> --project-root="<project_root>" --since=<run_started_at>
 node "${MMO_PLUGIN_ROOT}/agy/manifest.mjs" "<output_dir>" --policy=<policy> --run-id=<run_id>
 ```
 
-The rebuilt manifest reads the same telemetry, so its cost lines are the ones `SUMMARY.md` already
-copied; it adds the run's start and end and the gate outcome. **Headless: skip both.** The launcher
-records the run's window in `driver-manifest.json` and builds the manifest after you exit.
+The first collection ran before `SUMMARY.md`, so it stopped before your calls for the final report
+and Gate 4. This one reads up to the `run.end` line and replaces it, so the driver line covers the
+whole run. The rebuilt manifest is the run's final record: the worker lines are the ones
+`SUMMARY.md` already copied, the driver line is now complete, and it adds the run's start, end and
+gate outcome. Tell the user the lines it printed, saying the driver line is the final one. If
+`manifest.mjs` warns that the driver line stops before the run ended, run the last two commands
+again. **Headless: skip all three.** The launcher records the run's window in
+`driver-manifest.json` and builds the manifest after you exit.
 
 ---
 
@@ -406,7 +412,8 @@ cost lines; it never computes them.
    has priced your own loop from the agy stream.
 2. **Write `<output_dir>/SUMMARY.md`:**
    - **Cost.** Interactive: one bullet per line `manifest.mjs` printed, copied with its kind and
-     figure exactly as printed. Headless: one sentence saying the labelled cost lines are in
+     figure exactly as printed. Mark the driver bullet "through the final report": it does not yet
+     hold your calls for Gate 4, which the collection after `run.end` adds to `manifest.json`. Headless: one sentence saying the labelled cost lines are in
      `manifest.json` → `cost.lines`, written by the launcher after this session. Never compute a
      total, never add a `modeled` figure to a `cash` one, and never put a figure on a
      `NOT MEASURED` line. They are different kinds of dollars; their sum is neither the bill nor

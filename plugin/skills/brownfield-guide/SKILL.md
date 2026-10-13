@@ -344,12 +344,13 @@ After the final report:
    node "${MMO_PLUGIN_ROOT}/scripts/write-contract.mjs" --close --run-id=<run-id> --project-root="$(pwd)"
    ```
 2. Append a row to `.sdlc/ledger.md` (human-readable) and `.sdlc/ledger.json` (machine mirror).
-   Any cost in the row is the manifest's labelled lines, copied; never a single total.
+   Any cost in the row is the labelled lines the manifest rebuild after `run.end` printed, copied;
+   never a single total. Those carry the complete driver line; `SUMMARY.md`'s stops before Gate 4.
 3. Update the project fingerprint record with a link to the ledger.
-4. Print the report to the user: the cost section of `SUMMARY.md` exactly as Phase 9 wrote it
-   (the manifest's labelled lines, each with its kind — `cash`, `modeled` or `NOT MEASURED` —
-   never a total, never a modeled figure added to a cash one), files touched, and (if
-   applicable) the `git reset` command the report provides as the escape hatch.
+4. Print the report to the user: the labelled lines the manifest rebuild after `run.end` printed,
+   each with its kind — `cash`, `modeled` or `NOT MEASURED` — never a total, never a modeled
+   figure added to a cash one; files touched; and (if applicable) the `git reset` command the
+   report provides as the escape hatch.
 
 Do not propose a follow-up run.
 

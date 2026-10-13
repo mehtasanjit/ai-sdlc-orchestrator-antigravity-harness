@@ -179,3 +179,38 @@ test("the driver collector's window prefers --since/--until, then the run marker
     assert.deepEqual([explicit.since, explicit.until, explicit.sources.since_from, explicit.sources.until_from], ["S", "U", "--since", "--until"]);
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
+
+test("a driver collected before run.end is flagged, and collecting again after it clears the flag", () => {
+  const { root, dir } = project();
+  try {
+    mmoLog(root, "--event=run.start", `--run-id=${RUN}`, "--started-at=2026-09-30T11:44:47Z", "--mode=greenfield", `--policy=${POLICY}`);
+    const collector = (until) => writeFileSync(join(dir, "driver-collector.json"), JSON.stringify({
+      run_id: RUN, source: "agy local conversation record", window: { since: "2026-09-30T11:44:47.000Z", until }, conversations: [], calls: 0,
+    }));
+    collector("2026-09-30T14:20:00.000Z");
+    mmoLog(root, "--event=run.end", `--run-id=${RUN}`, "--outcome=completed");
+    const { end } = readRunMarkers(dir, RUN);
+
+    const before = buildHarnessManifest({ runDir: dir, policyName: POLICY, runId: RUN, env: {} });
+    const gap = before.harness.driver_collection_incomplete;
+    assert.equal(gap.collected_until, "2026-09-30T14:20:00.000Z");
+    assert.equal(gap.run_ended_at, end);
+    assert.ok(gap.uncollected_sec > 0);
+    const cli = spawnSync(process.execPath, [join(ROOT, "plugin", "agy", "manifest.mjs"), dir, `--policy=${POLICY}`, `--run-id=${RUN}`], { encoding: "utf8", env: { PATH: process.env.PATH } });
+    assert.equal(cli.status, 0, cli.stderr);
+    assert.match(cli.stderr, /collected up to 2026-09-30T14:20:00\.000Z, but the run ended at .*collect-driver-usage\.mjs/);
+
+    collector(end);
+    const after = buildHarnessManifest({ runDir: dir, policyName: POLICY, runId: RUN, env: {} });
+    assert.equal(after.harness.driver_collection_incomplete, undefined, "a collection up to run.end covers the whole run");
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test("the pipeline skill collects the driver again after run.end, before the final manifest", async () => {
+  const { readFileSync } = await import("node:fs");
+  const skill = readFileSync(join(ROOT, "plugin", "skills", "pipeline", "SKILL.md"), "utf8");
+  const block = skill.slice(skill.indexOf("--event=run.end"));
+  const collect = block.indexOf("collect-driver-usage.mjs");
+  const manifest = block.indexOf("agy/manifest.mjs");
+  assert.ok(collect > 0 && collect < manifest, "run.end, then collect-driver-usage.mjs, then manifest.mjs");
+});

@@ -375,6 +375,7 @@ export function buildHarnessManifest({ runDir, policyName, runId, env = process.
     ...(driverLine.resumed_without_earlier_record ? { driver_resumed_without_earlier_record: true } : {}),
     ...(driverLine.invocations_without_usage ? { driver_invocations_without_usage: driverLine.invocations_without_usage } : {}),
     ...(collector ? { driver_collector: { source: collector.source, window: collector.window, conversations: collector.conversations, calls: collector.calls, fields_verified_on: collector.fields_verified_on, ...(collector.fields_unverified_for_version ? { fields_unverified_for_version: collector.fields_unverified_for_version } : {}), ...(collector.note ? { note: collector.note } : {}) } } : {}),
+    ...(driverCollectionGap(collector, markers) ? { driver_collection_incomplete: driverCollectionGap(collector, markers) } : {}),
     ...(collector?.reported_models ? { driver_reported_models: collector.reported_models } : {}),
     ...(collector?.model_mismatch ? { driver_model_mismatch: collector.model_mismatch } : {}),
     ...(driverManifest && "driver_reported_models" in driverManifest ? { driver_reported_models: driverManifest.driver_reported_models } : {}),
@@ -441,6 +442,17 @@ export function buildHarnessManifest({ runDir, policyName, runId, env = process.
  * checks alone, so it is re-derived from the models that record names. An
  * interactive run's models are the collector's, from agy's conversation record.
  */
+/**
+ * An interactive run collects its driver before SUMMARY.md and again after
+ * run.end. When only the first ran, the conductor's calls from then to the
+ * end of the run (Gate 4, the run.end step) are in no figure.
+ */
+export function driverCollectionGap(collector, markers) {
+  const until = collector?.window?.until;
+  if (!until || !markers?.end || !(Date.parse(until) < Date.parse(markers.end))) return null;
+  return { collected_until: until, run_ended_at: markers.end, uncollected_sec: Math.round((Date.parse(markers.end) - Date.parse(until)) / 1000) };
+}
+
 export function pinRecord({ driverManifest = null, pin = null, collector = null }) {
   if (driverManifest?.pin) {
     const recorded = driverManifest.pin;
@@ -515,6 +527,13 @@ if (isMain(import.meta.url)) {
     const out = join(runDir, "manifest.json");
     writeFileSync(out, JSON.stringify(manifest, null, 2) + "\n", "utf8");
     console.log(`manifest: wrote ${out} — ${describeManifest(manifest, driverManifestUsage(runDir))}`);
+    const gap = manifest.harness.driver_collection_incomplete;
+    if (gap) {
+      console.error(
+        `manifest: the driver line was collected up to ${gap.collected_until}, but the run ended at ${gap.run_ended_at}; ` +
+          `the conductor's calls in between are in no figure. Run plugin/agy/collect-driver-usage.mjs on this run directory again, then this command.`,
+      );
+    }
   } catch (err) {
     console.error(`manifest failed: ${err?.message ?? err}`);
     process.exit(1);

@@ -261,6 +261,7 @@ A `model_breakdown` or `by_model` row's `calls` counts attempts routed to that m
 | `driver_invocations_without_usage` | `agy --print` processes that reported no usage (no `result` event, or only an all-zero error result); the true driver figure may be higher |
 | `completed` | Headless: whether `SUMMARY.md` appeared during the run (the launcher's verdict). Interactive: `SUMMARY.md` written during the run and Gate 4's last line in `gates.jsonl` accepted |
 | `status` | `interrupted` (headless, stopped by a signal), `aborted` (a gate's last decision, or `run.end`'s `outcome`, is an abort), `completed`, `awaiting_acceptance` (`SUMMARY.md` exists, Gate 4 not accepted yet), or `incomplete` |
+| `driver_collection_incomplete` | Interactive only, present when the driver was collected before the run's `run.end` line: `{collected_until, run_ended_at, uncollected_sec}`. The conductor's calls in that gap are in no figure; re-run `collect-driver-usage.mjs`, then `manifest.mjs` |
 | `gate_mode` | `auto-approve` or `auto-abort` on a headless run; `prompt` on an interactive one |
 | `gates` | One `{gate, decision, artifact?, ts?}` per line of `gates.jsonl`, in file order; `null` when the file is absent |
 | `pin_rejection` | The stderr line if agy refused the pinned model |
