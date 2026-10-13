@@ -63,7 +63,7 @@ One named row per phase that logged an event. Known phases come in state-machine
 
 Its own section, deliberately. Turns, tokens and the modeled cost of the conductor's own loop — reasoning, file reads, the growing conversation — derived from agy's `usage` counters at the driver card. The text under the table repeats the point every time: this is not an amount anyone was billed, and it is kept out of the cash figure. Full method in [methodology.md](methodology.md#three-cost-lines).
 
-On an interactive run there is no `driver-manifest.json` and the plugin sees no `usage` counters, so the section reads **NOT MEASURED**: the conductor's tokens are in no figure, which is not the same as free. _No driver turns recorded._ appears only on a headless run whose launcher record exists but whose agy invocations reported no usage.
+On an interactive run the section is filled by `node plugin/agy/collect-driver-usage.mjs <run-dir>`, which reads agy's local conversation record for the run's window and writes `driver-collector.json` beside the modeled lines ([check 18](verification/p1-agy-runtime.md)). Until it runs, the section reads **NOT MEASURED**: the conductor's tokens are in no figure, which is not the same as free. _No driver turns recorded._ appears only when a launcher or collector record exists but reported no usage.
 
 ### Packets that hit the output cap
 

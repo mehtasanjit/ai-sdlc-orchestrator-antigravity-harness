@@ -54,7 +54,7 @@ under a different policy than the run used is worse than no what-if.
 
 **HITL gates active:** Gate 1 (requirements), Gate 2 (design), Gate 3 (security review), Gate 4 (final acceptance).
 
-When invoked headlessly (`plugin/agy/run.mjs`, which wraps `agy --print … --output-format stream-json` with the pinned invocation, or `--gates=auto-approve` here), all four HITL gates auto-approve so the session can complete end-to-end without prompts.
+When invoked headlessly (`plugin/agy/run.mjs`, which wraps `agy --print … --output-format stream-json` with the pinned invocation), the launcher requires `--gates=auto-approve` or `--gates=auto-abort`: `auto-approve` accepts all four HITL gates so the session completes without prompts, and `auto-abort` stops at the first one. `prompt` is refused there, because print mode has no one to answer it.
 
 ---
 
