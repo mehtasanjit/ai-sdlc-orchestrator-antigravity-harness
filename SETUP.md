@@ -52,7 +52,18 @@ The wizard offers the agent path only when a usable Vertex ADC exists; `--agent`
 
 ## 5. Choosing the policy
 
-The console (`plugin/policy-console/`, opened by `plugin/scripts/setup-policy.mjs`) shows the shipped presets with the agy driver pin on every card. Picking one, or saving a customized copy, writes `default_policy` to `<project>/.sdlc/project.json`; the skills and the headless launcher read it.
+The console (`plugin/policy-console/`, opened by `plugin/scripts/setup-policy.mjs`) shows the shipped presets with the agy driver pin on every card. Picking one, or saving a customized copy (written to `plugin/config/policies/<name>.yaml`), writes `default_policy` to `<project>/.sdlc/project.json`; the skills and the headless launcher read it.
+
+Every entry point resolves the policy in one order, the bridge's:
+
+| Order | Source | Note |
+|---|---|---|
+| 1 | `<project>/routing-policy.yaml` | The bridge always routes by it when present; `run.mjs` warns if `--policy` names another |
+| 2 | `--policy=<name>` | A preset or a console-saved policy under `plugin/config/policies/` |
+| 3 | `<project>/.sdlc/project.json` → `default_policy` | Setup's choice |
+| 4 | `antigravity-flash38-plus-opus5` | The shipped default |
+
+`run.mjs` takes the driver pin, the driver's price and the cost cap from that one file, refuses a policy with no `driver:` block (a headless run cannot start without the pin), and validates the file with the bridge's own loader before agy starts, so a misspelt adapter id fails at launch rather than at the first paid dispatch. `driver-manifest.json` records `policy_source`.
 
 `tools/setup.mjs` opens the console on every run that has a terminal attached, whether or not `default_policy` is already set — close the browser or press Ctrl-C to keep the current value. Two ways to bypass it: `--policy=<name>` writes the name directly, and a run with no TTY (CI, piped stdin) skips the console and warns that the launcher will fall back to `antigravity-flash38-plus-opus5`.
 

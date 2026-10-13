@@ -179,6 +179,43 @@ export function loadPolicyFile(policyName, pluginRoot = PLUGIN_ROOT) {
   return parseYaml(readFileSync(path, "utf-8"));
 }
 
+/**
+ * The policy this run uses, resolved the way the bridge resolves it, so the
+ * launcher's pin, rates and cap come from the file the bridge routes by:
+ *   1. <project-root>/routing-policy.yaml — the bridge always takes it when present
+ *   2. --policy=<name>
+ *   3. <project-root>/.sdlc/project.json default_policy (setup's console choice)
+ *   4. the shipped default
+ * Returns `{ name, path, source, policy, ignoredFlag }`.
+ */
+export function resolvePolicy({ projectRoot, flag = null, pluginRoot = PLUGIN_ROOT, read = readFileSync, exists = existsSync }) {
+  const override = join(projectRoot, "routing-policy.yaml");
+  if (exists(override)) {
+    const policy = parseYaml(read(override, "utf-8"));
+    if (!policy?.name) throw new Error(`run: ${override} has no name: field.`);
+    return { name: policy.name, path: override, source: "routing-policy.yaml", policy, ignoredFlag: flag && flag !== policy.name ? flag : null };
+  }
+  if (flag) return { name: flag, path: policyPath(flag, pluginRoot), source: "--policy", policy: loadPolicyFile(flag, pluginRoot), ignoredFlag: null };
+  const projectFile = join(projectRoot, ".sdlc", "project.json");
+  if (exists(projectFile)) {
+    let project = null;
+    try { project = JSON.parse(read(projectFile, "utf-8")); } catch { throw new Error(`run: ${projectFile} is not valid JSON.`); }
+    const name = typeof project?.default_policy === "string" ? project.default_policy.replace(/\.ya?ml$/, "") : null;
+    if (name) return { name, path: policyPath(name, pluginRoot), source: ".sdlc/project.json", policy: loadPolicyFile(name, pluginRoot), ignoredFlag: null };
+  }
+  return { name: DEFAULT_POLICY, path: policyPath(DEFAULT_POLICY, pluginRoot), source: "default", policy: loadPolicyFile(DEFAULT_POLICY, pluginRoot), ignoredFlag: null };
+}
+
+/** The bridge's own validation (adapter ids, rules, the cost cap), run at launch instead of at the first dispatch. */
+export async function validatePolicyFile(path) {
+  const { loadPolicyFromPath } = await import("../mcp/model-dispatch/dist/policy.js");
+  try {
+    loadPolicyFromPath(path);
+  } catch (err) {
+    throw new Error(`run: policy ${path} is not valid: ${err?.message ?? err}`);
+  }
+}
+
 function isInside(child, parent) {
   const rel = relative(parent, child);
   return rel === "" || (!rel.startsWith("..") && !resolve(rel).startsWith(".."));
@@ -390,7 +427,12 @@ export function pinGateMessage(pending) {
 
 async function main(args) {
   const projectRoot = args["project-root"] ? resolve(args["project-root"]) : process.cwd();
-  const policyName = args.policy ?? DEFAULT_POLICY;
+  const resolvedPolicy = resolvePolicy({ projectRoot, flag: typeof args.policy === "string" ? args.policy : null });
+  const policyName = resolvedPolicy.name;
+  if (resolvedPolicy.ignoredFlag) {
+    console.error(`run: warning — ${join(projectRoot, "routing-policy.yaml")} (policy '${policyName}') is in force; the bridge routes by it whatever --policy says, so --policy=${resolvedPolicy.ignoredFlag} is not used.`);
+  }
+  await validatePolicyFile(resolvedPolicy.path);
   const runId = args["run-id"] ?? new Date().toISOString().replace(/[:.]/g, "-");
   if (!/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(runId)) {
     throw new Error(`run: --run-id=${runId} must be letters, digits, '.', '_' or '-': it names the run's folder.`);
@@ -446,7 +488,7 @@ async function main(args) {
   };
   const promptText = renderPrompt(readFileSync(promptPath, "utf-8"), renderValues);
 
-  const policy = loadPolicyFile(policyName);
+  const policy = resolvedPolicy.policy;
   const pin = readPin(policy);
   const slug = driverSlug(pin);
   assertPinnedInvocation({ model: slug }, policy);
@@ -471,6 +513,8 @@ async function main(args) {
       JSON.stringify(
         {
           policy: policyName,
+          policy_source: resolvedPolicy.source,
+          policy_path: resolvedPolicy.path,
           pin: { ...pin, slug, verified: pinVerified, pending_checks: pending },
           driver_price: { basis: launchPrice.basis, period: launchPrice.period, pricing: launchPrice.pricing },
           run_id: runId,
@@ -495,7 +539,7 @@ async function main(args) {
 
   mkdirSync(outputDir, { recursive: true });
   renderSkills(outputDir, renderValues);
-  copyFileSync(policyPath(policyName), join(outputDir, "policy_snapshot.yaml"));
+  copyFileSync(resolvedPolicy.path, join(outputDir, "policy_snapshot.yaml"));
   if (runRoot) materialiseRunRoot({ runRoot, pluginRoot: PLUGIN_ROOT });
 
   const agyBin = args["agy-bin"] ?? "agy";
@@ -602,6 +646,7 @@ async function main(args) {
       harness: "antigravity",
       run_id: runId,
       policy: policyName,
+      policy_source: resolvedPolicy.source,
       gates: gateMode,
       mode: mode ?? null,
       intent: resolvedIntent ? { resolved: resolvedIntent, source: intentSource } : null,

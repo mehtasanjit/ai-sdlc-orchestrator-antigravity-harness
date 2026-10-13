@@ -30,7 +30,7 @@ node plugin/agy/run.mjs \
 | `--project-root` | cwd | The application's repo; added to the agy workspace with `--add-dir` |
 | `--output-dir` | `<project-root>/.sdlc/runs/<run-id>` | The run record, one folder per run. Added to the workspace when it is outside the project. A reused folder is safe for cost: the manifest, the report and the cost cap count only this run's lines, and a `SUMMARY.md` older than this run's start does not mark it complete |
 | `--code-dir` | `<project-root>/src`; the project root with `--mode=brownfield` | Where the application is written |
-| `--policy` | `antigravity-flash38-plus-opus5` | Policy name under `plugin/config/policies/` |
+| `--policy` | `.sdlc/project.json` → `default_policy`, else `antigravity-flash38-plus-opus5` | Policy name under `plugin/config/policies/`. A `<project-root>/routing-policy.yaml` wins over it, as it does in the bridge ([SETUP.md §5](../SETUP.md#5-choosing-the-policy)) |
 | `--run-id` | timestamp | `pass_id` on every telemetry event, and the run's folder name. Letters, digits, `.`, `_`, `-` |
 | `--gates` | `prompt` | `prompt` waits for you; `auto-approve` records `auto-approved` and continues; `auto-abort` stops at the first gate |
 | `--mode`, `--intent`, `--seed` | — | The brownfield handover the guide's step 4 reads. `--seed` without `--intent` on a brownfield run resolves the job type at launch through `plugin/scripts/infer-intent.mjs` and records `intent.source: "inferred"`; a seed that matches no job type, or several, refuses to launch and asks for `--intent` |
