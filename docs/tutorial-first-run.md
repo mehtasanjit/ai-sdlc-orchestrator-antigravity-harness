@@ -6,7 +6,7 @@ Twenty minutes end to end. You set up the plugin, prove the whole chain offline 
 
 ## What you'll need
 
-- **Node.js 20+**, the **Antigravity CLI** (`agy` ≥ 1.2.3, signed in to a Google account) and **Claude Code** (`claude`). Verify with `node --version`, `agy models` and `claude --version`.
+- **Node.js 22.19+**, the **Antigravity CLI** (`agy` ≥ 1.2.3, signed in to a Google account) and **Claude Code** (`claude`). Verify with `node --version`, `agy models` and `claude --version`.
 - **A Claude wallet.** Cheapest for a first run: Claude Code signed in to a claude.ai subscription (`claude auth status` shows `authMethod: claude.ai`). The Opus line is then modeled, not billed. An `ANTHROPIC_API_KEY` with a few dollars of budget works too and makes it cash.
 - **A Gemini door.** A `GEMINI_API_KEY` from [aistudio.google.com/app/apikey](https://aistudio.google.com/app/apikey), or Application Default Credentials from `gcloud auth application-default login`. There is no all-Claude preset on this harness — the conductor itself is Gemini, and so is the mechanical tier.
 

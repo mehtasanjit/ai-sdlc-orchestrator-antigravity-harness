@@ -190,7 +190,7 @@ Framed by what you want to do, not by every provider that exists. Full provider 
 
 | If you want to… | You need |
 |---|---|
-| **Try it at all** | Node.js 20+, the Antigravity CLI (`agy` ≥ 1.2.3) signed in to a Google account, Claude Code (`claude`) on PATH, macOS/Linux/WSL2, and one Claude wallet: a claude.ai subscription Claude Code is signed in to (the seat — Opus cost modeled), an `ANTHROPIC_API_KEY` (arm A), or a GCP project with Claude enabled in Model Garden (arm B) |
+| **Try it at all** | Node.js 22.19+, the Antigravity CLI (`agy` ≥ 1.2.3) signed in to a Google account, Claude Code (`claude`) on PATH, macOS/Linux/WSL2, and one Claude wallet: a claude.ai subscription Claude Code is signed in to (the seat — Opus cost modeled), an `ANTHROPIC_API_KEY` (arm A), or a GCP project with Claude enabled in Model Garden (arm B) |
 | **Run the mechanical tier** | The above, plus a Gemini door — a `GEMINI_API_KEY` from [AI Studio](https://aistudio.google.com/app/apikey), or Application Default Credentials from `gcloud auth application-default login` |
 | **Use the Antigravity agent path** | The above, plus Python 3.10+ (macOS ships 3.9, too old) **and** Vertex ADC — there is no API-key door for the agent worker |
 

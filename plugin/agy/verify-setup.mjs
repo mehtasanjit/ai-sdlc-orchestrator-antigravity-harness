@@ -29,6 +29,7 @@ import { readMmoSelectFile, writeMmoSelectFile } from "./mmoSelect.mjs";
 import { runChecks as runEnvChecks, renderText as renderEnvChecks } from "./env-checks.mjs";
 import { isMain } from "../scripts/lib/is-main.mjs";
 import { staleBuild } from "../scripts/lib/stale-build.mjs";
+import { MIN_NODE, meetsNodeFloor } from "../scripts/lib/node-floor.mjs";
 
 // ─── pure helpers ─────────────────────────────────────────────────────
 
@@ -416,6 +417,7 @@ export function pluginDiscoveryState(pluginRoot, read = readFileSync, exists = e
 /** Facts → ordered problem list. Pure. `blocking` fails the exit code. */
 export function evaluate({
   nodeMajor,
+  nodeVersion = null,
   agyCli = { present: false, version: null },
   claudeCli = { present: false, version: null },
   claudeLogin = null,
@@ -431,12 +433,12 @@ export function evaluate({
 }) {
   const problems = [];
 
-  if (nodeMajor < 20) {
+  if (nodeVersion ? !meetsNodeFloor(nodeVersion) : nodeMajor < 22) {
     problems.push({
       id: "node-version",
       severity: "blocking",
-      message: `Node ${nodeMajor} is too old — the bridge and the driver scripts need Node 20 or newer.`,
-      fix: "Install Node 20+ (https://nodejs.org) and re-run this script.",
+      message: `Node ${nodeVersion ?? nodeMajor} is too old — the bridge needs Node ${MIN_NODE} or newer (its undici dependency requires it).`,
+      fix: `Install Node ${MIN_NODE} or newer (https://nodejs.org) and re-run this script.`,
     });
   }
 
@@ -638,6 +640,7 @@ function observe(pluginRoot, env = process.env, projectRoot = process.cwd()) {
   const adcFile = adcPath();
   return {
     nodeMajor: nodeMajorFrom(process.versions.node),
+    nodeVersion: process.versions.node,
     agyCli: probeAgyCli(),
     claudeCli: probeClaudeCli(),
     claudeLogin: probeClaudeLogin(),

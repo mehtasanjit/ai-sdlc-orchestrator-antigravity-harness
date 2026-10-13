@@ -8,7 +8,7 @@ Everything you need to prepare your machine for a run. [INSTALL.md](../INSTALL.m
 
 | Item | Verify with | Notes |
 |---|---|---|
-| Node.js 20+ | `node --version` | The bridge, the driver and the setup scripts. |
+| Node.js 22.19+ | `node --version` | The bridge, the driver and the setup scripts. |
 | Antigravity CLI `agy` ≥ 1.2.3 | `agy --version` | `curl -fsSL https://antigravity.google/cli/install.sh \| bash` installs to `~/.local/bin/agy`; open a new shell. |
 | Google sign-in for agy | `agy models` lists models | Run `agy` once with no arguments and finish the browser flow. A person does this; it cannot be done headlessly. |
 | Claude Code `claude` | `claude --version` | The `claude-cli` adapter spawns `claude -p` for every Opus call. |
