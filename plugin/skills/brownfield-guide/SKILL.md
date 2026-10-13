@@ -293,7 +293,12 @@ On `approved`:
    node "${MMO_PLUGIN_ROOT}/scripts/write-provenance.mjs" --init --run-id=<run-id> --intent=<intent> --project-root="$(pwd)"
    ```
 3. Update `.sdlc/runs/<run-id>/intent_brief.md` with the final scope.
-4. Continue to step 6.
+4. Mark the run's start (interactive only; a headless launch records its own window). The manifest
+   and the driver collector read this line; `<run_started_at>` is the time recorded in step 1:
+   ```bash
+   node "${MMO_PLUGIN_ROOT}/scripts/mmo-log.mjs" --event=run.start --run-id=<run-id> --started-at=<run_started_at> --mode=brownfield --intent=<intent> --policy=<policy> --project-root="$(pwd)"
+   ```
+5. Continue to step 6.
 
 On `revise: <comments>` — rewrite the affected parts and re-show Gate 0.
 
@@ -332,8 +337,9 @@ not answer on their behalf.
 
 After the final report:
 
-1. End the run, after Gate 4 is accepted. This records the run's end and switches the contract
-   off; until it runs, the contract refuses the ledger writes below:
+1. End the run, after Gate 4 is accepted and the pipeline's `run.end` line and manifest rebuild
+   ran (the pipeline's "Run start and end markers" section). This records the contract's end and
+   switches it off; until it runs, the contract refuses the ledger writes below:
    ```bash
    node "${MMO_PLUGIN_ROOT}/scripts/write-contract.mjs" --close --run-id=<run-id> --project-root="$(pwd)"
    ```

@@ -72,6 +72,33 @@ prose is invisible to the cost record and defeats the measurement this harness e
 
 ---
 
+## Run start and end markers (interactive)
+
+The manifest's session window, its `harness.status`, and the driver collector's window come from
+two lines in `<output_dir>/orchestrator.log`. Write them with the log script, never by hand. The
+script writes to `<project_root>/.sdlc/runs/<run_id>/orchestrator.log`, which is `<output_dir>`'s
+log on the default layout.
+
+Before Phase -1 on greenfield (on brownfield the guide logged it at Gate 0; do not log it twice):
+
+```
+node "${MMO_PLUGIN_ROOT}/scripts/mmo-log.mjs" --event=run.start --run-id=<run_id> --started-at=<run_started_at> --mode=greenfield --policy=<policy> --project-root="<project_root>"
+```
+
+After Gate 4 is answered `accept`, or when the run stops at any gate on `abort`, log the end and
+rebuild the manifest:
+
+```
+node "${MMO_PLUGIN_ROOT}/scripts/mmo-log.mjs" --event=run.end --run-id=<run_id> --outcome=<completed|aborted> --project-root="<project_root>"
+node "${MMO_PLUGIN_ROOT}/agy/manifest.mjs" "<output_dir>" --policy=<policy> --run-id=<run_id>
+```
+
+The rebuilt manifest reads the same telemetry, so its cost lines are the ones `SUMMARY.md` already
+copied; it adds the run's start and end and the gate outcome. **Headless: skip both.** The launcher
+records the run's window in `driver-manifest.json` and builds the manifest after you exit.
+
+---
+
 ## Phase -1 — preflight (MANDATORY, before anything else)
 
 ```
@@ -462,7 +489,10 @@ with `phase: <name>, task_type: "skipped"` so downstream summaries stay complete
 
 ## HITL gate prompt templates
 
-**Gate delivery.** Interactive, you print the gate block yourself and wait for the user's reply.
+**Gate delivery.** Interactive, you print the gate block yourself and wait for the user's reply,
+then append one line with their decision to `<output_dir>/gates.jsonl`:
+`{"gate": <N>, "artifact": "<file the gate reviewed>", "decision": "approved|revise|aborted|accepted", "note": "<one line>"}`
+(`accepted` for Gate 4's `accept`; the manifest reads Gate 4's last line to mark the run completed).
 Every gate is a fenced `> ⏸ **HITL Gate <N> — <Title>**` block (templates below), printed
 verbatim. Headless, the conductor prompt names the gate mode (`auto-approve` or `auto-abort`):
 print the block anyway, apply the mode's decision, and append the line to `<output_dir>/gates.jsonl`

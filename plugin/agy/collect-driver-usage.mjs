@@ -13,9 +13,10 @@
  *        [--since=<iso>] [--until=<iso>] [--conversation=<id>[,<id>...]]
  *
  * --since is the time the run started (the skills record it at their first
- * step); without it, the run directory's creation time, which is later than
- * the first steps of a brownfield run. --until defaults to now,
- * --project-root to the current directory.
+ * step); without it, the run's `run.start` marker in orchestrator.log, else
+ * the run directory's creation time, which is later than the first steps of a
+ * brownfield run. --until defaults to the run's `run.end` marker, else now.
+ * --project-root defaults to the current directory.
  */
 import { existsSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
@@ -28,6 +29,7 @@ import { computeCostUsd } from "../mcp/model-dispatch/dist/pricing.js";
 import { resolvePolicy, parseArgs } from "./run.mjs";
 import { agyVersion } from "./manifest.mjs";
 import { isMain } from "../scripts/lib/is-main.mjs";
+import { inferRunId, readRunMarkers } from "./telemetry/runWindow.mjs";
 
 export const RECORD_SOURCE = "agy-local-record";
 
@@ -72,7 +74,7 @@ export function modeledFromRecord(calls, { pass, pin, driver, policyName }) {
   });
 }
 
-export async function collectDriverUsage({ runDir, runId, projectRoot, since, until, conversationIds = null, home = agyHome(), version = null }) {
+export async function collectDriverUsage({ runDir, runId, projectRoot, since, until, windowSources = null, conversationIds = null, home = agyHome(), version = null }) {
   if (existsSync(join(runDir, "driver-manifest.json"))) {
     throw new Error(`collect-driver-usage: ${runDir} holds a headless launcher record (driver-manifest.json); its driver line comes from agy's stream, not from this collector.`);
   }
@@ -85,7 +87,7 @@ export async function collectDriverUsage({ runDir, runId, projectRoot, since, un
     source: RECORD_SOURCE,
     run_id: runId,
     policy: resolved.name,
-    window: { since, until },
+    window: { since, until, ...(windowSources ?? {}) },
     agy_version: version,
     fields_verified_on: LOCAL_RECORD_FIELDS.verified_on,
     ...(version && version !== LOCAL_RECORD_FIELDS.verified_on ? { fields_unverified_for_version: version } : {}),
@@ -106,6 +108,19 @@ function runStart(runDir) {
   return new Date(born).toISOString();
 }
 
+/** The window to read agy's record over, and where each end came from. */
+export function collectionWindow({ runDir, runId, since = null, until = null, now = () => new Date().toISOString() }) {
+  const markers = readRunMarkers(runDir, runId);
+  return {
+    since: since ?? markers.start ?? runStart(runDir),
+    until: until ?? markers.end ?? now(),
+    sources: {
+      since_from: since ? "--since" : markers.start ? "run.start" : "run folder created",
+      until_from: until ? "--until" : markers.end ? "run.end" : "collection time",
+    },
+  };
+}
+
 if (isMain(import.meta.url)) {
   const args = parseArgs(process.argv.slice(2));
   const runDir = resolve(process.argv.slice(2).find((a) => !a.startsWith("--")) ?? "");
@@ -118,11 +133,10 @@ if (isMain(import.meta.url)) {
     const telemetry = existsSync(join(runDir, "telemetry.jsonl"))
       ? readFileSync(join(runDir, "telemetry.jsonl"), "utf8").split("\n").filter(Boolean).map((l) => { try { return JSON.parse(l); } catch { return null; } }).filter(Boolean)
       : [];
-    const runId = args["run-id"] ?? telemetry.find((e) => e.pass)?.pass ?? runDir.split("/").pop();
-    const since = args.since ?? runStart(runDir);
-    const until = args.until ?? new Date().toISOString();
+    const runId = args["run-id"] ?? inferRunId(runDir, telemetry) ?? runDir.split("/").pop();
+    const { since, until, sources } = collectionWindow({ runDir, runId, since: typeof args.since === "string" ? args.since : null, until: typeof args.until === "string" ? args.until : null });
     const conversationIds = typeof args.conversation === "string" ? args.conversation.split(",").filter(Boolean) : null;
-    const { modeled, evidence } = await collectDriverUsage({ runDir, runId, projectRoot, since, until, conversationIds, version: agyVersion() });
+    const { modeled, evidence } = await collectDriverUsage({ runDir, runId, projectRoot, since, until, windowSources: sources, conversationIds, version: agyVersion() });
     writeFileSync(join(runDir, "driver-collector.json"), JSON.stringify(evidence, null, 2) + "\n");
     if (!modeled.length) {
       // An earlier collection's lines are not this window's: a re-collect that finds nothing leaves none behind.
