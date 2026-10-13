@@ -28,6 +28,7 @@ import { fileURLToPath } from "node:url";
 import { readMmoSelectFile, writeMmoSelectFile } from "./mmoSelect.mjs";
 import { runChecks as runEnvChecks, renderText as renderEnvChecks } from "./env-checks.mjs";
 import { isMain } from "../scripts/lib/is-main.mjs";
+import { staleBuild } from "../scripts/lib/stale-build.mjs";
 
 // ─── pure helpers ─────────────────────────────────────────────────────
 
@@ -420,6 +421,7 @@ export function evaluate({
   claudeLogin = null,
   hasNodeModules,
   hasDist,
+  staleBuild = null,
   discovery = { ok: true, problems: [] },
   env = {},
   vertex = null,
@@ -475,6 +477,14 @@ export function evaluate({
       id: "mcp-dependencies",
       severity: "blocking",
       message: "The bundled MCP server's dependencies are not installed — the bridge cannot start.",
+      fix: "Run this script with --fix (or: npm run build at the repo root).",
+    });
+  }
+  if (hasDist && staleBuild?.stale) {
+    problems.push({
+      id: "mcp-build-stale",
+      severity: "warning",
+      message: `The bundled MCP server's dist/ is older than its src/ (${staleBuild.files.slice(0, 3).join(", ")}): runs use the old build until it is rebuilt.`,
       fix: "Run this script with --fix (or: npm run build at the repo root).",
     });
   }
@@ -634,6 +644,7 @@ function observe(pluginRoot, env = process.env, projectRoot = process.cwd()) {
     hasGcloud: onPath("gcloud"),
     hasNodeModules: existsSync(nodeModules),
     hasDist: existsSync(distEntry),
+    staleBuild: staleBuild(mcpPaths(pluginRoot).serverDir),
     discovery: pluginDiscoveryState(pluginRoot),
     vertex: vertexCredentialState({
       env: realEnv,

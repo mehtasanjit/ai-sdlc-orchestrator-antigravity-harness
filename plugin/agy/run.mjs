@@ -43,6 +43,7 @@ import { buildHarnessManifest, agyVersion } from "./manifest.mjs";
 import { driverRangeNotes } from "./telemetry/driverRange.mjs";
 import { inferIntent } from "../scripts/infer-intent.mjs";
 import { isMain } from "../scripts/lib/is-main.mjs";
+import { staleBuild, staleBuildWarning } from "../scripts/lib/stale-build.mjs";
 
 const AGY_DIR = dirname(fileURLToPath(import.meta.url));
 export const PLUGIN_ROOT = dirname(AGY_DIR);
@@ -393,6 +394,10 @@ async function main(args) {
   const slug = driverSlug(pin);
   assertPinnedInvocation({ model: slug }, policy);
 
+  const build = staleBuild(join(PLUGIN_ROOT, "mcp", "model-dispatch"));
+  const buildWarning = staleBuildWarning(build);
+  if (buildWarning) console.error(`run: warning — ${buildWarning}`);
+
   const pending = pendingPinChecks();
   const pinVerified = pending.length === 0;
   const inlineEnv = Boolean(args["inline-env"]);
@@ -412,6 +417,7 @@ async function main(args) {
           output_dir: outputDir,
           cwd,
           inline_env: inlineEnv,
+          bridge_build: { stale: build.stale, files: build.files },
           env_present: envPresence(),
           argv: redactPrompt(agyArgs),
         },
@@ -515,6 +521,7 @@ async function main(args) {
       pin_rejection: rejection,
       events_captured: events.length,
       inline_env: inlineEnv,
+      bridge_build: { stale: build.stale, files: build.files },
       agy_version: agyVersion((cmd, a, o) => spawnSyncFn(agyBin, a, o)),
     };
     writeFileSync(join(outputDir, "driver-manifest.json"), JSON.stringify(manifest, null, 2) + "\n", "utf-8");

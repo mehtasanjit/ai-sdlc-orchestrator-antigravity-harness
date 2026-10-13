@@ -27,6 +27,7 @@ import { fileURLToPath } from "node:url";
 
 import { readMmoSelectFile } from "./mmoSelect.mjs";
 import { isMain } from "../scripts/lib/is-main.mjs";
+import { staleBuild, staleBuildWarning } from "../scripts/lib/stale-build.mjs";
 
 const BRIDGE_CLIENT = resolve(
   dirname(fileURLToPath(import.meta.url)),
@@ -248,6 +249,8 @@ export async function runDispatch(args, { connect, env = process.env } = {}) {
 // Direct-execution gate so the test suite can import the pure helpers.
 if (isMain(import.meta.url)) {
   const args = parseArgs(process.argv.slice(2));
+  const stale = staleBuildWarning(staleBuild(resolve(dirname(BRIDGE_CLIENT), "..")));
+  if (stale) console.error(`dispatch: warning — ${stale}`);
   const { connectBridge } = await import(BRIDGE_CLIENT);
   try {
     const { ok, summary } = await runDispatch(args, { connect: connectBridge });
