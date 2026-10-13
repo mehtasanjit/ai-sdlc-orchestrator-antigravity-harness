@@ -198,7 +198,7 @@ test("an error result is still priced, and reports as a vendor_error", async () 
   assert.match(out.error, /max turns/);
 });
 
-test("a stream that ends with no result message fails rather than inventing usage", async () => {
+test("a stream that ends with no result message fails and books the usage its frames reported", async () => {
   const adapter = new ClaudeAgentSdkAdapter(BASE_CONFIG, {
     queryFn: fakeQuery([assistantFrame({ input_tokens: 100, output_tokens: 50 })]),
     now: NOW,
@@ -206,8 +206,49 @@ test("a stream that ends with no result message fails rather than inventing usag
   const out = await adapter.execute(PACKET);
 
   assert.equal(out.success, false);
-  assert.equal(out.cost_usd, 0);
   assert.match(out.error, /no result message/);
+  assert.equal(out.attempts[0].usage_from_frames, true);
+  assert.deepEqual([out.tokens.input, out.tokens.output], [100, 50]);
+  assert.equal(out.cost_usd, computeCostUsd({ input: 100, input_cached: 0, output: 50 }, BASE_CONFIG.pricing));
+});
+
+test("a stream with no frames at all books nothing", async () => {
+  const adapter = new ClaudeAgentSdkAdapter(BASE_CONFIG, { queryFn: fakeQuery([]), now: NOW });
+  const out = await adapter.execute(PACKET);
+  assert.equal(out.success, false);
+  assert.equal(out.cost_usd, 0);
+});
+
+test("a timeout keeps the usage the stream reported before it, instead of booking $0", async () => {
+  const hang = () => (async function* () {
+    yield assistantFrame({ input_tokens: 2000, cache_read_input_tokens: 500, output_tokens: 300 });
+    await new Promise(() => {});
+  })();
+  const adapter = new ClaudeAgentSdkAdapter(BASE_CONFIG, { queryFn: (args) => {
+    const it = hang();
+    // The adapter aborts through its AbortController; end the stream when it fires.
+    return (async function* () {
+      const aborted = new Promise((r) => args.options.abortController.signal.addEventListener("abort", r));
+      const first = await it.next();
+      yield first.value;
+      await aborted;
+    })();
+  }, timeoutSec: 0.05, now: NOW });
+  const out = await adapter.execute(PACKET);
+  assert.equal(out.success, false);
+  assert.match(out.error, /timeout after 0.05s/);
+  assert.equal(out.attempts[0].usage_from_frames, true);
+  assert.equal(out.tokens.input, 2000);
+  assert.equal(out.tokens.input_cached, 500);
+  assert.equal(out.tokens.output, 300);
+  assert.ok(out.cost_usd > 0);
+});
+
+test("the adapter's default timeout fires before the bridge client gives up", async () => {
+  const { DEFAULT_TIMEOUT_SEC } = await import("../dist/adapters/ClaudeAgentSdkAdapter.js");
+  const { DEFAULT_TOOL_TIMEOUT_MS } = await import("../dist/driverClient.js");
+  assert.ok(DEFAULT_TIMEOUT_SEC > 300, "300 s cut real Opus design and review calls short");
+  assert.ok(DEFAULT_TIMEOUT_SEC * 1000 < DEFAULT_TOOL_TIMEOUT_MS, "the adapter must stop and book usage before the client abandons the call");
 });
 
 test("a model with no price is refused before the query runs", async () => {

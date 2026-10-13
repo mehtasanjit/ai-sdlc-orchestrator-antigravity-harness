@@ -281,6 +281,11 @@ export interface AttemptRecord {
   thinking_level?: string | null;
   /** The wallet this attempt billed; see DispatchWallet. */
   wallet?: DispatchWallet;
+  /**
+   * claude-agent-sdk only: the call stopped before its result message, and
+   * `tokens` / `cost_usd` are the usage its assistant frames reported until then.
+   */
+  usage_from_frames?: boolean;
   /** Gemini only, on a failed call: the HTTP status the vendor answered with. */
   error_status?: number;
   /** Gemini only, on a failed call: the Node/undici code of a connection that failed in transit. */

@@ -18,10 +18,11 @@ const DEFAULT_SERVER_ENTRY = join(dirname(fileURLToPath(import.meta.url)), "serv
 
 /**
  * Must exceed the largest `worker_timeout_sec` any shipped policy sets (540s
- * for the agent worker), or the client abandons a call the adapter is still
- * working on. The SDK default is 60s.
+ * for the agent worker) and the Claude Agent SDK adapter's own default, or the
+ * client abandons a call the adapter is still working on, and the usage the
+ * adapter books on its own timeout is lost. The SDK default is 60s.
  */
-export const DEFAULT_TOOL_TIMEOUT_MS = 900_000;
+export const DEFAULT_TOOL_TIMEOUT_MS = 1_800_000;
 
 export interface BridgeClientOptions {
   /** Override the server entry point — tests point this at a fixture server. */

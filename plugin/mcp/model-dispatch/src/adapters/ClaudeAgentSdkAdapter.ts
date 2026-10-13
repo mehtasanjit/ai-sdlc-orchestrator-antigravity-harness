@@ -50,7 +50,11 @@ import {
   type WorkerLedger,
 } from "./claudeCliLedger.js";
 
-const DEFAULT_TIMEOUT_SEC = 300;
+/**
+ * Under DEFAULT_TOOL_TIMEOUT_MS (driverClient.ts), so the adapter stops a slow
+ * call and books its usage before the client abandons the dispatch.
+ */
+export const DEFAULT_TIMEOUT_SEC = 1740;
 
 /**
  * The slice of the SDK's surface this adapter uses. Declared structurally
@@ -152,7 +156,7 @@ export class ClaudeAgentSdkAdapter implements ModelAdapter {
     this.id = config.id;
     this.modelConfig = config;
     this.queryFn = options.queryFn;
-    this.timeoutMs = (options.timeoutSec ?? DEFAULT_TIMEOUT_SEC) * 1000;
+    this.timeoutMs = (options.timeoutSec ?? config.worker_timeout_sec ?? DEFAULT_TIMEOUT_SEC) * 1000;
     this.cwd = options.cwd;
     this.env = options.env ?? process.env;
     this.pricer = new DispatchPricer(config, options.now ?? systemClock);
@@ -182,6 +186,7 @@ export class ClaudeAgentSdkAdapter implements ModelAdapter {
     const prompt = stableBlock ? `${stableBlock}\n\n${userPrompt}` : userPrompt;
 
     const run = await this.runQuery(prompt);
+    if (!run.ok && run.writes.size > 0) return this.partial(packet, run, started, dispatchDate);
     if (!run.ok) {
       return this.failure(
         packet,
@@ -307,6 +312,60 @@ export class ClaudeAgentSdkAdapter implements ModelAdapter {
     return ledger;
   }
 
+  /**
+   * A call stopped before its result message (a timeout, an abort, a crash)
+   * after the stream had reported usage. Each assistant frame's usage is what
+   * the API billed for that message, so those tokens are priced through the
+   * same ledger a result would use; a message cut off mid-stream counts the
+   * output it had reached.
+   */
+  private partial(
+    packet: TaskPacket,
+    run: { error: string; init: ClaudeDispatchFacts; writes: Map<string, TranscriptModelWrites> },
+    started: number,
+    dispatchDate: Date,
+  ): ExecutionResult {
+    const modelUsage: Record<string, any> = {};
+    for (const [model, w] of run.writes) {
+      modelUsage[model] = {
+        inputTokens: w.logged.input,
+        cacheReadInputTokens: w.logged.input_cached,
+        cacheCreationInputTokens: w.write_5m + w.write_1h,
+        outputTokens: w.logged.output,
+        webSearchRequests: w.logged.web_search_requests,
+      };
+    }
+    const ledger = this.ledgerFor({ modelUsage }, run.writes, dispatchDate);
+    const latency = Date.now() - started;
+    const attempt: AttemptRecord = {
+      attempt_number: 1,
+      ...unenforcedBudget(packet),
+      hit_output_cap: false,
+      tokens: ledger.tokens,
+      cost_usd: ledger.cost_usd,
+      latency_ms: latency,
+      success: false,
+      error: run.error,
+      usage_from_frames: true,
+      ...(ledger.price_basis ? { price_basis: ledger.price_basis } : {}),
+      unpriced_models: ledger.unpriced_models,
+      ttl_split: ledger.ttl_split,
+      per_model: ledger.per_model,
+      wallet: claudeDispatchWallet(this.env, run.init),
+    };
+    return {
+      result: null,
+      tokens: ledger.tokens,
+      cost_usd: ledger.cost_usd,
+      latency_ms: latency,
+      cache_hit: ledger.tokens.input_cached > 0,
+      success: false,
+      error: run.error,
+      attempts: [attempt],
+      terminal_reason: "vendor_error",
+    };
+  }
+
   /** A call that billed nothing measurable: refused before running, or no result was produced. */
   private failure(
     packet: TaskPacket,
@@ -353,7 +412,7 @@ export class ClaudeAgentSdkAdapter implements ModelAdapter {
     prompt: string,
   ): Promise<
     | { ok: true; result: ClaudeCliResultLike & { subtype?: string; is_error?: boolean; duration_ms?: number; duration_api_ms?: number; stop_reason?: string | null }; writes: Map<string, TranscriptModelWrites>; init: ClaudeDispatchFacts }
-    | { ok: false; error: string; init: ClaudeDispatchFacts }
+    | { ok: false; error: string; init: ClaudeDispatchFacts; writes: Map<string, TranscriptModelWrites> }
   > {
     let query: AgentSdkQuery;
     try {
@@ -366,6 +425,7 @@ export class ClaudeAgentSdkAdapter implements ModelAdapter {
           `'${this.modelConfig.id}': ${err?.message ?? err}. Run \`npm ci\` in ` +
           `plugin/mcp/model-dispatch.`,
         init: {},
+        writes: new Map(),
       };
     }
 
@@ -408,19 +468,19 @@ export class ClaudeAgentSdkAdapter implements ModelAdapter {
           return { ok: true, result: message as any, writes: acc.finish(), init };
         }
       }
-      // The stream ended without a result message: a crash or an abort. Either
-      // way there is no usage to book — the tokens spent are unrecoverable
-      // from here, and saying so is better than inventing a number.
+      // The stream ended without a result message: a crash or an abort. The
+      // frames already seen are the usage to book; execute() prices them.
       return {
         ok: false,
         error: timedOut
           ? `claude-agent-sdk timeout after ${this.timeoutMs / 1000}s`
           : "claude-agent-sdk stream ended with no result message",
         init,
+        writes: acc.finish(),
       };
     } catch (err: any) {
-      if (timedOut) return { ok: false, error: `claude-agent-sdk timeout after ${this.timeoutMs / 1000}s`, init };
-      return { ok: false, error: `claude-agent-sdk error: ${err?.message ?? err}`, init };
+      if (timedOut) return { ok: false, error: `claude-agent-sdk timeout after ${this.timeoutMs / 1000}s`, init, writes: acc.finish() };
+      return { ok: false, error: `claude-agent-sdk error: ${err?.message ?? err}`, init, writes: acc.finish() };
     } finally {
       clearTimeout(timer);
     }
