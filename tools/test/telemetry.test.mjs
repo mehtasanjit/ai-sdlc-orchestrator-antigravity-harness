@@ -11,7 +11,8 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parse as parseYaml } from "yaml";
 
-import { parseEventStream, parseInvocations, extractTurnUsage, modeledDriverCostEvents, driverUsage, conversationIdFrom, extractToolCalls, reportsUsage, RESUME_USAGE } from "../../plugin/agy/telemetry/event-reader.mjs";
+import { parseEventStream, parseInvocations, extractTurnUsage, modeledDriverCostEvents, driverUsage, conversationIdFrom, extractToolCalls, reportsUsage, RESUME_USAGE, tokenReading } from "../../plugin/agy/telemetry/event-reader.mjs";
+import { RECORDED_READING, readingsThatFit } from "../../plugin/agy/telemetry/tokenLayouts.mjs";
 import { driverRange, driverRangeNote, driverRangeNotes } from "../../plugin/agy/telemetry/driverRange.mjs";
 import { readPin, driverSlug, assertPinnedInvocation, findPinRejection, pendingPinChecks, pinVerification, LIVE_PIN_CHECKS } from "../../plugin/agy/telemetry/fairnessPin.mjs";
 import { inlineMcpConfig, materialiseRunRoot, removeRunRoot, defaultRunRoot, LINKED_PLUGIN_DIRS } from "../../plugin/agy/runRoot.mjs";
@@ -20,7 +21,10 @@ const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const PLUGIN = join(ROOT, "plugin");
 const policy = (name) => parseYaml(readFileSync(join(PLUGIN, "config", "policies", `${name}.yaml`), "utf8"));
 
-const usage = (i, o, t, c) => ({ input_tokens: i, output_tokens: o, thinking_tokens: t, cache_read_tokens: c, total_tokens: i + o + t });
+// (prompt incl. cache reads, visible output, thinking, cache reads), laid out
+// as agy 1.3.0 reports them (check 17): cache beside input and outside the
+// total, thinking inside output.
+const usage = (i, o, t, c) => ({ input_tokens: i - c, output_tokens: o + t, thinking_tokens: t, cache_read_tokens: c, total_tokens: i - c + o + t });
 const result = (conv, u, extra = {}) => JSON.stringify({ event: "result", result: { conversation_id: conv, status: "OK", response: "", num_turns: 1, usage: u, ...extra } });
 
 // ── event reader ──────────────────────────────────────────────────────────
@@ -47,7 +51,7 @@ test("extractTurnUsage differences cumulative results of the same conversation (
   const text = [result("c1", usage(1000, 100, 10, 200)), result("c1", usage(2500, 300, 30, 900))].join("\n");
   const turns = extractTurnUsage(parseEventStream(text));
   assert.equal(turns.length, 2);
-  assert.deepEqual(turns[1].usage, { input_tokens: 1500, output_tokens: 200, thinking_tokens: 20, cache_read_tokens: 700, total_tokens: 1720 });
+  assert.deepEqual(turns[1].usage, { input_tokens: 800, output_tokens: 220, thinking_tokens: 20, cache_read_tokens: 700, total_tokens: 1020 });
 });
 
 test("a result for a different conversation starts a fresh baseline", () => {
@@ -180,6 +184,27 @@ test("the token bounds travel with the cost bounds", () => {
   const { summary } = driverUsage(twoLaunches(), OPTS, { invocations: [{}, {}] });
   assert.equal(summary.tokens_low.input_tokens, 2500, "cumulative reading: 1000 + 1500");
   assert.equal(summary.tokens_high.input_tokens, 3500, "per-invocation reading: 1000 + 2500");
+});
+
+// ── check 17: how agy's counters nest ─────────────────────────────────────
+
+// Recorded live on agy 1.3.0 (p1 check 17): five model calls in one process.
+const CACHE_READING_RESULT = { input_tokens: 50394, output_tokens: 2649, thinking_tokens: 2002, cache_read_tokens: 114232, total_tokens: 53043 };
+
+test("a result with cache reads and thinking fits only the recorded reading, and books its tokens once", () => {
+  assert.deepEqual(readingsThatFit(CACHE_READING_RESULT), [RECORDED_READING.name]);
+  const r = tokenReading(CACHE_READING_RESULT, { input: 0.75, input_cached: 0.075, output: 3.75 });
+  assert.equal(r.name, RECORDED_READING.name);
+  assert.equal(r.check, "adds_up");
+  assert.deepEqual(r.tokens, { input: 50394, input_cached: 114232, output: 2649 }, "cache beside input, thinking inside output");
+});
+
+test("check 17's recorded reading matches its row in the verification doc", () => {
+  const doc = readFileSync(join(ROOT, "docs", "verification", "p1-agy-runtime.md"), "utf8");
+  const row = doc.split("\n").find((l) => l.startsWith(`| ${RECORDED_READING.check} |`));
+  assert.ok(row, `check ${RECORDED_READING.check} has a row`);
+  assert.match(row, /\*\*PASS/);
+  assert.ok(row.includes(`\`${RECORDED_READING.name}\``), "the row names the reading the code records");
 });
 
 test("check 16's state in code matches its row in the verification doc", () => {

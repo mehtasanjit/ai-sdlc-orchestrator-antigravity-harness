@@ -236,7 +236,7 @@ const STREAM = [
   JSON.stringify({ event: "init", conversation_id: "c1", model: SLUG }),
   JSON.stringify({ event: "step_update", step: { tool_call: { name: "mcp_tool" }, step_idx: 3 } }),
   JSON.stringify({ event: "result", result: { conversation_id: "c1", status: "OK", response: "done", num_turns: 4,
-    usage: { input_tokens: 1000, output_tokens: 200, thinking_tokens: 50, cache_read_tokens: 400, total_tokens: 1650 } } }),
+    usage: { input_tokens: 1000, output_tokens: 250, thinking_tokens: 50, cache_read_tokens: 400, total_tokens: 1250 } } }),
 ].join("\n");
 
 test("buildRunArtifacts models the driver's own cost from the result usage, labelled modeled", () => {
@@ -248,8 +248,8 @@ test("buildRunArtifacts models the driver's own cost from the result usage, labe
   assert.equal(e.provenance, "modeled");
   assert.equal(e.tier, "orchestrator");
   assert.equal(e.billing_mode, "seat");
-  // total_tokens 1650 = 1000 + 400 + 200 + 50: the cache reads are on top of input_tokens, not inside it.
-  assert.equal(e.token_reading, "cache-apart+thinking-apart");
+  // agy 1.3.0's layout (check 17): total_tokens 1250 = 1000 + 250; the cache reads sit beside input_tokens.
+  assert.equal(e.token_reading, "cache-outside-total+thinking-in-output");
   assert.equal(e.token_reading_check, "adds_up");
   assert.equal(e.input_tokens, 1000, "the counters' own total says input_tokens holds no cache reads");
   assert.equal(e.input_tokens_cached, 400);
@@ -261,14 +261,21 @@ test("buildRunArtifacts models the driver's own cost from the result usage, labe
 
 const resultWith = (usage) => JSON.stringify({ event: "result", result: { conversation_id: "c1", status: "OK", usage } });
 
-test("each result is booked under the token reading its total_tokens adds up to", () => {
-  const book = (usage) => buildRunArtifacts({ jsonl: resultWith(usage), pin: PIN, passId: "r", policyName: DEFAULT_POLICY, now: () => "T" }).modeled[0];
-  const inside = book({ input_tokens: 1000, output_tokens: 200, thinking_tokens: 50, cache_read_tokens: 400, total_tokens: 1250 });
-  assert.equal(inside.token_reading, "cache-in-input+thinking-apart");
-  assert.deepEqual([inside.input_tokens, inside.input_tokens_cached, inside.output_tokens], [600, 400, 250]);
-  const thinkingInside = book({ input_tokens: 1000, output_tokens: 200, thinking_tokens: 50, cache_read_tokens: 400, total_tokens: 1600 });
-  assert.equal(thinkingInside.token_reading, "cache-apart+thinking-in-output");
-  assert.deepEqual([thinkingInside.input_tokens, thinkingInside.output_tokens, thinkingInside.output_tokens_reasoning], [1000, 200, 50]);
+test("a result in agy 1.3.0's layout is booked under the reading check 17 recorded", () => {
+  const book = (usage) => buildRunArtifacts({ jsonl: resultWith(usage), pin: PIN, passId: "r", policyName: DEFAULT_POLICY, now: () => "T" });
+  const { modeled, driverUsage } = book({ input_tokens: 600, output_tokens: 250, thinking_tokens: 50, cache_read_tokens: 400, total_tokens: 850 });
+  assert.equal(modeled[0].token_reading, "cache-outside-total+thinking-in-output");
+  assert.equal(modeled[0].token_reading_check, "adds_up");
+  assert.deepEqual([modeled[0].input_tokens, modeled[0].input_tokens_cached, modeled[0].output_tokens], [600, 400, 250]);
+  assert.equal(driverUsage.results_with_unproven_reading, undefined);
+});
+
+test("a result only another layout adds up to is booked under it and flagged, because agy changed its counters", () => {
+  const { modeled, driverUsage } = buildRunArtifacts({ jsonl: resultWith({ input_tokens: 1000, output_tokens: 200, thinking_tokens: 50, cache_read_tokens: 400, total_tokens: 1600 }), pin: PIN, passId: "r", policyName: DEFAULT_POLICY, now: () => "T" });
+  assert.equal(modeled[0].token_reading, "cache-apart+thinking-in-output");
+  assert.equal(modeled[0].token_reading_check, "not_recorded_layout");
+  assert.deepEqual([modeled[0].input_tokens, modeled[0].output_tokens, modeled[0].output_tokens_reasoning], [1000, 200, 50]);
+  assert.equal(driverUsage.results_with_unproven_reading, 1);
 });
 
 test("counters that add up to no reading, or no total, are booked at the dearest reading and flagged", () => {
@@ -289,7 +296,7 @@ test("two readings that both add up but price differently book the dearer and sa
   const usage = { input_tokens: 1000, output_tokens: 200, thinking_tokens: 50, cache_read_tokens: 50, total_tokens: 1250 };
   const e = buildRunArtifacts({ jsonl: resultWith(usage), pin: PIN, passId: "r", policyName: DEFAULT_POLICY, now: () => "T" }).modeled[0];
   assert.equal(e.token_reading_check, "ambiguous");
-  assert.equal(e.token_reading, "cache-in-input+thinking-apart", "thinking at the output rate costs more than 50 more fresh input");
+  assert.equal(e.token_reading, "cache-outside-total+thinking-apart", "thinking at the output rate and nothing subtracted from input is the dearest");
 });
 
 test("the driver line is priced from the dated list on the day each agy process started", () => {

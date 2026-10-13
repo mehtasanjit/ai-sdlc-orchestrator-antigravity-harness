@@ -183,10 +183,13 @@ Same line shape as telemetry, so the two files can be concatenated for analysis 
 | `cache-in-input+thinking-in-output` | input + output |
 | `cache-apart+thinking-apart` | input + cache + output + thinking |
 | `cache-apart+thinking-in-output` | input + cache + output |
+| `cache-outside-total+thinking-apart` | input + output + thinking, with the cache reads beside input |
+| `cache-outside-total+thinking-in-output` | input + output, with the cache reads beside input. What agy 1.3.0 reports ([check 17](verification/p1-agy-runtime.md)) |
 
 | `token_reading_check` | Meaning |
 |---|---|
-| `adds_up` | One reading fits, or every fitting reading prices the same |
+| `adds_up` | The reading check 17 recorded fits, or (with nothing recorded) one reading fits or every fitting one prices the same |
+| `not_recorded_layout` | The recorded reading does not fit, but another does and is booked: agy changed how it reports its counters. Re-run check 17 |
 | `ambiguous` | Two readings fit and price differently; the dearer is booked |
 | `does_not_add_up` | No reading fits; the dearest (`cache-apart+thinking-apart`) is booked |
 | `no_total` | No `total_tokens`; the dearest is booked |

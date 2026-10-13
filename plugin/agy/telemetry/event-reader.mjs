@@ -12,7 +12,7 @@
  */
 
 import { computeCostUsd } from "../../mcp/model-dispatch/dist/pricing.js";
-import { DEAREST_READING, TOKEN_READINGS, readingsThatFit, tokensUnder } from "./tokenLayouts.mjs";
+import { DEAREST_READING, RECORDED_READING, TOKEN_READINGS, readingsThatFit, tokensUnder } from "./tokenLayouts.mjs";
 
 export { TOKEN_READINGS };
 
@@ -113,15 +113,20 @@ export function extractTurnUsage(events, { resume = "cumulative" } = {}) {
 }
 
 /**
- * The reading one result's counters support: the one whose parts sum to
- * `total_tokens`. Several readings can add up when the counters coincide;
- * when they price alike any of them is right, and when they do not the
- * dearer is booked and the result is marked `ambiguous`. When none adds up,
- * or no total is reported, the dearest reading is booked, so an unproven
- * reading can over-state the driver line but never under-state it.
+ * The reading one result's counters support. `total_tokens` cannot tell
+ * cache-in-input from cache-outside-total unless the cache reads exceed the
+ * input, so the reading check 17 recorded is booked whenever it adds up.
+ * Otherwise agy reported a layout other than the recorded one: a single
+ * fitting reading is booked and marked `not_recorded_layout`; several that
+ * price differently book the dearer as `ambiguous`; none, or no total, books
+ * the dearest. An unproven reading can over-state the driver line but never
+ * under-state it.
  */
-export function tokenReading(usage, pricing) {
+export function tokenReading(usage, pricing, recorded = RECORDED_READING) {
   const fits = readingsThatFit(usage);
+  if (recorded && fits.includes(recorded.name)) {
+    return { name: recorded.name, check: "adds_up", tokens: tokensUnder(usage, recorded.name).tokens };
+  }
   const cost = (name) => computeCostUsd(tokensUnder(usage, name).tokens, pricing);
   if (fits.length === 0) {
     const check = typeof usage.total_tokens === "number" && usage.total_tokens > 0 ? "does_not_add_up" : "no_total";
@@ -129,7 +134,8 @@ export function tokenReading(usage, pricing) {
   }
   const dearest = fits.reduce((a, b) => (cost(b) > cost(a) ? b : a));
   const alike = fits.every((name) => cost(name) === cost(dearest));
-  return { name: dearest, check: alike ? "adds_up" : "ambiguous", tokens: tokensUnder(usage, dearest).tokens };
+  const check = !alike ? "ambiguous" : recorded ? "not_recorded_layout" : "adds_up";
+  return { name: dearest, check, tokens: tokensUnder(usage, dearest).tokens };
 }
 
 /**

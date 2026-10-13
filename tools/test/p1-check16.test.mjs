@@ -32,6 +32,13 @@ test("the recorded agy 1.3.0 results, status SUCCESS, read as cumulative and set
   assert.match(layout.reason, /thinking-in-output and .*thinking-in-output alike/);
 });
 
+test("with the cache-reading result beside them, the recorded results settle check 17", () => {
+  const zeroCache = (i, o, t) => ({ usage: { input_tokens: i, output_tokens: o, thinking_tokens: t, cache_read_tokens: 0, total_tokens: i + o } });
+  const cacheRead = { usage: { input_tokens: 50394, output_tokens: 2649, thinking_tokens: 2002, cache_read_tokens: 114232, total_tokens: 53043 } };
+  const v = layoutVerdict([zeroCache(15686, 1128, 793), zeroCache(32734, 1153, 817), cacheRead]);
+  assert.equal(v.verdict, "cache-outside-total+thinking-in-output");
+});
+
 test("a failed call, a missing result or a zero first call is no answer", () => {
   assert.match(verdict({ exit: 0, result: ok("c1", 420) }, { exit: 1, result: ERROR }).reason, /resume exited 1; resume status ERROR \(authentication/);
   assert.equal(verdict({ exit: 0, result: ok("c1", 420) }, { exit: 0, result: null }).verdict, "invalid");
@@ -68,7 +75,8 @@ test("the CLI prints a verdict and exits non-zero when the check gave no answer"
 test("check 17 names the one counter layout every result adds up to, and nothing less", async () => {
   const { layoutVerdict } = await import("../p1/check16.mjs");
   const r = (u) => ({ status: "OK", usage: u });
-  assert.equal(layoutVerdict([r({ input_tokens: 1000, output_tokens: 200, thinking_tokens: 50, cache_read_tokens: 400, total_tokens: 1250 })]).verdict, "cache-in-input+thinking-apart");
+  assert.equal(layoutVerdict([r({ input_tokens: 1000, output_tokens: 200, thinking_tokens: 50, cache_read_tokens: 4000, total_tokens: 1200 })]).verdict, "cache-outside-total+thinking-in-output", "cache reads above the input cannot sit inside it");
+  assert.equal(layoutVerdict([r({ input_tokens: 1000, output_tokens: 200, thinking_tokens: 50, cache_read_tokens: 400, total_tokens: 1250 })]).verdict, "inconclusive", "cache below the input: inside it and outside the total add up alike");
   assert.equal(layoutVerdict([r({ input_tokens: 1000, output_tokens: 200, thinking_tokens: 50, cache_read_tokens: 400, total_tokens: 1650 })]).verdict, "cache-apart+thinking-apart");
   assert.equal(layoutVerdict([r({ input_tokens: 1000, output_tokens: 200, thinking_tokens: 0, cache_read_tokens: 0, total_tokens: 1200 })]).verdict, "inconclusive", "no cache, no thinking: every layout fits");
   assert.equal(layoutVerdict([r({ input_tokens: 1, output_tokens: 1, total_tokens: 99 })]).verdict, "inconclusive");

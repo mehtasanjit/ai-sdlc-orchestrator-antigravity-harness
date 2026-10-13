@@ -132,7 +132,7 @@ A headless brownfield run has no write guard (print mode loads no hooks): read `
 |---|---|
 | `cost.lines[]` | Three lines, each with its `kind`. Never add a `modeled` figure to a `cash` one |
 | `cost.lines[driver].basis` | Names the dated price period; a range means check 16 is still pending |
-| `harness.driver_token_readings` | Every entry `(adds_up)`; anything else is booked at the dearest reading |
+| `harness.driver_token_readings` | Every entry `cache-outside-total+thinking-in-output (adds_up)`. `not_recorded_layout` means agy changed how it reports its counters; anything else is booked at the dearest reading |
 | `driver-manifest.json` → `driver_usage.local_record.agrees` | `true`: agy's local record and the stream agree on the driver's tokens |
 | `harness.driver_model_mismatch` | Absent |
 | `harness.bridge_build_stale` | Absent |
