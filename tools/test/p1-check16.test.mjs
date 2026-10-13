@@ -10,7 +10,7 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { conversationId, lastResult, verdict } from "../p1/check16.mjs";
+import { conversationId, lastResult, layoutVerdict, verdict } from "../p1/check16.mjs";
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const usage = (o) => ({ input_tokens: 1000, output_tokens: o, thinking_tokens: 0, cache_read_tokens: 0, total_tokens: 1000 + o });
@@ -21,6 +21,15 @@ test("carried-over counters read as cumulative, restarted ones as per-invocation
   assert.equal(verdict({ exit: 0, result: ok("c1", 420) }, { exit: 0, result: ok("c1", 423) }).verdict, "cumulative");
   assert.equal(verdict({ exit: 0, result: ok("c1", 420) }, { exit: 0, result: ok("c1", 3) }).verdict, "per-invocation");
   assert.equal(verdict({ exit: 0, result: ok("c1", 420) }, { exit: 0, result: ok("c1", 300) }).verdict, "inconclusive");
+});
+
+test("the recorded agy 1.3.0 results, status SUCCESS, read as cumulative and settle only the thinking half of check 17", () => {
+  const first = { conversation_id: "e3a29ee2", status: "SUCCESS", usage: { input_tokens: 15686, output_tokens: 1128, thinking_tokens: 793, cache_read_tokens: 0, total_tokens: 16814 } };
+  const resume = { conversation_id: "e3a29ee2", status: "SUCCESS", usage: { input_tokens: 32734, output_tokens: 1153, thinking_tokens: 817, cache_read_tokens: 0, total_tokens: 33887 } };
+  assert.equal(verdict({ exit: 0, result: first }, { exit: 0, result: resume }).verdict, "cumulative");
+  const layout = layoutVerdict([first, resume]);
+  assert.equal(layout.verdict, "inconclusive");
+  assert.match(layout.reason, /thinking-in-output and .*thinking-in-output alike/);
 });
 
 test("a failed call, a missing result or a zero first call is no answer", () => {

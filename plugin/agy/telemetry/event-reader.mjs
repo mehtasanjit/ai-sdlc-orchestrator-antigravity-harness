@@ -25,7 +25,7 @@ export { TOKEN_READINGS };
  * true figure lies between them, and the per-invocation reading is the upper
  * bound the driver line carries.
  */
-export const RESUME_USAGE = { check: 16, state: "pending" };
+export const RESUME_USAGE = { check: 16, state: "cumulative" };
 export const RESUME_READINGS = new Set(["cumulative", "per-invocation"]);
 
 export function parseEventStream(jsonlText, now = () => new Date().toISOString(), invocation = null) {

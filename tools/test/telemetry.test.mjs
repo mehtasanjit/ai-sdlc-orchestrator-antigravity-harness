@@ -114,7 +114,7 @@ test("extractTurnUsage refuses a reading that is not one of the two", () => {
 });
 
 test("while check 16 is pending the driver line carries the per-invocation upper bound and both figures", () => {
-  const { modeled, summary } = driverUsage(twoLaunches(), OPTS, { invocations: [{ status: 0, wall_ms: 5 }, { status: 0, wall_ms: 7 }] });
+  const { modeled, summary } = driverUsage(twoLaunches(), OPTS, { invocations: [{ status: 0, wall_ms: 5 }, { status: 0, wall_ms: 7 }], resumeUsage: { check: 16, state: "pending" } });
   assert.equal(summary.reading, "per-invocation");
   assert.ok(summary.cost_usd_low < summary.cost_usd_high);
   assert.equal(summary.cost_usd, summary.cost_usd_high);

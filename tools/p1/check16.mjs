@@ -41,15 +41,17 @@ export function lastResult(text) {
 /**
  * The first call writes about 300 words; the resume replies "ok". If the
  * counters carry over, the resume's output_tokens include the first call's;
- * if they restart, they are a handful. Anything short of two OK results is
- * no answer at all.
+ * if they restart, they are a handful. Anything short of two successful
+ * results is no answer at all. agy 1.3.0 reports `SUCCESS`; earlier builds `OK`.
  */
+const OK_STATUSES = new Set(["OK", "SUCCESS"]);
+
 export function verdict(first, resume) {
   const problems = [];
   for (const [name, call] of [["first call", first], ["resume", resume]]) {
     if (call.exit !== 0) problems.push(`${name} exited ${call.exit}`);
     if (!call.result) problems.push(`${name} printed no result event`);
-    else if (call.result.status !== "OK") problems.push(`${name} status ${call.result.status}${call.result.error ? ` (${call.result.error})` : ""}`);
+    else if (!OK_STATUSES.has(call.result.status)) problems.push(`${name} status ${call.result.status}${call.result.error ? ` (${call.result.error})` : ""}`);
   }
   const a = first.result?.usage?.output_tokens ?? 0;
   const b = resume.result?.usage?.output_tokens ?? 0;

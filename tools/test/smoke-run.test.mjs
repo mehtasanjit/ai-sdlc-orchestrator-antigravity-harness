@@ -39,12 +39,12 @@ test("run.mjs completes a two-invocation run against the stub agy and writes eve
     assert.equal(driver.pin.unverified_reason, undefined);
     const modeled = readFileSync(join(out, "driver-cost-modeled.jsonl"), "utf8").trim().split("\n").map(JSON.parse);
     assert.equal(modeled.length, 2);
-    assert.deepEqual(modeled.map((e) => [e.input_tokens, e.input_tokens_cached, e.output_tokens]), [[600, 400, 250], [1300, 1200, 580]], "check 16 pending: the resumed process is priced as fresh counters, the upper bound");
+    assert.deepEqual(modeled.map((e) => [e.input_tokens, e.input_tokens_cached, e.output_tokens]), [[600, 400, 250], [700, 800, 330]], "check 16 recorded cumulative: the resumed process is differenced against the first");
     assert.deepEqual(modeled.map((e) => e.invocation), [1, 2]);
-    assert.equal(driver.driver_usage.resume_check.state, "pending");
+    assert.equal(driver.driver_usage.resume_check.state, "cumulative");
     assert.equal(driver.driver_usage.cost_usd_low, 0.003241, "the cumulative reading differences the second result against the first");
     assert.equal(driver.driver_usage.cost_usd_high, 0.004658);
-    assert.equal(driver.driver_cost_usd_modeled, 0.004658);
+    assert.equal(driver.driver_cost_usd_modeled, 0.003241);
     assert.deepEqual(driver.driver_usage.invocations.map((i) => [i.invocation, i.result_events, i.exit_status]), [[1, 1, 0], [2, 1, 0]]);
     assert.deepEqual(driver.driver_usage.invocations_without_usage, []);
     const telemetry = readFileSync(join(out, "telemetry.jsonl"), "utf8").trim().split("\n").map(JSON.parse);
@@ -54,19 +54,19 @@ test("run.mjs completes a two-invocation run against the stub agy and writes eve
     assert.equal(manifest.pass, "smoke");
     assert.equal(manifest.harness.runtime.name, "antigravity-cli");
     assert.equal(manifest.harness.runtime.version, "1.2.3");
-    assert.equal(manifest.cost.driver_modeled_usd, 0.004658);
-    assert.equal(manifest.cost.driver_modeled_usd_low, 0.003241);
-    assert.equal(manifest.harness.driver_cost_resume_check.check, 16);
-    assert.match(manifest.cost.lines[0].basis, /range \$0\.003241–\$0\.004658: check 16/);
-    assert.equal(manifest.usage.driver.bound, "upper");
-    assert.equal(manifest.usage.driver.low.input_tokens, 1300, "the cumulative reading's input: 600 + 700");
+    assert.equal(manifest.cost.driver_modeled_usd, 0.003241);
+    assert.equal(manifest.cost.driver_modeled_usd_low, undefined, "a recorded check 16 leaves one figure, no range");
+    assert.equal(manifest.harness.driver_cost_resume_check, undefined, "written only while check 16 is pending");
+    assert.doesNotMatch(manifest.cost.lines[0].basis, /range \$/);
+    assert.equal(manifest.usage.driver.bound, undefined);
+    assert.equal(manifest.usage.driver.low, undefined);
     assert.equal(manifest.cost.dispatched_cash_usd, 0);
     const report = spawnSync(process.execPath, [join(ROOT, "tools", "report.mjs"), out], { encoding: "utf8" });
     assert.equal(report.status, 0, report.stderr);
-    assert.match(report.stdout, /Modeled cost\s+\$0\.0047/);
-    assert.match(report.stdout, /Range\s+\$0\.0032 – \$0\.0047/);
+    assert.match(report.stdout, /Modeled cost\s+\$0\.0032/);
+    assert.doesNotMatch(report.stdout, /Range\s+\$/, "a recorded check 16 prints one figure");
     const md = spawnSync(process.execPath, [join(ROOT, "tools", "report.mjs"), out, "--markdown"], { encoding: "utf8" });
-    assert.match(md.stdout, /range is \$0\.0032 – \$0\.0047/);
+    assert.doesNotMatch(md.stdout, /range is \$/);
   } finally { rmSync(proj, { recursive: true, force: true }); }
 });
 
@@ -91,7 +91,7 @@ test("a --resume launch keeps the earlier launch's driver usage instead of overw
     assert.equal(after.started_at, before.started_at);
     assert.equal(after.driver_usage.invocations[0].carried_from_earlier_launch, true);
     const modeled = readFileSync(join(out, "driver-cost-modeled.jsonl"), "utf8").trim().split("\n").map(JSON.parse);
-    assert.deepEqual(modeled.map((e) => [e.invocation, e.input_tokens]), [[1, 600], [2, 1300]]);
+    assert.deepEqual(modeled.map((e) => [e.invocation, e.input_tokens]), [[1, 600], [2, 700]]);
     assert.equal(after.driver_usage.cost_usd_low, 0.003241);
     const events = readFileSync(join(out, "driver-events.jsonl"), "utf8").trim().split("\n").map(JSON.parse);
     assert.equal(events.filter((e) => e.event === "result").length, 2, "both launches' streams are in driver-events.jsonl");
@@ -121,7 +121,7 @@ test("two runs in one project each get their own folder, and an earlier run's SU
       const dir = join(proj, ".sdlc", "runs", id);
       const m = JSON.parse(readFileSync(join(dir, "manifest.json"), "utf8"));
       assert.equal(m.pass, id);
-      assert.equal(m.cost.driver_modeled_usd, 0.004658, `run ${id}'s driver line holds its own two turns only`);
+      assert.equal(m.cost.driver_modeled_usd, 0.003241, `run ${id}'s driver line holds its own two turns only`);
       assert.equal(m.harness.other_runs_in_directory, undefined);
     }
 
@@ -132,7 +132,7 @@ test("two runs in one project each get their own folder, and an earlier run's SU
     assert.match(r.stdout, /resuming fake-conv-/, "the stale SUMMARY.md did not mark run 'third' complete");
     const third = JSON.parse(readFileSync(join(shared, "manifest.json"), "utf8"));
     assert.equal(third.pass, "third");
-    assert.equal(third.cost.driver_modeled_usd, 0.004658, "run 'first''s turns are not in run 'third''s driver line");
+    assert.equal(third.cost.driver_modeled_usd, 0.003241, "run 'first''s turns are not in run 'third''s driver line");
   } finally { rmSync(proj, { recursive: true, force: true }); }
 });
 

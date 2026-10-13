@@ -265,7 +265,7 @@ A `model_breakdown` or `by_model` row's `calls` counts attempts routed to that m
 | `conductor_edits` | Per planned `artifact_path`, whether the final file differs from the last worker result for it (`edited`, `unchanged`, `unknown` counts, `files[]`), and `unplanned` files no packet targets. `null` when the run folder cannot tell |
 | `written_by`, `written_at` | `plugin/agy/manifest.mjs` and when |
 
-**`usage`** — `dispatched` and `driver` token buckets side by side. `usage.driver.provenance` is `modeled`, or `unmeasured` on an interactive run. While check 16 is pending on a resumed run, `usage.driver.bound` is `upper` and `usage.driver.low` holds the cumulative reading's tokens.
+**`usage`** — `dispatched` and `driver` token buckets side by side. `usage.driver.provenance` is `modeled`, or `unmeasured` on an interactive run whose driver was not collected. While check 16 is pending on a resumed run, `usage.driver.bound` is `upper` and `usage.driver.low` holds the cumulative reading's tokens.
 
 **`cost`**
 
