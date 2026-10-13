@@ -12,6 +12,8 @@ import assert from "node:assert/strict";
 import { readFileSync, readdirSync } from "node:fs";
 
 import { connectBridge, DEFAULT_TOOL_TIMEOUT_MS, canSpawnChildProcess, diagnoseConnectFailure } from "../dist/driverClient.js";
+import { DEFAULT_TIMEOUT_SEC } from "../dist/adapters/ClaudeAgentSdkAdapter.js";
+import { DEFAULT_WORKER_TIMEOUT_SEC } from "../dist/delegation/workerProcess.js";
 
 const POLICY = "antigravity-flash38-plus-opus5";
 
@@ -57,6 +59,15 @@ test("the client's per-call timeout exceeds every shipped policy's worker timeou
   }
   assert.ok(worst > 0, "at least one policy should set worker_timeout_sec");
   assert.ok(DEFAULT_TOOL_TIMEOUT_MS > worst * 1000, `client timeout ${DEFAULT_TOOL_TIMEOUT_MS}ms must exceed ${worst}s`);
+});
+
+test("the client's per-call timeout exceeds every adapter's built-in deadline", () => {
+  for (const [name, sec] of Object.entries({
+    DEFAULT_TIMEOUT_SEC,
+    DEFAULT_WORKER_TIMEOUT_SEC,
+  })) {
+    assert.ok(DEFAULT_TOOL_TIMEOUT_MS > sec * 1000, `client timeout ${DEFAULT_TOOL_TIMEOUT_MS}ms must exceed ${name}=${sec}s`);
+  }
 });
 
 test("callTool passes an explicit timeout rather than inheriting the SDK default", () => {
