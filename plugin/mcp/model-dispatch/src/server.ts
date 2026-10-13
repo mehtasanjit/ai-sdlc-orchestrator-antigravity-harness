@@ -586,9 +586,8 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
           cli_reported_cost_usd: att.cli_reported_cost_usd,
           ttl_split: att.ttl_split,
           // claude-cli only: the dollars for the tokens the worker's own
-          // transcript explains. collect-orchestrator-usage.mjs subtracts only
-          // this share of an in-session worker, so its receipt-only side calls
-          // and unlogged tokens stay in the true total (review finding M4).
+          // transcript explains; the rest of cost_usd is what its result
+          // billed that no transcript line logged.
           transcript_logged_cost_usd: att.transcript_logged_cost_usd,
           thinking_level: att.thinking_level,
           wallet: att.wallet,

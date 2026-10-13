@@ -24,9 +24,8 @@ export type Phase =
   // default — see plugin/config/policies/*.yaml.
   | "discovery"
   | "change_plan"
-  // Not a routed phase — the label the orchestrator-overhead collector
-  // (plugin/scripts/collect-orchestrator-usage.mjs) stamps on its transcript
-  // event. No policy rule ever matches it and no packet ever carries it; it
+  // Not a routed phase — the label the Claude Code harness's transcript
+  // collector (not shipped here) stamps on its event. No policy rule ever matches it and no packet ever carries it; it
   // exists in this union only so the event type-checks. Readers must key on
   // `tier: "orchestrator"`, not on this phase name.
   | "orchestrator_overhead";
@@ -93,7 +92,7 @@ export interface TelemetryEvent {
    * `execute_with_model` event, in both auth modes); `"estimated"` =
    * direct-tier char-count logged by the orchestrator via `log_telemetry`;
    * `"transcript"` = reconstructed post-run from session transcripts
-   * (orchestrator-overhead collector). Optional because events written
+   * (the Claude Code harness's collector). Optional because events written
    * before this field existed lack it — readers treat absence as
    * "unknown" and disown the run's label (tools/report.mjs).
    */
@@ -101,7 +100,8 @@ export interface TelemetryEvent {
   /**
    * `"orchestrator"` marks the run's own overhead (the driver session's
    * reasoning, file reads, growing-conversation re-sends), reconstructed
-   * post-run from transcripts by collect-orchestrator-usage.mjs. Absent on
+   * post-run from transcripts by the Claude Code harness's collector, or
+   * the agy driver's modeled line (driver-cost-modeled.jsonl). Absent on
    * every dispatched-work event. `buildManifest` and tools/report.mjs
    * partition on this field so overhead is never silently blended into
    * dispatched-work totals.
@@ -154,15 +154,12 @@ export interface TelemetryEvent {
    */
   transcript_logged_cost_usd?: number;
   /*
-   * Orchestrator event only (`tier: "orchestrator"`, written by
-   * collect-orchestrator-usage.mjs): the Fix E fields of the manifest's
+   * Orchestrator event only (`tier: "orchestrator"`, written by the Claude
+   * Code harness's transcript collector): the Fix E fields of the manifest's
    * `orchestrator_overhead` block, with the same meanings (see Manifest in
    * telemetry.ts), so telemetry.jsonl alone says which model each dollar ran
    * on, what a booked receipt billed beyond the transcript, and whether every
-   * helper's transcript was read. The collector wrote most of these from the
-   * per-message and receipt fixes on while this interface did not declare
-   * them; since v0.7.3 orchestratorOverheadFields.test.mjs type-checks its real
-   * output against this interface so the two cannot drift again.
+   * helper's transcript was read.
    */
   transcript_cost_usd?: number | null;
   receipt_cost_usd?: number | null;
@@ -256,10 +253,7 @@ export interface AttemptRecord {
    * `cost_usd` for the tokens that transcript explains (each model's logged
    * tokens at that model's price). The rest of cost_usd is what the result
    * billed that no transcript line logged: receipt-only side calls (a Haiku
-   * call) and unlogged tokens. collect-orchestrator-usage.mjs subtracts only
-   * this share of a worker its scan swept in, because the scan counts only the
-   * logged tokens; subtracting the whole cost took the unlogged dollars out of
-   * the true total (review finding M4).
+   * call) and unlogged tokens.
    */
   transcript_logged_cost_usd?: number;
   /**
