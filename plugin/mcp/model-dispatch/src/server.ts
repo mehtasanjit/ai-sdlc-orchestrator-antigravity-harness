@@ -582,6 +582,7 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
           thinking_level: att.thinking_level,
           wallet: att.wallet,
           claude_session: att.claude_session,
+          prompt_cache_ttl: att.prompt_cache_ttl,
         }));
         if (a.telemetry_path) {
           for (const ev of events) appendEvent(a.telemetry_path, ev);

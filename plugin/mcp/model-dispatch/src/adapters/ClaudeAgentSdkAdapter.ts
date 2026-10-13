@@ -35,7 +35,15 @@
  * warning is logged when the two differ by more than 0.5%.
  */
 
-import type { AttemptRecord, ClaudeSessionFacts, DispatchWallet, ExecutionResult, ModelConfig, TaskPacket } from "../types.js";
+import type {
+  AttemptRecord,
+  ClaudeSessionFacts,
+  DispatchWallet,
+  ExecutionResult,
+  ModelConfig,
+  PromptCacheTtlRecord,
+  TaskPacket,
+} from "../types.js";
 import { estimateTokens } from "../pricing.js";
 import { log } from "../log.js";
 import { unenforcedBudget, type ModelAdapter } from "./ModelAdapter.js";
@@ -132,6 +140,11 @@ interface ClaudeAgentSdkOptions {
  * reads the streamed frames, never a transcript, and the attempt records the
  * session id in `claude_session`.
  *
+ * `settings.promptCacheTtl` carries the policy's `prompt_cache_ttl`. It is a
+ * flag-layer setting, separate from the filesystem sources that
+ * `settingSources: []` turns off, and it is not `env`. Unset, Claude Code
+ * picks the lifetime from the wallet (1h on a seat, 5m on a key or Vertex).
+ *
  * `env` is deliberately never set: the SDK REPLACES the subprocess
  * environment when it is, rather than merging, and inheriting is exactly how
  * this adapter reaches all three Claude wallets (key, Vertex, seat) without
@@ -143,7 +156,7 @@ interface ClaudeAgentSdkOptions {
  * `hard_cost_cap_usd` check (runCostCap.ts).
  */
 export function agentSdkOptions(
-  config: Pick<ModelConfig, "model_name" | "reasoning">,
+  config: Pick<ModelConfig, "model_name" | "reasoning" | "prompt_cache_ttl">,
   extra: { cwd?: string; abortController?: AbortController } = {},
 ): Record<string, unknown> {
   const options: Record<string, unknown> = {
@@ -158,9 +171,28 @@ export function agentSdkOptions(
   const effort = config.reasoning?.effort;
   // Haiku 4.5 rejects an effort level; the policy omits `reasoning` there.
   if (effort) options.effort = effort;
+  if (config.prompt_cache_ttl) options.settings = { promptCacheTtl: config.prompt_cache_ttl };
   if (extra.cwd) options.cwd = extra.cwd;
   if (extra.abortController) options.abortController = extra.abortController;
   return options;
+}
+
+/**
+ * The lifetime the frames' cache writes used. A write with no
+ * `cache_creation` split makes it `unknown`: the accumulator books such a
+ * write as 5-minute, which is an assumption, not an observation.
+ */
+export function observedCacheTtl(writes: Map<string, TranscriptModelWrites>): PromptCacheTtlRecord["observed"] {
+  let fiveMin = 0;
+  let oneHour = 0;
+  for (const w of writes.values()) {
+    if (!w.split_known) return "unknown";
+    fiveMin += w.write_5m;
+    oneHour += w.write_1h;
+  }
+  if (fiveMin === 0 && oneHour === 0) return "none";
+  if (fiveMin > 0 && oneHour > 0) return "mixed";
+  return oneHour > 0 ? "1h" : "5m";
 }
 
 /** Lazily imported so a policy that never names this adapter does not load the SDK. */
@@ -266,6 +298,7 @@ export class ClaudeAgentSdkAdapter implements ModelAdapter {
       per_model: ledger.per_model,
       wallet: claudeDispatchWallet(this.env, { ...run.init, providers: reportedProviders(result.modelUsage) }),
       claude_session: this.sessionFacts(run.session, result),
+      prompt_cache_ttl: this.cacheTtlRecord(writes),
     };
 
     if (isError) {
@@ -387,6 +420,7 @@ export class ClaudeAgentSdkAdapter implements ModelAdapter {
       per_model: ledger.per_model,
       wallet: claudeDispatchWallet(this.env, run.init),
       claude_session: this.sessionFacts(run.session),
+      prompt_cache_ttl: this.cacheTtlRecord(run.writes),
     };
     return {
       result: null,
@@ -399,6 +433,24 @@ export class ClaudeAgentSdkAdapter implements ModelAdapter {
       attempts: [attempt],
       terminal_reason: "vendor_error",
     };
+  }
+
+  private cacheTtlRecord(writes: Map<string, TranscriptModelWrites>): PromptCacheTtlRecord {
+    const pinned = this.modelConfig.prompt_cache_ttl ?? null;
+    const observed = observedCacheTtl(writes);
+    const mismatch = pinned !== null && observed !== "none" && observed !== "unknown" && observed !== pinned;
+    if (mismatch) {
+      log("warn", "pricing.cache_ttl_mismatch", {
+        model_id: this.id,
+        pinned,
+        observed,
+        message:
+          "The policy pins this model's prompt-cache lifetime and the call's cache writes used another. " +
+          "cost_usd prices the writes as the API reported them. CLAUDE_CODE_PROMPT_CACHE_TTL in the bridge's " +
+          "environment overrides the pin.",
+      });
+    }
+    return { pinned, observed, mismatch };
   }
 
   private sessionFacts(session: InitSession, result?: SdkResult): ClaudeSessionFacts {

@@ -205,6 +205,23 @@ export interface TelemetryEvent {
   wallet?: DispatchWallet;
   /** Copied from the attempt (claude-agent-sdk only); see ClaudeSessionFacts. */
   claude_session?: ClaudeSessionFacts;
+  /** Copied from the attempt (claude-agent-sdk only); see PromptCacheTtlRecord. */
+  prompt_cache_ttl?: PromptCacheTtlRecord;
+}
+
+export type PromptCacheTtl = "5m" | "1h";
+
+/**
+ * The prompt-cache lifetime a claude-agent-sdk attempt asked for and the one
+ * its cache writes used, read from the assistant frames' `cache_creation`.
+ */
+export interface PromptCacheTtlRecord {
+  /** The policy's `prompt_cache_ttl`, sent as the SDK's `settings.promptCacheTtl`; null when the policy sets none. */
+  pinned: PromptCacheTtl | null;
+  /** `none` = no cache writes; `unknown` = some write carried no TTL split; `mixed` = both lifetimes. */
+  observed: PromptCacheTtl | "mixed" | "none" | "unknown";
+  /** True when a pin is set and the writes used a different lifetime. */
+  mismatch: boolean;
 }
 
 /**
@@ -306,6 +323,8 @@ export interface AttemptRecord {
   usage_from_frames?: boolean;
   /** claude-agent-sdk only: the SDK session the call ran in. */
   claude_session?: ClaudeSessionFacts;
+  /** claude-agent-sdk only: the cache lifetime pinned and the one the writes used. */
+  prompt_cache_ttl?: PromptCacheTtlRecord;
   /** Gemini only, on a failed call: the HTTP status the vendor answered with. */
   error_status?: number;
   /** Gemini only, on a failed call: the Node/undici code of a connection that failed in transit. */
@@ -423,6 +442,13 @@ export interface ModelConfig {
    * a worker; ignored by completion adapters.
    */
   worker_timeout_sec?: number;
+  /**
+   * claude-agent-sdk only: the prompt-cache lifetime, sent as the SDK's
+   * `settings.promptCacheTtl`. Unset, Claude Code picks 1h on a claude.ai seat
+   * and 5m on an API key or Vertex, so the wallet would decide the cache-write
+   * rate. The CLAUDE_CODE_PROMPT_CACHE_TTL variable overrides it.
+   */
+  prompt_cache_ttl?: PromptCacheTtl;
 }
 
 /**
