@@ -43,7 +43,7 @@ try {
   console.error("The cost lines are computed by the bridge's compiled code. Run: npm install && npm run build");
   process.exit(2);
 }
-const { buildHarnessManifest, claudeWallet, workerLineOf, readJsonl } = harness;
+const { buildHarnessManifest, claudeWallet, workerLineOf, readJsonl, dispatchKeys } = harness;
 
 const telemetryPath = join(runDir, "telemetry.jsonl");
 const modeledPath = join(runDir, "driver-cost-modeled.jsonl");
@@ -137,13 +137,16 @@ const kindOf = (e) => lineByName[workerLineOf(e, policy)]?.kind ?? "cash";
 
 const phaseAgg = new Map();
 const provCount = { vendor: 0, estimated: 0, modeled: 0, none: 0, unknown: 0 };
-const packetAgg = new Map();
-const totals = { calls: 0, tokIn: 0, tokOut: 0, cash: 0, modeled: 0 };
+const dispatchAgg = new Map();
+const keys = dispatchKeys(events);
+const totals = { calls: 0, tokIn: 0, tokOut: 0, cacheRead: 0, cacheWrite: 0, cash: 0, modeled: 0 };
 
-for (const e of events) {
+for (const [i, e] of events.entries()) {
   const phase = e.phase ?? "unknown";
   const tokIn = e.input_tokens ?? 0;
   const tokOut = e.output_tokens ?? 0;
+  const cacheRead = e.input_tokens_cached ?? 0;
+  const cacheWrite = e.input_tokens_cache_write ?? 0;
   const cost = e.cost_usd ?? 0;
   const prov = e.provenance ?? "unknown";
   const bucket = kindOf(e) === "modeled" ? "modeled" : "cash";
@@ -151,33 +154,43 @@ for (const e of events) {
   provCount[prov in provCount ? prov : "unknown"] += 1;
 
   const rec = phaseAgg.get(phase) ?? {
-    calls: 0, tokIn: 0, tokOut: 0, cash: 0, modeled: 0,
+    calls: 0, tokIn: 0, tokOut: 0, cacheRead: 0, cacheWrite: 0, cash: 0, modeled: 0,
     prov: { vendor: 0, estimated: 0, modeled: 0, none: 0, unknown: 0 },
   };
   for (const agg of [rec, totals]) {
     agg.calls += 1;
     agg.tokIn += tokIn;
     agg.tokOut += tokOut;
+    agg.cacheRead += cacheRead;
+    agg.cacheWrite += cacheWrite;
     agg[bucket] += cost;
   }
   rec.prov[prov in rec.prov ? prov : "unknown"] += 1;
   phaseAgg.set(phase, rec);
 
-  // Collapse output-cap doubling attempts into one record per packet.
-  const tid = e.task_id;
-  if (tid && (e.attempt_number != null || e.ceiling_used != null)) {
-    const pkt = packetAgg.get(tid) ?? {
-      task_id: tid, phase, model: e.model ?? "?", attempts: 0,
-      finalCeiling: e.ceiling_used ?? null, cash: 0, modeled: 0,
+  // One record per dispatch (all its attempts), never per packet: a packet
+  // dispatched twice is two records.
+  if (e.provenance !== "none") {
+    const d = dispatchAgg.get(keys[i]) ?? {
+      task_id: e.task_id ?? "?", phase, model: e.model ?? "?", attempts: 0,
+      capped: false, finalCeiling: null, last: null, cash: 0, modeled: 0,
     };
-    pkt.attempts += 1;
-    if (e.ceiling_used != null) pkt.finalCeiling = e.ceiling_used;
-    pkt[bucket] += cost;
-    packetAgg.set(tid, pkt);
+    d.attempts += 1;
+    // Events written before hit_output_cap existed show a cap only by the retry it caused.
+    if (e.hit_output_cap === true || (e.hit_output_cap === undefined && e.retry_reason === "output_cap")) d.capped = true;
+    if (e.ceiling_used != null) d.finalCeiling = e.ceiling_used;
+    d.last = e;
+    d[bucket] += cost;
+    dispatchAgg.set(keys[i], d);
   }
 }
 
-const retried = [...packetAgg.values()].filter((p) => p.attempts > 1).sort((a, b) => b.attempts - a.attempts);
+const dispatchOutcome = (d) => (d.last.success !== false ? "converged" : d.last.hit_output_cap ? "still truncated" : "failed");
+const dispatches = [...dispatchAgg.values()];
+const retried = dispatches.filter((d) => d.capped).sort((a, b) => b.attempts - a.attempts);
+const byTask = new Map();
+for (const d of dispatches) byTask.set(d.task_id, [...(byTask.get(d.task_id) ?? []), d]);
+const redispatched = [...byTask.values()].filter((ds) => ds.length > 1);
 const showModeled = lines.some((l) => l.line !== "driver" && l.kind === "modeled" && l.calls > 0);
 
 const driverCost = modeledEvents.reduce((s, e) => s + (e.cost_usd ?? 0), 0);
@@ -217,6 +230,7 @@ const wrap = (text, width = 76) => {
   return wrapped;
 };
 const kindLabel = (l) => (l.kind === "unmeasured" ? "NOT MEASURED" : l.kind);
+const fmtCache = (read, write) => `${fmtCompact(read ?? 0)} / ${fmtCompact(write ?? 0)}`;
 
 const started = manifest.started_at ?? driverManifest.started_at ?? "—";
 const duration = fmtDuration(manifest.duration_sec ?? 0);
@@ -263,42 +277,52 @@ if (claudeLine.kind === "modeled" && claudeLine.calls > 0) {
   lineNotes.push("No wallet is known for the claude worker, so its line is booked as cash, as manifest.mjs books it.");
 }
 if (driverUnmeasured) lineNotes.push("The driver is NOT MEASURED: no headless launcher record, so the conductor's tokens are in no figure. Unmeasured, never free.");
+if (lines.some((l) => (l.input_tokens_cached ?? 0) + (l.input_tokens_cache_write ?? 0) > 0)) {
+  lineNotes.push("Tokens in is fresh input. Cache reads and cache writes are billed at their own rates and counted apart from it.");
+}
+const oneHourWrites = lines.reduce((s, l) => s + (l.input_tokens_cache_write_1h ?? 0), 0);
+const allWrites = lines.reduce((s, l) => s + (l.input_tokens_cache_write ?? 0), 0);
+if (oneHourWrites > 0) lineNotes.push(`${oneHourWrites} of ${allWrites} cache writes are 1-hour writes, billed at 2x the input rate; 5-minute writes bill at 1.25x.`);
+for (const l of workersFirst) {
+  if (!l.failed_attempts) continue;
+  lineNotes.push(`${lineName(l)}: ${l.failed_attempts} of ${l.attempts} attempt(s) failed, ${fmtUSD(l.failed_cost_usd)} ${kindLabel(l)} of the line's ${fmtUSD(l.cost_usd)}, over ${l.dispatches} dispatch(es).`);
+}
 if (lineByName.unclassified) lineNotes.push("unclassified: events with no known worker adapter or model prefix. Counted as cash, on neither worker's line.");
 if (orchestratorEvents > 0) lineNotes.push(`${orchestratorEvents} tier:"orchestrator" event(s) in telemetry.jsonl are left out of every figure, as manifest.json leaves them out.`);
 const rebuild = manifestStale ? `node plugin/agy/manifest.mjs '${runDir}'` : null;
 if (rebuild) lineNotes.push("! manifest.json books these lines differently. Rebuild it from the harness clone:");
 
 const lineCells = (l) => {
-  if (l.kind === "unmeasured") return { calls: "—", tok: "—", cost: "—" };
+  if (l.kind === "unmeasured") return { calls: "—", tok: "—", cache: "—", cost: "—" };
   const range = l.cost_usd_low !== undefined ? ` (${fmtUSD(l.cost_usd_low)} – ${fmtUSD(l.cost_usd)})` : "";
-  return { calls: String(l.calls), tok: `${fmtCompact(l.input_tokens)} / ${fmtCompact(l.output_tokens)}`, cost: fmtUSD(l.cost_usd), range };
+  return { calls: String(l.calls), tok: `${fmtCompact(l.input_tokens)} / ${fmtCompact(l.output_tokens)}`, cache: fmtCache(l.input_tokens_cached, l.input_tokens_cache_write), cost: fmtUSD(l.cost_usd), range };
 };
 
 if (asMarkdown) {
   p(`## Cost lines — never summed`);
   p();
-  p(`| Line | Kind | Calls | Tokens (in / out) | Cost |`);
-  p(`|---|---|---:|---|---:|`);
+  p(`| Line | Kind | Calls | Tokens (in / out) | Cache (read / write) | Cost |`);
+  p(`|---|---|---:|---|---|---:|`);
   for (const l of workersFirst) {
     const c = lineCells(l);
     const kind = l.kind === "cash" ? "cash" : `**${kindLabel(l)}**`;
-    p(`| ${lineName(l)} | ${kind} | ${c.calls} | ${c.tok} | ${c.cost}${c.range ?? ""} |`);
+    p(`| ${lineName(l)} | ${kind} | ${c.calls} | ${c.tok} | ${c.cache} | ${c.cost}${c.range ?? ""} |`);
   }
-  p(`| **Cash** | | | | **${fmtUSD(cashUsd)}** |`);
+  p(`| **Cash** | | | | | **${fmtUSD(cashUsd)}** |`);
   p();
   for (const n of lineNotes) p(`- ${n}${n.startsWith("!") ? ` \`${rebuild}\`` : ""}`);
   p();
 } else {
   p(`  Cost lines — never summed`);
   p();
-  p(`  ${"Line".padEnd(18)}${"Kind".padEnd(14)}${"Calls".padStart(6)}${"Tokens (in / out)".padStart(21)}${"Cost".padStart(11)}`);
-  p(`  ${"─".repeat(70)}`);
+  p(`  ${"Line".padEnd(18)}${"Kind".padEnd(14)}${"Calls".padStart(6)}${"Tokens (in / out)".padStart(21)}${"Cache (read / write)".padStart(23)}${"Cost".padStart(11)}`);
+  p(`  ${"─".repeat(93)}`);
   for (const l of workersFirst) {
     const c = lineCells(l);
-    p(`  ${lineName(l).padEnd(18)}${kindLabel(l).padEnd(14)}${c.calls.padStart(6)}${c.tok.padStart(21)}${c.cost.padStart(11)}${c.range ?? ""}`);
+    p(`  ${lineName(l).padEnd(18)}${kindLabel(l).padEnd(14)}${c.calls.padStart(6)}${c.tok.padStart(21)}${c.cache.padStart(23)}${c.cost.padStart(11)}${c.range ?? ""}`);
   }
-  p(`  ${"─".repeat(70)}`);
-  p(`  ${"Cash".padEnd(59)}${fmtUSD(cashUsd).padStart(11)}`);
+  p(`  ${"─".repeat(93)}`);
+  p(`  ${"Cash".padEnd(82)}${fmtUSD(cashUsd).padStart(11)}`);
   p();
   for (const n of lineNotes) wrap(n).forEach((l, i) => p(`${i ? "    " : "  "}${l}`));
   if (rebuild) p(`    ${rebuild}`);
@@ -322,22 +346,22 @@ if (events.length > 0) {
     p(`## Dispatched work — by phase`);
     p();
     if (showModeled) {
-      p(`| Phase | Prov | Calls | Tokens (in / out) | Cash | Modeled |`);
-      p(`|---|:---:|---:|---|---:|---:|`);
+      p(`| Phase | Prov | Calls | Tokens (in / out) | Cache (read / write) | Cash | Modeled |`);
+      p(`|---|:---:|---:|---|---|---:|---:|`);
     } else {
-      p(`| Phase | Prov | Calls | Tokens (in / out) | Cash |`);
-      p(`|---|:---:|---:|---|---:|`);
+      p(`| Phase | Prov | Calls | Tokens (in / out) | Cache (read / write) | Cash |`);
+      p(`|---|:---:|---:|---|---|---:|`);
     }
-    const row = (label, prov, r) => p(`| ${label} | ${prov} | ${r.calls} | ${fmtCompact(r.tokIn)} / ${fmtCompact(r.tokOut)} | ${fmtUSD(r.cash)} |${showModeled ? ` ${fmtUSD(r.modeled)} |` : ""}`);
+    const row = (label, prov, r) => p(`| ${label} | ${prov} | ${r.calls} | ${fmtCompact(r.tokIn)} / ${fmtCompact(r.tokOut)} | ${fmtCache(r.cacheRead, r.cacheWrite)} | ${fmtUSD(r.cash)} |${showModeled ? ` ${fmtUSD(r.modeled)} |` : ""}`);
     for (const [phase, rec] of rows) row(`\`${phase}\``, provTag(rec), rec);
     row("**All phases**", "", totals);
     p();
   } else {
     p(`  Dispatched work — by phase`);
     p();
-    const header = `  ${"Phase".padEnd(22)}${"Prov".padStart(5)}${"Calls".padStart(7)}${"Tokens (in / out)".padStart(20)}${"Cash".padStart(11)}${showModeled ? "Modeled".padStart(11) : ""}`;
+    const header = `  ${"Phase".padEnd(22)}${"Prov".padStart(5)}${"Calls".padStart(7)}${"Tokens (in / out)".padStart(20)}${"Cache (read / write)".padStart(23)}${"Cash".padStart(11)}${showModeled ? "Modeled".padStart(11) : ""}`;
     const rule = `  ${"─".repeat(header.length - 2)}`;
-    const row = (label, prov, r) => p(`  ${label.padEnd(22)}${prov.padStart(5)}${String(r.calls).padStart(7)}${`${fmtCompact(r.tokIn)} / ${fmtCompact(r.tokOut)}`.padStart(20)}${fmtUSD(r.cash).padStart(11)}${showModeled ? fmtUSD(r.modeled).padStart(11) : ""}`);
+    const row = (label, prov, r) => p(`  ${label.padEnd(22)}${prov.padStart(5)}${String(r.calls).padStart(7)}${`${fmtCompact(r.tokIn)} / ${fmtCompact(r.tokOut)}`.padStart(20)}${fmtCache(r.cacheRead, r.cacheWrite).padStart(23)}${fmtUSD(r.cash).padStart(11)}${showModeled ? fmtUSD(r.modeled).padStart(11) : ""}`);
     p(header);
     p(rule);
     for (const [phase, rec] of rows) row(phase, provTag(rec), rec);
@@ -421,10 +445,10 @@ if (retried.length > 0) {
   if (asMarkdown) {
     p(`## Packets that hit the output cap`);
     p();
-    p(`| Packet | Phase | Attempts | Final ceiling | Cash |${showModeled ? " Modeled |" : ""}`);
-    p(`|---|---|---:|---:|---:|${showModeled ? "---:|" : ""}`);
+    p(`| Packet | Phase | Attempts | Final ceiling | Outcome | Cash |${showModeled ? " Modeled |" : ""}`);
+    p(`|---|---|---:|---:|---|---:|${showModeled ? "---:|" : ""}`);
     for (const pkt of retried) {
-      p(`| \`${pkt.task_id}\` | ${pkt.phase} | ${pkt.attempts} | ${pkt.finalCeiling ?? "—"} | ${fmtUSD(pkt.cash)} |${showModeled ? ` ${fmtUSD(pkt.modeled)} |` : ""}`);
+      p(`| \`${pkt.task_id}\` | ${pkt.phase} | ${pkt.attempts} | ${pkt.finalCeiling ?? "—"} | ${dispatchOutcome(pkt)} | ${fmtUSD(pkt.cash)} |${showModeled ? ` ${fmtUSD(pkt.modeled)} |` : ""}`);
     }
     p();
   } else {
@@ -435,7 +459,33 @@ if (retried.length > 0) {
         ...(pkt.cash > 0 || pkt.modeled === 0 ? [`cash ${fmtUSD(pkt.cash)}`] : []),
         ...(pkt.modeled > 0 ? [`modeled ${fmtUSD(pkt.modeled)}`] : []),
       ].join(" · ");
-      p(`  ${gutter(ACTOR.handoff)}${pkt.task_id.padEnd(22)} ${pkt.phase.padEnd(22)} ${String(pkt.attempts) + " attempts"} → ${cost}`);
+      p(`  ${gutter(ACTOR.handoff)}${pkt.task_id.padEnd(22)} ${pkt.phase.padEnd(22)} ${String(pkt.attempts) + " attempts"} → ${dispatchOutcome(pkt)} · ${cost}`);
+    }
+    p();
+  }
+}
+
+// ─── packets dispatched more than once ────────────────────────────────
+
+if (redispatched.length > 0) {
+  const costOf = (d) => [
+    ...(d.cash > 0 || d.modeled === 0 ? [`cash ${fmtUSD(d.cash)}`] : []),
+    ...(d.modeled > 0 ? [`modeled ${fmtUSD(d.modeled)}`] : []),
+  ].join(" · ");
+  if (asMarkdown) {
+    p(`## Packets dispatched more than once`);
+    p();
+    p(`| Packet | Dispatch | Model | Attempts | Outcome | Cash |${showModeled ? " Modeled |" : ""}`);
+    p(`|---|---:|---|---:|---|---:|${showModeled ? "---:|" : ""}`);
+    for (const ds of redispatched) {
+      ds.forEach((d, n) => p(`| \`${d.task_id}\` | ${n + 1} of ${ds.length} | ${d.model} | ${d.attempts} | ${dispatchOutcome(d)} | ${fmtUSD(d.cash)} |${showModeled ? ` ${fmtUSD(d.modeled)} |` : ""}`));
+    }
+    p();
+  } else {
+    p(`  Packets dispatched more than once`);
+    p();
+    for (const ds of redispatched) {
+      ds.forEach((d, n) => p(`  ${gutter(ACTOR.handoff)}${d.task_id.padEnd(22)} ${`dispatch ${n + 1} of ${ds.length}`.padEnd(16)} ${d.model.padEnd(18)} ${d.attempts} attempt(s) → ${dispatchOutcome(d)} · ${costOf(d)}`));
     }
     p();
   }

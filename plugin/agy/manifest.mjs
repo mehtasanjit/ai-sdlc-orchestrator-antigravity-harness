@@ -26,7 +26,9 @@ import { spawnSync } from "node:child_process";
 import { join, resolve } from "node:path";
 import { parse as parseYaml } from "yaml";
 
-import { buildManifest } from "../mcp/model-dispatch/dist/telemetry.js";
+import { buildManifest, dispatchKeys, modelShares } from "../mcp/model-dispatch/dist/telemetry.js";
+
+export { dispatchKeys };
 import { resolveGeminiBackend } from "../mcp/model-dispatch/dist/adapters/geminiEndpoint.js";
 import { readPin, driverSlug, pendingPinChecks, pinVerification } from "./telemetry/fairnessPin.mjs";
 import { driverRange, driverRangeNote, driverRangeNotes } from "./telemetry/driverRange.mjs";
@@ -215,9 +217,24 @@ export function costLines({ dispatched, modeled, policy, pin, env = process.env,
     calls: events.length,
     input_tokens: events.reduce((s, e) => s + (e.input_tokens ?? 0), 0),
     input_tokens_cached: events.reduce((s, e) => s + (e.input_tokens_cached ?? 0), 0),
+    input_tokens_cache_write: events.reduce((s, e) => s + (e.input_tokens_cache_write ?? 0), 0),
+    input_tokens_cache_write_1h: events.reduce((s, e) => s + (e.input_tokens_cache_write_1h ?? 0), 0),
     output_tokens: events.reduce((s, e) => s + (e.output_tokens ?? 0), 0),
+    output_tokens_reasoning: events.reduce((s, e) => s + (e.output_tokens_reasoning ?? 0), 0),
   });
   const billed = dispatched.filter((e) => e.model && e.provenance !== "none");
+  const keys = dispatchKeys(billed);
+  const keyOf = new Map(billed.map((e, i) => [e, keys[i]]));
+  // `calls` stays the attempt count; a dispatch is one execute_with_model call.
+  const attempts = (events) => {
+    const failed = events.filter((e) => e.success === false);
+    return {
+      attempts: events.length,
+      dispatches: new Set(events.map((e) => keyOf.get(e))).size,
+      failed_attempts: failed.length,
+      failed_cost_usd: r6(failed.reduce((s, e) => s + (e.cost_usd ?? 0), 0)),
+    };
+  };
   const on = (line) => billed.filter((e) => workerLineOf(e, policy) === line);
   const claude = on("claude_worker");
   const gemini = on("gemini_workers");
@@ -243,13 +260,13 @@ export function costLines({ dispatched, modeled, policy, pin, env = process.env,
       thinking_tokens: modeled.reduce((s, e) => s + (e.output_tokens_reasoning ?? 0), 0),
       ...driverRange(driverUsage),
     },
-    { line: "gemini_workers", kind: "cash", ...lineWallet(gemini, { wallet: door.wallet }), leaf: door.leaf, models: [...new Set(gemini.map((e) => e.model))], ...sum(gemini) },
-    { line: "claude_worker", kind: claudeKind, ...claudeWallets, models: [...new Set(claude.map((e) => e.model))], ...sum(claude),
+    { line: "gemini_workers", kind: "cash", ...lineWallet(gemini, { wallet: door.wallet }), leaf: door.leaf, models: [...new Set(gemini.map((e) => e.model))], ...sum(gemini), ...attempts(gemini) },
+    { line: "claude_worker", kind: claudeKind, ...claudeWallets, models: [...new Set(claude.flatMap((e) => modelShares(e).map((s) => s.model)))], ...sum(claude), ...attempts(claude),
       cli_reported_cost_usd: r6(claude.reduce((s, e) => s + (e.cli_reported_cost_usd ?? 0), 0)),
       ...(claudeKind === "modeled" ? { basis: `MODELED: the Claude worker ran on a ${seatText(claudeWallets.subscription)} — tokens priced at the Anthropic card, no invoice exists` } : {}),
       ...(claudeKind === "mixed" ? { seat_modeled_usd: seatUsd, basis: `MIXED: $${seatUsd} of this line ran on a claude.ai seat (modeled, no invoice) and the rest is counted as cash; wallets[] splits it` } : {}) },
     ...(unclassified.length
-      ? [{ line: "unclassified", kind: "cash", models: [...new Set(unclassified.map((e) => e.model))], adapters: [...new Set(unclassified.map((e) => e.adapter ?? null))], ...sum(unclassified),
+      ? [{ line: "unclassified", kind: "cash", models: [...new Set(unclassified.map((e) => e.model))], adapters: [...new Set(unclassified.map((e) => e.adapter ?? null))], ...sum(unclassified), ...attempts(unclassified),
           basis: "UNCLASSIFIED: no known worker adapter or model prefix on these events, so they are on neither worker's line; counted as cash" }]
       : []),
   ];
@@ -389,7 +406,9 @@ export function buildHarnessManifest({ runDir, policyName, runId, env = process.
       input_tokens: base.total_input_tokens,
       input_tokens_cached: base.total_input_tokens_cached,
       input_tokens_cache_write: base.total_input_tokens_cache_write ?? 0,
+      input_tokens_cache_write_1h: base.total_input_tokens_cache_write_1h ?? 0,
       output_tokens: base.total_output_tokens,
+      output_tokens_reasoning: base.total_output_tokens_reasoning ?? 0,
     },
     driver: {
       input_tokens: driverLine.input_tokens,

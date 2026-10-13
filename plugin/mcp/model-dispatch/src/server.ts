@@ -17,6 +17,7 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import { CallToolRequestSchema, ListToolsRequestSchema } from "@modelcontextprotocol/sdk/types.js";
 
 import { existsSync } from "node:fs";
+import { randomUUID } from "node:crypto";
 
 import { loadPolicy, loadPolicyFromPath, getModel, DEFAULT_POLICY_NAME } from "./policy.js";
 import {
@@ -28,7 +29,7 @@ import {
 } from "./routing.js";
 import { assessModels, parseAuthMode, type AuthMode } from "./preflight.js";
 import { checkModelPrice, withEffectivePrices } from "./effectivePrice.js";
-import { appendEvent, cacheWriteBuckets, normalizeDirectTierEvent } from "./telemetry.js";
+import { appendEvent, attemptEventFields, cacheWriteBuckets, normalizeDirectTierEvent } from "./telemetry.js";
 import { checkRunCostCap, runCostCapRefusal } from "./runCostCap.js";
 import { createAdapter } from "./adapters/index.js";
 import {
@@ -460,8 +461,10 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
 
         const adapter = adapterFor(policy, decision.modelId);
         const dispatchStarted = Date.now();
+        const dispatchId = randomUUID();
         log("info", "dispatch.start", {
           packet_id: packet.id,
+          dispatch_id: dispatchId,
           model_id: decision.modelId,
           max_out: packet.budget?.maxOutputTokens,
           max_in: packet.budget?.maxInputTokens,
@@ -556,6 +559,10 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
         };
         const events: TelemetryEvent[] = attempts.map((att) => ({
           ...baseEvent,
+          ...attemptEventFields(att, {
+            dispatch_id: dispatchId,
+            terminal_reason: att === attempts[attempts.length - 1] ? result.terminal_reason : undefined,
+          }),
           input_tokens: att.tokens.input,
           input_tokens_cached: att.tokens.input_cached,
           // Cache writes, disjoint from input_tokens: the total written, plus

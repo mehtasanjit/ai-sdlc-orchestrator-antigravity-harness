@@ -4,8 +4,63 @@
 
 import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
-import type { ModelPricing, PriceBasis, TelemetryEvent } from "./types.js";
+import type { AttemptRecord, ExecutionResult, ModelPricing, PriceBasis, TelemetryEvent, WorkerModelCost } from "./types.js";
 import type { AppliedModifiers, PeriodRef } from "./prices.js";
+
+declare module "./types.js" {
+  interface TelemetryEvent {
+    /**
+     * A Claude worker attempt's per-model ledger, copied from the attempt: one
+     * row per model the call billed, so a side model (the Agent SDK's Haiku
+     * call) is not booked as the routed model. The rows' tokens sum to the
+     * event's; `tokens.input_cache_write` is the 5-minute share, disjoint from
+     * `input_cache_write_1h`. Absent on adapters that keep no ledger.
+     */
+    worker_per_model?: WorkerModelCost[];
+    /**
+     * One id per execute_with_model call, shared by all its attempts. Two
+     * dispatches of one packet share a task_id and differ here. Absent on
+     * events written before it existed; readers fall back to dispatchKeys().
+     */
+    dispatch_id?: string;
+    /** The vendor's stop reason for this attempt (`MAX_TOKENS`, `end_turn`, ...), as the adapter recorded it. */
+    stop_reason?: string;
+    /** Whether this attempt stopped at its output ceiling. */
+    hit_output_cap?: boolean;
+    /** Why the dispatch ended; on its last attempt only. */
+    terminal_reason?: ExecutionResult["terminal_reason"];
+  }
+}
+
+/** The fields a dispatched event takes from its attempt beyond the token buckets. */
+export function attemptEventFields(
+  att: AttemptRecord,
+  dispatch: { dispatch_id?: string; terminal_reason?: ExecutionResult["terminal_reason"] } = {},
+): Pick<TelemetryEvent, "worker_per_model" | "dispatch_id" | "stop_reason" | "hit_output_cap" | "terminal_reason"> {
+  return {
+    dispatch_id: dispatch.dispatch_id,
+    stop_reason: att.stop_reason,
+    hit_output_cap: att.hit_output_cap,
+    terminal_reason: dispatch.terminal_reason,
+    worker_per_model: att.per_model?.length ? att.per_model : undefined,
+  };
+}
+
+/**
+ * The dispatch each event belongs to, in file order: its dispatch_id, else
+ * its task_id numbered by dispatch, where an attempt_number of 1 (or none)
+ * starts a new dispatch. A dispatch appends its attempts together, so the
+ * fallback holds for events written before dispatch_id existed.
+ */
+export function dispatchKeys(events: Array<Pick<TelemetryEvent, "dispatch_id" | "task_id" | "attempt_number">>): string[] {
+  const count = new Map<string, number>();
+  return events.map((ev, i) => {
+    if (ev.dispatch_id) return ev.dispatch_id;
+    const task = ev.task_id ?? `#${i}`;
+    if (ev.attempt_number == null || ev.attempt_number <= 1 || !count.has(task)) count.set(task, (count.get(task) ?? 0) + 1);
+    return `${task}#${count.get(task)}`;
+  });
+}
 
 export function appendEvent(jsonlPath: string, ev: TelemetryEvent): void {
   mkdirSync(dirname(jsonlPath), { recursive: true });
@@ -159,6 +214,107 @@ export interface OrchestratorUnloggedBilled {
   pct_of_booked: number;
 }
 
+/**
+ * The token buckets a rollup row carries, enough to re-price its cost_usd:
+ * fresh input, cache reads, cache writes (the total, with the 1-hour share
+ * beside it, as events store them) and output (thinking is a share of it).
+ */
+export interface TokenColumns {
+  input_tokens: number;
+  input_tokens_cached: number;
+  input_tokens_cache_write: number;
+  input_tokens_cache_write_1h: number;
+  output_tokens: number;
+  output_tokens_reasoning: number;
+}
+
+export function emptyTokenColumns(): TokenColumns {
+  return {
+    input_tokens: 0,
+    input_tokens_cached: 0,
+    input_tokens_cache_write: 0,
+    input_tokens_cache_write_1h: 0,
+    output_tokens: 0,
+    output_tokens_reasoning: 0,
+  };
+}
+
+export function addTokenColumns(row: Partial<TokenColumns>, tokens: Partial<TokenColumns>): void {
+  row.input_tokens = (row.input_tokens ?? 0) + (tokens.input_tokens ?? 0);
+  row.input_tokens_cached = (row.input_tokens_cached ?? 0) + (tokens.input_tokens_cached ?? 0);
+  row.input_tokens_cache_write = (row.input_tokens_cache_write ?? 0) + (tokens.input_tokens_cache_write ?? 0);
+  row.input_tokens_cache_write_1h = (row.input_tokens_cache_write_1h ?? 0) + (tokens.input_tokens_cache_write_1h ?? 0);
+  row.output_tokens = (row.output_tokens ?? 0) + (tokens.output_tokens ?? 0);
+  row.output_tokens_reasoning = (row.output_tokens_reasoning ?? 0) + (tokens.output_tokens_reasoning ?? 0);
+}
+
+/**
+ * `calls` counts attempts routed to the model and `dispatches` the
+ * execute_with_model calls they came from; `failed_attempts` and
+ * `failed_cost_usd` are the attempts that did not succeed (an output-cap
+ * retry included) and this model's dollars on them.
+ */
+export type ModelRow = {
+  calls: number;
+  dispatches: number;
+  side_calls?: number;
+  cost_usd: number;
+  failed_attempts: number;
+  failed_cost_usd: number;
+} & TokenColumns;
+
+/** One model's share of an event: its tokens and dollars, and whether it is the model the event was routed to. */
+export interface ModelShare {
+  model: string;
+  routed: boolean;
+  cost_usd: number;
+  tokens: TokenColumns;
+}
+
+/**
+ * An event split by the model each token billed on. Without a per-model
+ * ledger the whole event is its routed model's. With one, every other
+ * model's row is its own share and the routed model takes the remainder, so
+ * the shares always sum to the event's tokens and dollars.
+ */
+export function modelShares(ev: TelemetryEvent): ModelShare[] {
+  const whole = eventTokenColumns(ev);
+  const rows = ev.worker_per_model ?? [];
+  const isRouted = (r: WorkerModelCost) => r.model === ev.model || (r.reported_as ?? []).includes(ev.model);
+  const others = rows.filter((r) => !isRouted(r));
+  if (rows.length <= 1) {
+    return [{ model: ev.model, routed: true, cost_usd: ev.cost_usd, tokens: whole }];
+  }
+  const shares: ModelShare[] = others.map((r) => ({
+    model: r.model,
+    routed: false,
+    cost_usd: r.cost_usd ?? 0,
+    tokens: {
+      input_tokens: r.tokens.input,
+      input_tokens_cached: r.tokens.input_cached,
+      input_tokens_cache_write: r.tokens.input_cache_write + r.tokens.input_cache_write_1h,
+      input_tokens_cache_write_1h: r.tokens.input_cache_write_1h,
+      output_tokens: r.tokens.output,
+      output_tokens_reasoning: 0,
+    },
+  }));
+  const rest = (key: keyof TokenColumns) => Math.max(0, whole[key] - shares.reduce((s, x) => s + x.tokens[key], 0));
+  shares.unshift({
+    model: ev.model,
+    routed: true,
+    cost_usd: ev.cost_usd - shares.reduce((s, x) => s + x.cost_usd, 0),
+    tokens: {
+      input_tokens: rest("input_tokens"),
+      input_tokens_cached: rest("input_tokens_cached"),
+      input_tokens_cache_write: rest("input_tokens_cache_write"),
+      input_tokens_cache_write_1h: rest("input_tokens_cache_write_1h"),
+      output_tokens: rest("output_tokens"),
+      output_tokens_reasoning: whole.output_tokens_reasoning,
+    },
+  });
+  return shares;
+}
+
 export interface Manifest {
   pass: string;
   policy_name: string;
@@ -284,7 +440,17 @@ export interface Manifest {
    * the in-session field existed it was the plain sum.
    */
   true_total_cost_usd?: number;
-  model_breakdown: Record<string, { calls: number; cost_usd: number; input_tokens: number; output_tokens: number }>;
+  /** Dispatched-work 1-hour cache writes, a share of total_input_tokens_cache_write. Absent on older manifests. */
+  total_input_tokens_cache_write_1h?: number;
+  /** Dispatched-work thinking tokens, a share of total_output_tokens. Absent on older manifests. */
+  total_output_tokens_reasoning?: number;
+  /**
+   * One row per billed model, rolled up from each event's worker_per_model
+   * when it has one. `calls` counts attempts routed to the model;
+   * `side_calls` counts attempts routed to another model that billed this
+   * one too (absent when none).
+   */
+  model_breakdown: Record<string, ModelRow>;
   /** Older manifests without token fields still load; dashboard falls back. */
   phase_breakdown: Record<string, {
     calls: number;
@@ -292,14 +458,11 @@ export interface Manifest {
     models: string[];
     input_tokens?: number;
     input_tokens_cached?: number;
+    input_tokens_cache_write?: number;
+    input_tokens_cache_write_1h?: number;
     output_tokens?: number;
-    by_model?: Record<string, {
-      calls: number;
-      cost_usd: number;
-      input_tokens: number;
-      input_tokens_cached: number;
-      output_tokens: number;
-    }>;
+    output_tokens_reasoning?: number;
+    by_model?: Record<string, ModelRow>;
   }>;
   module_breakdown: Record<string, { calls: number; cost_usd: number }>;
   task_type_breakdown: Record<string, { calls: number; cost_usd: number }>;
@@ -329,6 +492,41 @@ export function cacheWriteBuckets(tokens: { input_cache_write?: number; input_ca
   return {
     input_tokens_cache_write: (fiveMinute ?? 0) + (oneHour ?? 0),
     ...(oneHour !== undefined ? { input_tokens_cache_write_1h: oneHour } : {}),
+  };
+}
+
+function addModelShare(
+  rows: Record<string, ModelRow>,
+  share: ModelShare,
+  attempt: { dispatch: string; failed: boolean; seen: Map<ModelRow, Set<string>> },
+): void {
+  const row = (rows[share.model] ??= { calls: 0, dispatches: 0, cost_usd: 0, failed_attempts: 0, failed_cost_usd: 0, ...emptyTokenColumns() });
+  if (share.routed) {
+    row.calls++;
+    const seen = attempt.seen.get(row) ?? new Set<string>();
+    attempt.seen.set(row, seen);
+    if (!seen.has(attempt.dispatch)) {
+      seen.add(attempt.dispatch);
+      row.dispatches++;
+    }
+    if (attempt.failed) row.failed_attempts++;
+  } else {
+    row.side_calls = (row.side_calls ?? 0) + 1;
+  }
+  row.cost_usd += share.cost_usd;
+  if (attempt.failed) row.failed_cost_usd += share.cost_usd;
+  addTokenColumns(row, share.tokens);
+}
+
+/** An event's token buckets as rollup columns; an absent bucket is 0. */
+export function eventTokenColumns(ev: TelemetryEvent): TokenColumns {
+  return {
+    input_tokens: ev.input_tokens ?? 0,
+    input_tokens_cached: ev.input_tokens_cached ?? 0,
+    input_tokens_cache_write: ev.input_tokens_cache_write ?? 0,
+    input_tokens_cache_write_1h: ev.input_tokens_cache_write_1h ?? 0,
+    output_tokens: ev.output_tokens ?? 0,
+    output_tokens_reasoning: ev.output_tokens_reasoning ?? 0,
   };
 }
 
@@ -363,49 +561,32 @@ export function buildManifest(allEvents: TelemetryEvent[], opts: {
   const phase_breakdown: Manifest["phase_breakdown"] = {};
   const module_breakdown: Manifest["module_breakdown"] = {};
   const task_type_breakdown: Manifest["task_type_breakdown"] = {};
-  let total_cost_usd = 0,
-    total_input_tokens = 0,
-    total_input_tokens_cached = 0,
-    total_input_tokens_cache_write = 0,
-    total_output_tokens = 0;
+  let total_cost_usd = 0;
+  const totals = emptyTokenColumns();
+  const keys = dispatchKeys(events);
+  const seen = new Map<ModelRow, Set<string>>();
 
-  for (const ev of events) {
+  for (const [i, ev] of events.entries()) {
+    const tokens = eventTokenColumns(ev);
+    const attempt = { dispatch: keys[i], failed: ev.success === false, seen };
     total_cost_usd += ev.cost_usd;
-    total_input_tokens += ev.input_tokens;
-    total_input_tokens_cached += ev.input_tokens_cached;
-    total_input_tokens_cache_write += ev.input_tokens_cache_write ?? 0;
-    total_output_tokens += ev.output_tokens;
+    addTokenColumns(totals, tokens);
 
-    const mb = (model_breakdown[ev.model] ??= {
-      calls: 0,
-      cost_usd: 0,
-      input_tokens: 0,
-      output_tokens: 0,
-    });
-    mb.calls++;
-    mb.cost_usd += ev.cost_usd;
-    mb.input_tokens += ev.input_tokens;
-    mb.output_tokens += ev.output_tokens;
+    const shares = modelShares(ev);
+    for (const share of shares) addModelShare(model_breakdown, share, attempt);
 
     const pb = (phase_breakdown[ev.phase] ??= {
       calls: 0, cost_usd: 0, models: [],
-      input_tokens: 0, input_tokens_cached: 0, output_tokens: 0,
+      ...emptyTokenColumns(),
       by_model: {},
     });
     pb.calls++;
     pb.cost_usd += ev.cost_usd;
-    pb.input_tokens = (pb.input_tokens ?? 0) + ev.input_tokens;
-    pb.input_tokens_cached = (pb.input_tokens_cached ?? 0) + ev.input_tokens_cached;
-    pb.output_tokens = (pb.output_tokens ?? 0) + ev.output_tokens;
-    if (!pb.models.includes(ev.model)) pb.models.push(ev.model);
-    const pbm = ((pb.by_model ??= {})[ev.model] ??= {
-      calls: 0, cost_usd: 0, input_tokens: 0, input_tokens_cached: 0, output_tokens: 0,
-    });
-    pbm.calls++;
-    pbm.cost_usd += ev.cost_usd;
-    pbm.input_tokens += ev.input_tokens;
-    pbm.input_tokens_cached += ev.input_tokens_cached;
-    pbm.output_tokens += ev.output_tokens;
+    addTokenColumns(pb, tokens);
+    for (const share of shares) {
+      if (!pb.models.includes(share.model)) pb.models.push(share.model);
+      addModelShare((pb.by_model ??= {}), share, attempt);
+    }
 
     const modb = (module_breakdown[ev.module] ??= { calls: 0, cost_usd: 0 });
     modb.calls++;
@@ -418,12 +599,17 @@ export function buildManifest(allEvents: TelemetryEvent[], opts: {
 
   const r6 = (n: number) => Math.round(n * 1_000_000) / 1_000_000;
   total_cost_usd = r6(total_cost_usd);
-  for (const k of Object.keys(model_breakdown))
-    model_breakdown[k].cost_usd = r6(model_breakdown[k].cost_usd);
+  for (const row of Object.values(model_breakdown)) {
+    row.cost_usd = r6(row.cost_usd);
+    row.failed_cost_usd = r6(row.failed_cost_usd);
+  }
   for (const k of Object.keys(phase_breakdown)) {
     phase_breakdown[k].cost_usd = r6(phase_breakdown[k].cost_usd);
     const bm = phase_breakdown[k].by_model;
-    if (bm) for (const mk of Object.keys(bm)) bm[mk].cost_usd = r6(bm[mk].cost_usd);
+    if (bm) for (const row of Object.values(bm)) {
+      row.cost_usd = r6(row.cost_usd);
+      row.failed_cost_usd = r6(row.failed_cost_usd);
+    }
   }
   for (const k of Object.keys(module_breakdown))
     module_breakdown[k].cost_usd = r6(module_breakdown[k].cost_usd);
@@ -441,6 +627,9 @@ export function buildManifest(allEvents: TelemetryEvent[], opts: {
       input_tokens: orchEvents.reduce((s, ev) => s + ev.input_tokens, 0),
       input_tokens_cached: orchEvents.reduce((s, ev) => s + ev.input_tokens_cached, 0),
       input_tokens_cache_write: orchEvents.reduce((s, ev) => s + (ev.input_tokens_cache_write ?? 0), 0),
+      ...(orchEvents.some((ev) => ev.input_tokens_cache_write_1h !== undefined)
+        ? { input_tokens_cache_write_1h: orchEvents.reduce((s, ev) => s + (ev.input_tokens_cache_write_1h ?? 0), 0) }
+        : {}),
       output_tokens: orchEvents.reduce((s, ev) => s + ev.output_tokens, 0),
       events: orchEvents.length,
       provenance: "transcript",
@@ -455,10 +644,12 @@ export function buildManifest(allEvents: TelemetryEvent[], opts: {
     ended_at,
     duration_sec,
     total_cost_usd,
-    total_input_tokens,
-    total_input_tokens_cached,
-    total_input_tokens_cache_write,
-    total_output_tokens,
+    total_input_tokens: totals.input_tokens,
+    total_input_tokens_cached: totals.input_tokens_cached,
+    total_input_tokens_cache_write: totals.input_tokens_cache_write,
+    total_input_tokens_cache_write_1h: totals.input_tokens_cache_write_1h,
+    total_output_tokens: totals.output_tokens,
+    total_output_tokens_reasoning: totals.output_tokens_reasoning,
     orchestrator_overhead,
     true_total_cost_usd,
     model_breakdown,

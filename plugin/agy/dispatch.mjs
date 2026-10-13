@@ -8,7 +8,9 @@
  * speaks MCP to the bridge on its behalf via driverClient.js. The bridge, its
  * five tool signatures and the TaskPacket contract are unchanged.
  *
- * The full result is written to `--out`; stdout carries one summary line.
+ * The full result is written to `--out`; stdout carries one summary line. A
+ * packet dispatch whose `--out` already holds a result moves that one aside
+ * to `<name>.<n>.json` first, so every dispatch's result file survives.
  *
  * Usage:
  *   node dispatch.mjs --packet=<packet.json> --out=<result.json> \
@@ -21,8 +23,8 @@
  *                     [--project-root=<path>] --out=<result.json>
  */
 
-import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
-import { dirname, resolve } from "node:path";
+import { readFileSync, writeFileSync, mkdirSync, existsSync, renameSync } from "node:fs";
+import { dirname, extname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { readMmoSelectFile } from "./mmoSelect.mjs";
@@ -103,6 +105,22 @@ export function summarize(toolName, result, args = {}) {
   const model = result?.decision?.modelId ?? "unknown";
   const success = result?.result?.success;
   return `dispatch model=${model} success=${success === true} cost_usd=${cost ?? "n/a"}`;
+}
+
+/**
+ * Moves an earlier result at `outPath` to the first free `<name>.<n><ext>`
+ * and returns where it went, or null when there was none. `--out` then
+ * always holds the newest dispatch's result.
+ */
+export function keepEarlierResult(outPath) {
+  const path = resolve(outPath);
+  if (!existsSync(path)) return null;
+  const ext = extname(path);
+  const stem = ext ? path.slice(0, -ext.length) : path;
+  let n = 1;
+  while (existsSync(`${stem}.${n}${ext}`)) n += 1;
+  renameSync(path, `${stem}.${n}${ext}`);
+  return `${stem}.${n}${ext}`;
 }
 
 function writeResult(outPath, payload) {
@@ -240,6 +258,8 @@ export async function runDispatch(args, { connect, env = process.env } = {}) {
   const bridge = await connect({ env: bridgeEnv(projectRoot, env) });
   try {
     const result = await bridge.callTool(toolName, toolArgs);
+    const kept = toolName === "execute_with_model" ? keepEarlierResult(outPath) : null;
+    if (kept) console.error(`dispatch: ${outPath} held an earlier dispatch's result; kept it as ${kept}.`);
     writeResult(outPath, result);
     // The tool call succeeding is not the same as the tool being happy. A
     // preflight that reports ok:false is the single most important "stop
