@@ -92,6 +92,12 @@ select:
     reason: "How the mechanical tier reaches Gemini 3.8: one completion call (cheap, predictable) or an agent session with tools and a workspace (costlier per packet, does its own reading and editing). Pick one per study and pin it."
 
 rules:
+  # The brownfield pre-check's dispatch smoke (brownfield-guide step 2). It
+  # proves the mechanical tier answers; preflight_dispatch already proves every
+  # model is reachable for free, so the smoke never needs Opus.
+  - when: { task_type: smoke }
+    use: gemini-flash
+    reason: "Pre-check dispatch smoke: proves the mechanical tier answers"
   - when: { phase: requirements_analysis }
     use: opus
     reason: "Judgment-heavy, low volume"

@@ -80,19 +80,28 @@ Agent-side steps (1 = discovery smoke, 3 = dispatch smoke) — you run yourself:
    echo '{"note":"Tier 1 completed cleanly"}' | node "${MMO_PLUGIN_ROOT}/scripts/pre-check.mjs" --record discovery pass
    ```
 
-3. **Dispatch smoke.** Construct a trivial `{ id: "smoke-1", phase: "codegen", task_type:
-   "smoke", instruction: "Return the literal string OK", ... }` TaskPacket, write it to a file,
-   and dispatch it to each policy tier the current policy uses (premium + mechanical for
-   `antigravity-flash38-plus-opus5`) —
-   through `call_mcp_tool` → `mmo_model-dispatch` / `execute_with_model` when the bridge is connected
-   to this session, otherwise:
-   ```bash
-   node "${MMO_PLUGIN_ROOT}/agy/dispatch.mjs" --packet=<smoke-packet.json> \
-     --out=<smoke-result.json> --policy=<policy> --project-root="$(pwd)"
+3. **Dispatch smoke.** One Gemini Flash call. The policy routes `task_type: "smoke"` to the
+   mechanical tier; the free `preflight_dispatch` at Rule 0 already proves every model the policy
+   names is reachable, so the smoke never goes to Opus. Write this TaskPacket to
+   `.sdlc/runs/<run-id>/smoke-packet.json`:
+   ```json
+   { "id": "smoke-1", "phase": "pre_check", "task_type": "smoke", "module": "smoke",
+     "instruction": "Return the literal string OK", "inputs": [], "outputSchema": { "type": "object" },
+     "acceptance": ["Returns OK"], "budget": { "maxInputTokens": 500, "maxOutputTokens": 50 },
+     "pass_id": "<run-id>" }
    ```
-   If both return their expected output within the timeout, record pass:
+   Dispatch it through `call_mcp_tool` → `mmo_model-dispatch` / `execute_with_model` (with
+   `telemetry_path` set to the run's telemetry file) when the bridge is connected to this session,
+   otherwise:
    ```bash
-   echo '{"tiers_tested":["opus","gemini-flash"]}' | node "${MMO_PLUGIN_ROOT}/scripts/pre-check.mjs" --record dispatch pass
+   node "${MMO_PLUGIN_ROOT}/agy/dispatch.mjs" --packet=".sdlc/runs/<run-id>/smoke-packet.json" \
+     --out=".sdlc/runs/<run-id>/smoke-result.json" --policy=<policy> --project-root="$(pwd)" \
+     --telemetry=".sdlc/runs/<run-id>/telemetry.jsonl"
+   ```
+   The call costs cents, and its telemetry row puts them on the run's Gemini line. If it returns
+   its expected output within the timeout, record pass:
+   ```bash
+   echo '{"tiers_tested":["gemini-flash"]}' | node "${MMO_PLUGIN_ROOT}/scripts/pre-check.mjs" --record dispatch pass
    ```
 
 If any pre-check step fails, **do not proceed to Gate 0.** Print the reported remediation and
