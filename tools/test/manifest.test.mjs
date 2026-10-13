@@ -423,3 +423,20 @@ test("the driver line names the dated period it was priced at, and the harness b
     assert.equal(m.harness.driver_results_with_unproven_reading, 1);
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
+
+test("a directory shared by two runs books only this run's events and this run's launcher record", () => {
+  const dir = runDir();
+  try {
+    const other = (over) => JSON.stringify(ev({ pass: "r0", cost_usd: 40, ...over }));
+    writeFileSync(join(dir, "telemetry.jsonl"), readFileSync(join(dir, "telemetry.jsonl"), "utf8") + other({}) + "\n" + other({ model: "claude-opus-5", phase: "security_review" }) + "\n");
+    writeFileSync(join(dir, "driver-cost-modeled.jsonl"), readFileSync(join(dir, "driver-cost-modeled.jsonl"), "utf8") + JSON.stringify({ pass: "r0", tier: "orchestrator", provenance: "modeled", cost_usd: 9, input_tokens: 1, input_tokens_cached: 0, output_tokens: 1 }) + "\n");
+    const m = buildHarnessManifest({ runDir: dir, runId: "r1", env: { ANTHROPIC_API_KEY: "k", GEMINI_API_KEY: "g" }, now: () => "N" });
+    assert.equal(m.total_cost_usd, 0.053125, "run r0's $80 is not in r1's figure");
+    assert.equal(m.cost.driver_modeled_usd, 0.001418, "run r0's driver turn is not in r1's driver line");
+    assert.deepEqual(m.harness.other_runs_in_directory, ["r0"]);
+
+    const r0 = buildHarnessManifest({ runDir: dir, runId: "r0", env: { ANTHROPIC_API_KEY: "k", GEMINI_API_KEY: "g" }, now: () => "N" });
+    assert.equal(r0.total_cost_usd, 80);
+    assert.equal(r0.harness.agy_invocations, null, "r1's launcher record is not r0's");
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});

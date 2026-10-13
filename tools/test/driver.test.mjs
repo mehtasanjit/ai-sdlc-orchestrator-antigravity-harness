@@ -213,8 +213,23 @@ test("an empty handover leaves no stray placeholder in the rendered prompt", () 
 // ── run artifacts ─────────────────────────────────────────────────────────
 
 test("runIsComplete keys on SUMMARY.md, the artifact only the final phase writes", () => {
-  assert.equal(runIsComplete("/o", (p) => p.endsWith("SUMMARY.md")), true);
-  assert.equal(runIsComplete("/o", () => false), false);
+  assert.equal(runIsComplete("/o", null, { exists: (p) => p.endsWith("SUMMARY.md") }), true);
+  assert.equal(runIsComplete("/o", null, { exists: () => false }), false);
+});
+
+test("a SUMMARY.md older than this run's start does not mark this run complete", () => {
+  const exists = () => true;
+  const stat = () => ({ mtimeMs: Date.parse("2026-10-12T10:00:00Z") });
+  assert.equal(runIsComplete("/o", "2026-10-13T09:00:00Z", { exists, stat }), false, "an earlier run's summary");
+  assert.equal(runIsComplete("/o", "2026-10-12T09:00:00Z", { exists, stat }), true, "written after this run started");
+});
+
+test("each run gets its own folder; brownfield edits the project root, greenfield writes src/", async () => {
+  const { defaultOutputDir, defaultCodeDir } = await import("../../plugin/agy/run.mjs");
+  assert.equal(defaultOutputDir("/p", "r7"), join("/p", ".sdlc", "runs", "r7"));
+  assert.equal(defaultCodeDir("/p", "brownfield"), "/p");
+  assert.equal(defaultCodeDir("/p", "greenfield"), join("/p", "src"));
+  assert.equal(defaultCodeDir("/p", undefined), join("/p", "src"));
 });
 
 const STREAM = [

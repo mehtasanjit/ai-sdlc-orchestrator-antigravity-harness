@@ -17,7 +17,7 @@
  *                                  anyway only in name — dispatch goes through dispatch.mjs (1, 2)
  *
  * Usage:
- *   node run.mjs --brief=<path> --output-dir=<path> \
+ *   node run.mjs --brief=<path> [--output-dir=<path>] \
  *                [--project-root=<path>] [--policy=<name>] [--run-id=<id>] \
  *                [--code-dir=<path>] [--gates=prompt|auto-approve|auto-abort] \
  *                [--mode=greenfield|brownfield] [--intent=<id>] [--seed=<text>] \
@@ -25,12 +25,16 @@
  *                [--agy-bin=<path>] [--prompt-file=<path>] [--print-timeout=6h] \
  *                [--inline-env] [--keep-run-root] [--allow-unverified-pin] [--dry-run]
  *
+ * Defaults: --output-dir is <project-root>/.sdlc/runs/<run-id>/, one folder per
+ * run; --code-dir is <project-root>/src for greenfield and the project root
+ * for brownfield, whose edits land across the existing tree.
+ *
  * --seed without --intent on a brownfield run resolves the job type at launch
  * (scripts/infer-intent.mjs) and records it as inferred; an ambiguous seed
  * refuses to launch rather than leave the choice to the model.
  */
 
-import { copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { appendFileSync, copyFileSync, existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { spawn, spawnSync as spawnSyncFn } from "node:child_process";
 import { dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -105,9 +109,14 @@ export function validIntents(pluginRoot = PLUGIN_ROOT) {
   return (Array.isArray(raw) ? raw : (raw.intents ?? [])).map((i) => i.id);
 }
 
-export function renderHandover({ mode, intent, seed, intentSource } = {}) {
+export function renderHandover({ mode, intent, seed, intentSource, runId, outputDir, codeDir } = {}) {
   const lines = [];
   if (mode) lines.push(`mode: ${mode}`);
+  if (mode === "brownfield") {
+    if (runId) lines.push(`run_id: ${runId}`);
+    if (outputDir) lines.push(`output_dir: ${outputDir}`);
+    if (codeDir) lines.push(`code_dir: ${codeDir}`);
+  }
   if (intent) lines.push(`intent: ${intent}`);
   if (intent && intentSource === "inferred") lines.push("intent_source: inferred");
   if (seed) lines.push(`seed_description: ${String(seed).replace(/\s+/g, " ").trim()}`);
@@ -204,17 +213,43 @@ export function buildAgyArgs({
   ];
 }
 
-export function runIsComplete(outputDir, exists = existsSync) {
-  return exists(join(outputDir, "SUMMARY.md"));
+/** The run's output directory: its own folder under the project's `.sdlc/runs/`. */
+export function defaultOutputDir(projectRoot, runId) {
+  return join(projectRoot, ".sdlc", "runs", runId);
 }
 
-export function spawnAgy(args, { spawnFn = spawn, cwd, agyBin = "agy", env = process.env } = {}) {
+/** Greenfield code goes to `src/`; a brownfield run edits the existing tree, so its code dir is the project root. */
+export function defaultCodeDir(projectRoot, mode) {
+  return mode === "brownfield" ? projectRoot : join(projectRoot, "src");
+}
+
+/**
+ * `SUMMARY.md` written by this run. One left in the directory by an earlier
+ * run (an `--output-dir` reused across runs) is older than this run's start
+ * and does not mark this run complete.
+ */
+export function runIsComplete(outputDir, since = null, { exists = existsSync, stat = statSync } = {}) {
+  const path = join(outputDir, "SUMMARY.md");
+  if (!exists(path)) return false;
+  if (!since) return true;
+  // A second's slack for filesystems that store whole-second mtimes.
+  return stat(path).mtimeMs >= Date.parse(since) - 1000;
+}
+
+/**
+ * `onStdout` / `onStderr` receive each chunk as it arrives, so the launcher
+ * can write the stream to disk before the process ends: a run killed
+ * mid-invocation keeps every event agy had printed. `onChild` receives the
+ * process, so an interrupt can stop it.
+ */
+export function spawnAgy(args, { spawnFn = spawn, cwd, agyBin = "agy", env = process.env, onStdout, onStderr, onChild } = {}) {
   return new Promise((resolvePromise) => {
     const child = spawnFn(agyBin, args, { cwd, env, stdio: ["ignore", "pipe", "pipe"] });
+    onChild?.(child);
     let stdout = "";
     let stderr = "";
-    child.stdout?.on("data", (c) => (stdout += c.toString()));
-    child.stderr?.on("data", (c) => (stderr += c.toString()));
+    child.stdout?.on("data", (c) => { const t = c.toString(); stdout += t; onStdout?.(t); });
+    child.stderr?.on("data", (c) => { const t = c.toString(); stderr += t; onStderr?.(t); });
     child.on("error", (err) => resolvePromise({ status: null, stdout, stderr: String(err?.message ?? err) }));
     child.on("close", (status) => resolvePromise({ status, stdout, stderr }));
   });
@@ -355,11 +390,14 @@ export function pinGateMessage(pending) {
 
 async function main(args) {
   const projectRoot = args["project-root"] ? resolve(args["project-root"]) : process.cwd();
-  const outputDir = args["output-dir"] ? resolve(args["output-dir"]) : join(projectRoot, ".sdlc");
   const policyName = args.policy ?? DEFAULT_POLICY;
   const runId = args["run-id"] ?? new Date().toISOString().replace(/[:.]/g, "-");
+  if (!/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(runId)) {
+    throw new Error(`run: --run-id=${runId} must be letters, digits, '.', '_' or '-': it names the run's folder.`);
+  }
+  const outputDir = args["output-dir"] ? resolve(args["output-dir"]) : defaultOutputDir(projectRoot, runId);
   const promptPath = args["prompt-file"] ? resolve(args["prompt-file"]) : join(AGY_DIR, "prompts", "conductor.md");
-  const codeDir = args["code-dir"] ? resolve(args["code-dir"]) : join(projectRoot, "src");
+  const codeDir = args["code-dir"] ? resolve(args["code-dir"]) : defaultCodeDir(projectRoot, args.mode);
   const briefPath = args.brief ? resolve(args.brief) : join(projectRoot, "brief.md");
   if (!args["prompt-file"] && !existsSync(briefPath)) {
     throw new Error(`run: no brief at ${briefPath}. Pass --brief=<path>, or put brief.md at the project root.`);
@@ -404,7 +442,7 @@ async function main(args) {
     POLICY: policyName,
     RUN_ID: runId,
     GATE_INSTRUCTION: GATE_MODES[gateMode],
-    HANDOVER: renderHandover({ mode, intent: resolvedIntent, seed: args.seed, intentSource }),
+    HANDOVER: renderHandover({ mode, intent: resolvedIntent, seed: args.seed, intentSource, runId, outputDir, codeDir }),
   };
   const promptText = renderPrompt(readFileSync(promptPath, "utf-8"), renderValues);
 
@@ -439,6 +477,7 @@ async function main(args) {
           mode: mode ?? null,
           intent: resolvedIntent ? { resolved: resolvedIntent, source: intentSource } : null,
           output_dir: outputDir,
+          code_dir: codeDir,
           cwd,
           inline_env: inlineEnv,
           bridge_build: { stale: build.stale, files: build.files },
@@ -465,10 +504,39 @@ async function main(args) {
   assertResumable(prior, { slug, policyName });
   const started = prior.started_at ?? new Date().toISOString();
   const launches = [...prior.invocations];
+
+  // The streams go to disk as they arrive: the carried invocations first,
+  // exactly as an end-of-run write would put them, then each process's
+  // chunks. A run killed mid-invocation keeps every event agy printed, and
+  // --resume reads them back.
+  const eventsPath = join(outputDir, "driver-events.jsonl");
+  const stderrPath = join(outputDir, "driver-stderr.log");
+  const priorStderr = prior.invocations.length && existsSync(stderrPath) ? terminated(readFileSync(stderrPath, "utf-8")) : "";
+  writeFileSync(eventsPath, prior.invocations.map((l) => terminated(l.stdout)).join(""), "utf-8");
+  writeFileSync(stderrPath, priorStderr, "utf-8");
+
+  let child = null;
+  let interrupted = null;
+  const onSignal = (sig) => {
+    interrupted = sig;
+    console.error(`run ${runId}: ${sig} — stopping agy and writing the run record`);
+    child?.kill("SIGTERM");
+  };
+  process.on("SIGINT", onSignal);
+  process.on("SIGTERM", onSignal);
+
   const launch = async (agyArgv) => {
     const t0 = Date.now();
     const startedAt = new Date(t0).toISOString();
-    const r = await spawnAgy(agyArgv, { cwd, agyBin });
+    let tail = "";
+    const r = await spawnAgy(agyArgv, {
+      cwd, agyBin,
+      onChild: (c) => { child = c; },
+      onStdout: (t) => { tail = t; appendFileSync(eventsPath, t); },
+      onStderr: (t) => appendFileSync(stderrPath, t),
+    });
+    child = null;
+    if (tail && !tail.endsWith("\n")) appendFileSync(eventsPath, "\n");
     launches.push({ stdout: r.stdout, status: r.status, wall_ms: Date.now() - t0, started_at: startedAt });
     return r;
   };
@@ -486,32 +554,24 @@ async function main(args) {
       );
     }
 
-    let stderr = result.stderr;
     const conversationId = conversationIdFrom(parseEventStream(result.stdout)) ?? resumeFrom;
     let invocations = 1;
 
-    while (invocations < maxTurns && result.status === 0 && conversationId && !runIsComplete(outputDir)) {
+    while (!interrupted && invocations < maxTurns && result.status === 0 && conversationId && !runIsComplete(outputDir, started)) {
       console.log(`run ${runId}: session incomplete after invocation ${invocations} (no SUMMARY.md yet) — resuming ${conversationId}`);
       result = await launch(
         buildAgyArgs({ slug, promptText: RESUME_PROMPT, projectRoot, outputDir, printTimeout, resumeConversationId: conversationId }),
       );
-      stderr += result.stderr;
       invocations += 1;
     }
-    const stdout = launches.map((l) => terminated(l.stdout)).join("");
-
-    if (!runIsComplete(outputDir)) {
+    const completed = runIsComplete(outputDir, started);
+    if (!completed) {
       console.log(
-        `run ${runId}: stopped after ${invocations} invocation(s) without SUMMARY.md — ` +
-          (invocations >= maxTurns ? `hit --max-turns=${maxTurns}.` : `agy exited ${result.status}.`) +
-          " Artifacts so far are in the output directory; re-run with --resume=<conversation-id> to continue.",
+        `run ${runId}: stopped after ${invocations} invocation(s) without this run's SUMMARY.md — ` +
+          (interrupted ? `interrupted (${interrupted}).` : invocations >= maxTurns ? `hit --max-turns=${maxTurns}.` : `agy exited ${result.status}.`) +
+          ` Artifacts so far are in the output directory; re-run with --resume=${conversationId ?? "<conversation-id>"} --run-id=${runId} to continue.`,
       );
     }
-
-    const stderrPath = join(outputDir, "driver-stderr.log");
-    const priorStderr = prior.invocations.length && existsSync(stderrPath) ? terminated(readFileSync(stderrPath, "utf-8")) : "";
-    writeFileSync(join(outputDir, "driver-events.jsonl"), stdout, "utf-8");
-    writeFileSync(stderrPath, priorStderr + stderr, "utf-8");
 
     const { events, rejection, modeled, driverUsage: usageSummary, reportedModels: driverModels, offPinModels: offPin } = buildRunArtifacts({
       invocations: launches, pin, passId: runId, policyName, driver: policy.driver, runStartedAt: started,
@@ -552,7 +612,10 @@ async function main(args) {
       agy_exit_status: result.status,
       driver_turns: modeled.length,
       agy_invocations: launches.length,
-      completed: runIsComplete(outputDir),
+      completed,
+      ...(interrupted ? { interrupted } : {}),
+      output_dir: outputDir,
+      code_dir: codeDir,
       driver_cost_usd_modeled: usageSummary.cost_usd,
       driver_reported_models: driverModels,
       ...(offPin.length ? { driver_model_mismatch: offPin } : {}),
@@ -586,8 +649,10 @@ async function main(args) {
     for (const note of driverRangeNotes(usageSummary)) console.log(`  driver: ${note}`);
     console.log(`\n  Manifest:     node plugin/agy/manifest.mjs '${outputDir}'`);
     console.log(`  Cost report:  node tools/report.mjs '${outputDir}'`);
-    return result.status === 0 ? 0 : 1;
+    return result.status === 0 && !interrupted ? 0 : 1;
   } finally {
+    process.off("SIGINT", onSignal);
+    process.off("SIGTERM", onSignal);
     if (runRoot && !args["keep-run-root"]) removeRunRoot(runRoot);
   }
 }

@@ -79,7 +79,7 @@ npm run verify    # the same checks as the wizard, no questions
 A headless dry run prints the pinned `agy` invocation with credentials reported as set/unset only:
 
 ```bash
-node plugin/agy/run.mjs --brief=examples/quick-demo/brief.md --project-root=/path/to/project --output-dir=/path/to/project/.sdlc --gates=auto-approve --dry-run
+node plugin/agy/run.mjs --brief=examples/quick-demo/brief.md --project-root=/path/to/project --gates=auto-approve --dry-run
 ```
 
 [docs/running.md](docs/running.md) covers the flags and the run directory.

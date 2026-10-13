@@ -274,13 +274,21 @@ export function agyVersion(run = spawnSync) {
 }
 
 export function buildHarnessManifest({ runDir, policyName, runId, env = process.env, version = null, login = null, wallet = claudeWallet(env, login), now = () => new Date().toISOString() }) {
-  const telemetry = readJsonl(join(runDir, "telemetry.jsonl"));
-  const modeled = readJsonl(join(runDir, "driver-cost-modeled.jsonl"));
-  const driverManifest = readJson(join(runDir, "driver-manifest.json"));
+  const allTelemetry = readJsonl(join(runDir, "telemetry.jsonl"));
+  const allModeled = readJsonl(join(runDir, "driver-cost-modeled.jsonl"));
+  const launcherRecord = readJson(join(runDir, "driver-manifest.json"));
   const snapshotPath = join(runDir, "policy_snapshot.yaml");
   const policy = existsSync(snapshotPath) ? parseYaml(readFileSync(snapshotPath, "utf8")) : null;
 
-  const pass = runId ?? driverManifest?.run_id ?? telemetry.find((e) => e.pass)?.pass ?? null;
+  const pass = runId ?? launcherRecord?.run_id ?? allTelemetry.find((e) => e.pass)?.pass ?? null;
+  // An output directory reused across runs holds every run's lines: only this
+  // run's count. A row with no run id (a zero-cost --log-phase row written
+  // without --run-id) is kept, since it carries no dollars. The launcher's
+  // record belongs to one run; another run's is not this run's driver.
+  const telemetry = allTelemetry.filter((e) => e.pass == null || e.pass === pass);
+  const modeled = allModeled.filter((e) => e.pass == null || e.pass === pass);
+  const driverManifest = launcherRecord && (!launcherRecord.run_id || launcherRecord.run_id === pass) ? launcherRecord : null;
+  const otherRuns = [...new Set([...allTelemetry, ...allModeled].map((e) => e.pass).filter((p) => p != null && p !== pass))];
   const policy_name = policyName ?? driverManifest?.policy ?? policy?.name ?? telemetry.find((e) => e.routing?.policy_name)?.routing.policy_name ?? null;
   if (!pass) throw new Error(`manifest: no run id — pass --run-id, or run the launcher so driver-manifest.json carries one (${runDir}).`);
   if (!policy_name) throw new Error(`manifest: no policy name — pass --policy, or leave policy_snapshot.yaml in ${runDir}.`);
@@ -340,6 +348,7 @@ export function buildHarnessManifest({ runDir, policyName, runId, env = process.
     gates: driverManifest?.gates ?? null,
     pin_rejection: driverManifest?.pin_rejection ?? null,
     ...conductorWork({ runDir, telemetry: dispatched, mode: driverManifest?.mode, completed: driverManifest?.completed }),
+    ...(otherRuns.length ? { other_runs_in_directory: otherRuns } : {}),
     written_by: "plugin/agy/manifest.mjs",
     written_at: now(),
   };

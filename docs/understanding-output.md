@@ -2,7 +2,7 @@
 
 > **For:** reading `telemetry.jsonl`, `driver-cost-modeled.jsonl`, `manifest.json`, `provenance.json`, and the cost report. **Also see:** [methodology.md](methodology.md) · [running.md](running.md#the-run-directory).
 
-After a run finishes, the record lives under the run's output directory — `.sdlc/` for greenfield (`/mmo:greenfield`, or `run.mjs` with its default `--output-dir`), `.sdlc/runs/<YYYYMMDD-HHMMSS>-<intent>-<slug>/` for brownfield (`/mmo:brownfield`, the seven job aliases, `/mmo:pass --mode=brownfield`). Two files carry the money, and they are kept apart on purpose:
+After a run finishes, the record lives in the run's own folder, `.sdlc/runs/<run-id>/`: `run.mjs`'s default `--output-dir`, `/mmo:greenfield` (`<YYYYMMDD-HHMMSS>-greenfield`), and every brownfield entry (`<YYYYMMDD-HHMMSS>-<intent>-<slug>`). The manifest and the report book only the run's own lines (`pass`), so a folder reused across runs never adds one run's cost to another's; `harness.other_runs_in_directory` names the other runs found there. Two files carry the money, and they are kept apart on purpose:
 
 - `telemetry.jsonl` — one JSON object per line, one line per **dispatched** model call: everything that went through the bridge. Vendor-metered. Real usage, and on a key or a GCP project, real money.
 - `driver-cost-modeled.jsonl` — one line per conductor turn, priced from agy's stream-json `usage` at the policy's driver card. **Modeled.** A Google seat has no per-token invoice, so this figure is what the tokens *would* cost at the published rate, not what anyone was billed. Headless runs only — an interactive session exposes no `usage` counters to the plugin, so an interactive run's manifest carries the driver line as `kind: "unmeasured"`: $0 with a `NOT MEASURED` basis and `cost.driver_measured: false`, never a modeled $0.
@@ -137,7 +137,7 @@ Fields the report reads: `phase`, `provenance`, `input_tokens`, `input_tokens_ca
 Sum a phase with standard shell tools:
 
 ```bash
-jq -r 'select(.phase=="codegen") | .cost_usd' .sdlc/telemetry.jsonl | awk '{s+=$1} END {print s}'
+jq -r 'select(.phase=="codegen") | .cost_usd' .sdlc/runs/<run-id>/telemetry.jsonl | awk '{s+=$1} END {print s}'
 ```
 
 ### `driver-cost-modeled.jsonl`

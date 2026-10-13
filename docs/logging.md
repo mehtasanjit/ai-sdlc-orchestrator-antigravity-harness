@@ -40,8 +40,8 @@ or, live on a headless run, since every line also goes to stderr and `run.mjs` c
 stderr into the run directory:
 
 ```bash
-MMO_VERBOSE=1 node plugin/agy/run.mjs --brief=examples/quick-demo/brief.md --project-root=/tmp/demo --output-dir=/tmp/demo/.sdlc --gates=auto-approve
-grep "MMO:" /tmp/demo/.sdlc/driver-stderr.log
+MMO_VERBOSE=1 node plugin/agy/run.mjs --brief=examples/quick-demo/brief.md --project-root=/tmp/demo --gates=auto-approve --run-id=demo1
+grep "MMO:" /tmp/demo/.sdlc/runs/demo1/driver-stderr.log
 ```
 
 ## Line format

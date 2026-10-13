@@ -103,3 +103,67 @@ test("the stub refuses the argv shapes a real headless run must not carry", () =
   assert.match(run([...base, "--dangerously-skip-permissions", "--sandbox"]).stdout, /--sandbox/);
   assert.match(run([...base.slice(0, 5), "gemini-9", ...base.slice(6), "--dangerously-skip-permissions"]).stdout, /unknown model/);
 });
+
+test("two runs in one project each get their own folder, and an earlier run's SUMMARY.md does not end a later one", { skip: built ? false : "bridge not built (npm run build)" }, () => {
+  const proj = mkdtempSync(join(tmpdir(), "agy-smoke-runs-"));
+  try {
+    copyFileSync(join(ROOT, "examples", "quick-demo", "brief.md"), join(proj, "brief.md"));
+    const launch = (runId, extra = []) => spawnSync(process.execPath, [
+      join(ROOT, "plugin", "agy", "run.mjs"), `--project-root=${proj}`,
+      "--policy=antigravity-flash38-plus-opus5", "--gates=auto-approve", `--run-id=${runId}`, `--agy-bin=${FAKE_AGY}`, ...extra,
+    ], { encoding: "utf8", timeout: 120_000 });
+
+    assert.equal(launch("first").status, 0);
+    assert.equal(launch("second").status, 0);
+    for (const id of ["first", "second"]) {
+      const dir = join(proj, ".sdlc", "runs", id);
+      const m = JSON.parse(readFileSync(join(dir, "manifest.json"), "utf8"));
+      assert.equal(m.pass, id);
+      assert.equal(m.cost.driver_modeled_usd, 0.004658, `run ${id}'s driver line holds its own two turns only`);
+      assert.equal(m.harness.other_runs_in_directory, undefined);
+    }
+
+    // A reused --output-dir with an earlier run's SUMMARY.md: the new run still resumes until it writes its own.
+    const shared = join(proj, ".sdlc", "runs", "first");
+    const r = launch("third", [`--output-dir=${shared}`]);
+    assert.equal(r.status, 0, r.stderr);
+    assert.match(r.stdout, /resuming fake-conv-/, "the stale SUMMARY.md did not mark run 'third' complete");
+    const third = JSON.parse(readFileSync(join(shared, "manifest.json"), "utf8"));
+    assert.equal(third.pass, "third");
+    assert.equal(third.cost.driver_modeled_usd, 0.004658, "run 'first''s turns are not in run 'third''s driver line");
+  } finally { rmSync(proj, { recursive: true, force: true }); }
+});
+
+test("a run interrupted mid-invocation keeps the events agy had printed and records the interrupt", { skip: built ? false : "bridge not built (npm run build)" }, async () => {
+  const { spawn } = await import("node:child_process");
+  const { writeFileSync, chmodSync } = await import("node:fs");
+  const proj = mkdtempSync(join(tmpdir(), "agy-smoke-kill-"));
+  try {
+    copyFileSync(join(ROOT, "examples", "quick-demo", "brief.md"), join(proj, "brief.md"));
+    const slowAgy = join(proj, "slow-agy");
+    writeFileSync(slowAgy, `#!/usr/bin/env node
+if (process.argv[2] === "--version") { console.log("1.2.3"); process.exit(0); }
+const emit = (o) => process.stdout.write(JSON.stringify(o) + "\\n");
+emit({ event: "init", conversation_id: "slow-conv", model: "gemini-3.8-flash-high" });
+emit({ event: "result", result: { conversation_id: "slow-conv", status: "OK", num_turns: 1, usage: { input_tokens: 1000, output_tokens: 200, thinking_tokens: 50, cache_read_tokens: 400, total_tokens: 1250 } } });
+setInterval(() => {}, 1000);
+`);
+    chmodSync(slowAgy, 0o755);
+    const child = spawn(process.execPath, [
+      join(ROOT, "plugin", "agy", "run.mjs"), `--project-root=${proj}`, "--policy=antigravity-flash38-plus-opus5",
+      "--gates=auto-approve", "--run-id=killed", `--agy-bin=${slowAgy}`,
+    ], { stdio: ["ignore", "pipe", "pipe"] });
+    const out = join(proj, ".sdlc", "runs", "killed");
+    const events = join(out, "driver-events.jsonl");
+    for (let i = 0; i < 100 && !(existsSync(events) && readFileSync(events, "utf8").includes('"result"')); i++) await new Promise((r) => setTimeout(r, 100));
+    assert.match(readFileSync(events, "utf8"), /"event":"init"/, "events are on disk while agy is still running");
+    child.kill("SIGTERM");
+    const status = await new Promise((r) => child.on("close", r));
+    assert.equal(status, 1);
+    const driver = JSON.parse(readFileSync(join(out, "driver-manifest.json"), "utf8"));
+    assert.equal(driver.interrupted, "SIGTERM");
+    assert.equal(driver.completed, false);
+    assert.equal(driver.driver_turns, 1, "the turn agy reported before the interrupt is on the driver line");
+    assert.ok(existsSync(join(out, "manifest.json")));
+  } finally { rmSync(proj, { recursive: true, force: true }); }
+});

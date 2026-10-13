@@ -10,7 +10,10 @@
  * lines make up the cash figure. A total that mixed the kinds would be
  * neither the bill nor the usage, so the report prints none.
  *
- * Usage: node tools/report.mjs <path-to-run-directory> [--markdown]
+ * Usage: node tools/report.mjs <path-to-run-directory> [--markdown] [--run-id=<id>]
+ *
+ * A directory shared by several runs is reported for one run: --run-id, else
+ * the run its manifest.json or driver-manifest.json names.
  */
 
 import { readFileSync, existsSync, readdirSync } from "node:fs";
@@ -53,14 +56,22 @@ function readJson(path) {
   try { return JSON.parse(readFileSync(path, "utf8")); } catch { return {}; }
 }
 
-const telemetry = readJsonl(telemetryPath);
+const runIdArg = argv.find((a) => a.startsWith("--run-id="))?.slice("--run-id=".length);
+const writtenManifest = readJson(manifestPath);
+const manifest = !runIdArg || writtenManifest.pass === runIdArg ? writtenManifest : {};
+const launcherRecord = readJson(driverManifestPath);
+const allTelemetry = readJsonl(telemetryPath);
+const reportRunId = runIdArg ?? manifest.pass ?? launcherRecord.run_id ?? allTelemetry.find((e) => e.pass)?.pass ?? null;
+// The same filter buildHarnessManifest applies: this run's lines, and the
+// zero-cost rows that name no run.
+const ofThisRun = (e) => !reportRunId || e.pass == null || e.pass === reportRunId;
+const telemetry = allTelemetry.filter(ofThisRun);
 // The same partition buildManifest applies: orchestrator-tier lines are the
 // conductor's, priced on the driver line, never dispatched work.
 const events = telemetry.filter((e) => e.tier !== "orchestrator");
 const orchestratorEvents = telemetry.length - events.length;
-const modeledEvents = readJsonl(modeledPath);
-const manifest = readJson(manifestPath);
-const driverManifest = readJson(driverManifestPath);
+const modeledEvents = readJsonl(modeledPath).filter(ofThisRun);
+const driverManifest = !reportRunId || !launcherRecord.run_id || launcherRecord.run_id === reportRunId ? launcherRecord : {};
 let policy = null;
 try { policy = existsSync(snapshotPath) ? parseYaml(readFileSync(snapshotPath, "utf8")) : null; } catch { policy = null; }
 
@@ -102,7 +113,7 @@ if (!wallet) {
 
 // ─── cost lines — the manifest's own computation ──────────────────────
 
-const runId = manifest.pass ?? driverManifest.run_id ?? basename(runDir);
+const runId = reportRunId ?? basename(runDir);
 const policyName = manifest.policy_name ?? driverManifest.policy ?? policy?.name
   ?? events.find((e) => e.routing?.policy_name)?.routing.policy_name ?? "—";
 const built = buildHarnessManifest({ runDir, runId, policyName, wallet });

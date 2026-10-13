@@ -262,7 +262,7 @@ Full flag surface for the headless driver is in [docs/running.md](docs/running.m
 
 ## What a run produces
 
-Every artifact lands under `./.sdlc/` (for `/mmo:greenfield` and `run.mjs`'s default `--output-dir`) or `.sdlc/runs/<run-id>/` (for brownfield). Generated source lands under `./src/`.
+Every artifact lands in the run's own folder, `.sdlc/runs/<run-id>/`, for every entry point. Generated source lands under `./src/` (greenfield) or in place (brownfield).
 
 | File | Contents |
 |---|---|
@@ -286,8 +286,8 @@ No measured (paid) run has been published yet; the first will be the [Ping Servi
 
 ```bash
 mkdir -p /tmp/smoke && cp examples/quick-demo/brief.md /tmp/smoke/brief.md
-npm run smoke -- --project-root=/tmp/smoke --output-dir=/tmp/smoke/.sdlc --run-id=smoke1
-node tools/report.mjs /tmp/smoke/.sdlc
+npm run smoke -- --project-root=/tmp/smoke --run-id=smoke1
+node tools/report.mjs /tmp/smoke/.sdlc/runs/smoke1
 ```
 
 The stub speaks the recorded stream-json shapes, needs two invocations (so the resume loop runs), and makes one real $0 bridge call through the dispatch fallback. Nothing it emits is a measurement; every figure in that report is made up and labeled modeled. The same run executes under `npm test` ([tools/test/smoke-run.test.mjs](tools/test/smoke-run.test.mjs)).
@@ -328,7 +328,7 @@ node tools/setup.mjs --project-root /path/to/your/project
 A headless run, dry first — the invocation prints with every credential reported only as set/unset:
 
 ```bash
-node plugin/agy/run.mjs --brief=examples/quick-demo/brief.md --project-root=/path/to/empty/dir --output-dir=/path/to/empty/dir/.sdlc --gates=auto-approve --dry-run
+node plugin/agy/run.mjs --brief=examples/quick-demo/brief.md --project-root=/path/to/empty/dir --gates=auto-approve --dry-run
 ```
 
 ## Documentation

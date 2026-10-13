@@ -371,7 +371,7 @@ launcher; interactive runs carry the driver as `NOT MEASURED` (see the telemetry
   acceptance: ["<testable bullet>", ...],
   budget: { maxInputTokens: 4000, maxOutputTokens: 3000 },  // codegen initial; adapter doubles on max_tokens truncation up to 3× (see below)
   retry_count: 0,
-  pass_id: "pass1" | "pass2",
+  pass_id: "<run_id>",  // this run's id: the folder name under .sdlc/runs/, and every --run-id
   intent: "docs" | "bugfix" | "feature-extend" | "feature-new" | "refactor" | "test" | "deps"  // brownfield only — omit entirely on greenfield packets
 }
 ```
@@ -568,7 +568,7 @@ event and never an ambiguous one:
 ```bash
 node "${MMO_PLUGIN_ROOT}/agy/dispatch.mjs" \
   --log-phase=<state> --task-type=skipped|in_session \
-  --module=<module> --reason='<why in one line>' \
+  --module=<module> --reason='<why in one line>' --run-id=<run_id> \
   --policy=<policy> --telemetry="<output_dir>/telemetry.jsonl" \
   --out="<output_dir>/<state>-skip-receipt.json"
 ```

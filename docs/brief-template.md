@@ -13,13 +13,12 @@ outside it), and point the driver at the new path:
 node plugin/agy/run.mjs \
   --brief=path/to/your-brief.md \
   --project-root=. \
-  --output-dir=.sdlc \
   --policy=antigravity-flash38-plus-opus5 \
   --run-id=pass1
 ```
 
-Output lands under `--output-dir` (default `.sdlc/`): telemetry, task packets,
-and the run manifest. Give each run its own `--run-id` so they stay separate.
+Output lands under `--output-dir` (default `.sdlc/runs/<run-id>/`): telemetry,
+task packets, and the run manifest. Each `--run-id` gets its own folder.
 Add `--dry-run` to render the conductor prompt and exit without spending
 anything, and `--gates=auto-approve` for an unattended run.
 

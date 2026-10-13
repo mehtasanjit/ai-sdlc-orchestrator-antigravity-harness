@@ -23,6 +23,10 @@ setup is one-time per machine and happens separately.
   case) — propose the job type from the wording at step 4a, confirm it with one question, then
   continue as if `intent: <id>` had been supplied. With an empty `seed_description` this line
   is inert.
+- `run_id`, `output_dir` and `code_dir` (headless launches only) — the launcher chose them. Use
+  them everywhere this guide says `<run-id>`, `.sdlc/runs/<run-id>` and the code directory; do not
+  mint a run id of your own. `output_dir` is `.sdlc/runs/<run_id>` and `code_dir` the repo root
+  unless the launch said otherwise.
 - `intent_source: inferred` next to `intent: <id>` (headless launches only) — the launcher
   already ran step 4a's inference on `seed_description`. Treat `intent` as chosen; say on Gate
   0's Intent line that it was proposed from the wording.
@@ -133,7 +137,7 @@ row in the run's telemetry, once per run, whether the read happened here or in s
 node "${MMO_PLUGIN_ROOT}/agy/dispatch.mjs" \
   --log-phase=discovery --task-type=in_session \
   --module=repo --reason='conductor-local Tier 1 read of the repo; no dispatch' \
-  --policy=<default_policy from .sdlc/project.json> \
+  --policy=<default_policy from .sdlc/project.json> --run-id=<run-id> \
   --telemetry=".sdlc/runs/<run-id>/telemetry.jsonl" \
   --out=".sdlc/runs/<run-id>/discovery-in_session-receipt.json"
 ```
@@ -274,7 +278,7 @@ run directory (leave it as a partial record), and stop.
 Follow [plugin/skills/pipeline/SKILL.md](../pipeline/SKILL.md) with:
 - `mode: brownfield`
 - `intent: <from Gate 0>`
-- `run_id: <YYYYMMDD-HHMMSS-<intent>-<slug>>`
+- `run_id: <YYYYMMDD-HHMMSS-<intent>-<slug>>` — or, on a headless launch, the handover's `run_id`
 - `intent_brief_path: .sdlc/runs/<run-id>/intent_brief.md`
 - `baseline_path: .sdlc/baseline/current.json`
 - `policy: <as configured by setup — see the Policy bullet of Gate 0>`

@@ -16,7 +16,6 @@ Run `node tools/setup.mjs --project-root <project>` once (README, "Setup — the
 node plugin/agy/run.mjs \
   --brief=examples/quick-demo/brief.md \
   --project-root=/path/to/empty/dir \
-  --output-dir=/path/to/empty/dir/.sdlc \
   --policy=antigravity-flash38-plus-opus5 \
   --gates=auto-approve \
   --run-id=quick-demo-1 \
@@ -29,10 +28,10 @@ node plugin/agy/run.mjs \
 |---|---|---|
 | `--brief` | `<project-root>/brief.md` | The brief the conductor reads |
 | `--project-root` | cwd | The application's repo; added to the agy workspace with `--add-dir` |
-| `--output-dir` | `<project-root>/.sdlc` | The run record. Added to the workspace when it is outside the project |
-| `--code-dir` | `<project-root>/src` | Where the application is written |
+| `--output-dir` | `<project-root>/.sdlc/runs/<run-id>` | The run record, one folder per run. Added to the workspace when it is outside the project. A reused folder is safe for cost: the manifest, the report and the cost cap count only this run's lines, and a `SUMMARY.md` older than this run's start does not mark it complete |
+| `--code-dir` | `<project-root>/src`; the project root with `--mode=brownfield` | Where the application is written |
 | `--policy` | `antigravity-flash38-plus-opus5` | Policy name under `plugin/config/policies/` |
-| `--run-id` | timestamp | `pass_id` on every telemetry event |
+| `--run-id` | timestamp | `pass_id` on every telemetry event, and the run's folder name. Letters, digits, `.`, `_`, `-` |
 | `--gates` | `prompt` | `prompt` waits for you; `auto-approve` records `auto-approved` and continues; `auto-abort` stops at the first gate |
 | `--mode`, `--intent`, `--seed` | — | The brownfield handover the guide's step 4 reads. `--seed` without `--intent` on a brownfield run resolves the job type at launch through `plugin/scripts/infer-intent.mjs` and records `intent.source: "inferred"`; a seed that matches no job type, or several, refuses to launch and asks for `--intent` |
 | `--resume=<conversation-id>` | — | Continue an earlier session instead of starting one |
@@ -82,8 +81,8 @@ Before any paid run, drive the whole chain against the stub `agy` in `tools/test
 
 ```bash
 mkdir -p /tmp/smoke && cp examples/quick-demo/brief.md /tmp/smoke/brief.md
-npm run smoke -- --project-root=/tmp/smoke --output-dir=/tmp/smoke/.sdlc --run-id=smoke1
-node tools/report.mjs /tmp/smoke/.sdlc
+npm run smoke -- --project-root=/tmp/smoke --run-id=smoke1
+node tools/report.mjs /tmp/smoke/.sdlc/runs/smoke1
 ```
 
 `tools/test/smoke-run.test.mjs` runs the same thing under `npm test`. Nothing the stub emits is a measurement; every figure is made up and labeled modeled.
