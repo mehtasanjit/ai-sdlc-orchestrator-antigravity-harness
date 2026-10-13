@@ -204,7 +204,18 @@ Same line shape as telemetry, so the two files can be concatenated for analysis 
 
 The dispatched rollup, then three blocks this harness adds.
 
-**Dispatched rollup** — `total_cost_usd`, `total_input_tokens`, `total_input_tokens_cached`, `total_input_tokens_cache_write`, `total_output_tokens`, `model_breakdown`, `phase_breakdown` (with `by_model` inside each phase), `module_breakdown`, `task_type_breakdown`, `duration_sec`, `pass`, `policy_name`. Dispatched work only, always.
+**Dispatched rollup** — `total_cost_usd`, `total_input_tokens`, `total_input_tokens_cached`, `total_input_tokens_cache_write`, `total_input_tokens_cache_write_1h`, `total_output_tokens`, `total_output_tokens_reasoning`, `model_breakdown`, `phase_breakdown` (with `by_model` inside each phase), `module_breakdown`, `task_type_breakdown`, `duration_sec`, `pass`, `policy_name`. Dispatched work only, always.
+
+Every `model_breakdown` row, `phase_breakdown` row and `by_model` row, every `cost.lines[]` entry and `usage.dispatched` carry the same token columns, so you re-price any row from its own tokens:
+
+| Column | Billed at |
+|---|---|
+| `input_tokens` | The input rate (fresh input only) |
+| `input_tokens_cached` | The cache-read rate |
+| `input_tokens_cache_write` | All cache writes. The 1-hour share at 2x input, the rest at 1.25x input (Claude); the input rate on Gemini |
+| `input_tokens_cache_write_1h` | The 1-hour share of `input_tokens_cache_write` |
+| `output_tokens` | The output rate, thinking included |
+| `output_tokens_reasoning` | The thinking share of `output_tokens`, never priced on its own |
 
 **`harness`**
 

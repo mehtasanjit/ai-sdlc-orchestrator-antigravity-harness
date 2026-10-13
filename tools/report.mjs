@@ -138,12 +138,14 @@ const kindOf = (e) => lineByName[workerLineOf(e, policy)]?.kind ?? "cash";
 const phaseAgg = new Map();
 const provCount = { vendor: 0, estimated: 0, modeled: 0, none: 0, unknown: 0 };
 const packetAgg = new Map();
-const totals = { calls: 0, tokIn: 0, tokOut: 0, cash: 0, modeled: 0 };
+const totals = { calls: 0, tokIn: 0, tokOut: 0, cacheRead: 0, cacheWrite: 0, cash: 0, modeled: 0 };
 
 for (const e of events) {
   const phase = e.phase ?? "unknown";
   const tokIn = e.input_tokens ?? 0;
   const tokOut = e.output_tokens ?? 0;
+  const cacheRead = e.input_tokens_cached ?? 0;
+  const cacheWrite = e.input_tokens_cache_write ?? 0;
   const cost = e.cost_usd ?? 0;
   const prov = e.provenance ?? "unknown";
   const bucket = kindOf(e) === "modeled" ? "modeled" : "cash";
@@ -151,13 +153,15 @@ for (const e of events) {
   provCount[prov in provCount ? prov : "unknown"] += 1;
 
   const rec = phaseAgg.get(phase) ?? {
-    calls: 0, tokIn: 0, tokOut: 0, cash: 0, modeled: 0,
+    calls: 0, tokIn: 0, tokOut: 0, cacheRead: 0, cacheWrite: 0, cash: 0, modeled: 0,
     prov: { vendor: 0, estimated: 0, modeled: 0, none: 0, unknown: 0 },
   };
   for (const agg of [rec, totals]) {
     agg.calls += 1;
     agg.tokIn += tokIn;
     agg.tokOut += tokOut;
+    agg.cacheRead += cacheRead;
+    agg.cacheWrite += cacheWrite;
     agg[bucket] += cost;
   }
   rec.prov[prov in rec.prov ? prov : "unknown"] += 1;
@@ -217,6 +221,7 @@ const wrap = (text, width = 76) => {
   return wrapped;
 };
 const kindLabel = (l) => (l.kind === "unmeasured" ? "NOT MEASURED" : l.kind);
+const fmtCache = (read, write) => `${fmtCompact(read ?? 0)} / ${fmtCompact(write ?? 0)}`;
 
 const started = manifest.started_at ?? driverManifest.started_at ?? "—";
 const duration = fmtDuration(manifest.duration_sec ?? 0);
@@ -263,42 +268,48 @@ if (claudeLine.kind === "modeled" && claudeLine.calls > 0) {
   lineNotes.push("No wallet is known for the claude worker, so its line is booked as cash, as manifest.mjs books it.");
 }
 if (driverUnmeasured) lineNotes.push("The driver is NOT MEASURED: no headless launcher record, so the conductor's tokens are in no figure. Unmeasured, never free.");
+if (lines.some((l) => (l.input_tokens_cached ?? 0) + (l.input_tokens_cache_write ?? 0) > 0)) {
+  lineNotes.push("Tokens in is fresh input. Cache reads and cache writes are billed at their own rates and counted apart from it.");
+}
+const oneHourWrites = lines.reduce((s, l) => s + (l.input_tokens_cache_write_1h ?? 0), 0);
+const allWrites = lines.reduce((s, l) => s + (l.input_tokens_cache_write ?? 0), 0);
+if (oneHourWrites > 0) lineNotes.push(`${oneHourWrites} of ${allWrites} cache writes are 1-hour writes, billed at 2x the input rate; 5-minute writes bill at 1.25x.`);
 if (lineByName.unclassified) lineNotes.push("unclassified: events with no known worker adapter or model prefix. Counted as cash, on neither worker's line.");
 if (orchestratorEvents > 0) lineNotes.push(`${orchestratorEvents} tier:"orchestrator" event(s) in telemetry.jsonl are left out of every figure, as manifest.json leaves them out.`);
 const rebuild = manifestStale ? `node plugin/agy/manifest.mjs '${runDir}'` : null;
 if (rebuild) lineNotes.push("! manifest.json books these lines differently. Rebuild it from the harness clone:");
 
 const lineCells = (l) => {
-  if (l.kind === "unmeasured") return { calls: "—", tok: "—", cost: "—" };
+  if (l.kind === "unmeasured") return { calls: "—", tok: "—", cache: "—", cost: "—" };
   const range = l.cost_usd_low !== undefined ? ` (${fmtUSD(l.cost_usd_low)} – ${fmtUSD(l.cost_usd)})` : "";
-  return { calls: String(l.calls), tok: `${fmtCompact(l.input_tokens)} / ${fmtCompact(l.output_tokens)}`, cost: fmtUSD(l.cost_usd), range };
+  return { calls: String(l.calls), tok: `${fmtCompact(l.input_tokens)} / ${fmtCompact(l.output_tokens)}`, cache: fmtCache(l.input_tokens_cached, l.input_tokens_cache_write), cost: fmtUSD(l.cost_usd), range };
 };
 
 if (asMarkdown) {
   p(`## Cost lines — never summed`);
   p();
-  p(`| Line | Kind | Calls | Tokens (in / out) | Cost |`);
-  p(`|---|---|---:|---|---:|`);
+  p(`| Line | Kind | Calls | Tokens (in / out) | Cache (read / write) | Cost |`);
+  p(`|---|---|---:|---|---|---:|`);
   for (const l of workersFirst) {
     const c = lineCells(l);
     const kind = l.kind === "cash" ? "cash" : `**${kindLabel(l)}**`;
-    p(`| ${lineName(l)} | ${kind} | ${c.calls} | ${c.tok} | ${c.cost}${c.range ?? ""} |`);
+    p(`| ${lineName(l)} | ${kind} | ${c.calls} | ${c.tok} | ${c.cache} | ${c.cost}${c.range ?? ""} |`);
   }
-  p(`| **Cash** | | | | **${fmtUSD(cashUsd)}** |`);
+  p(`| **Cash** | | | | | **${fmtUSD(cashUsd)}** |`);
   p();
   for (const n of lineNotes) p(`- ${n}${n.startsWith("!") ? ` \`${rebuild}\`` : ""}`);
   p();
 } else {
   p(`  Cost lines — never summed`);
   p();
-  p(`  ${"Line".padEnd(18)}${"Kind".padEnd(14)}${"Calls".padStart(6)}${"Tokens (in / out)".padStart(21)}${"Cost".padStart(11)}`);
-  p(`  ${"─".repeat(70)}`);
+  p(`  ${"Line".padEnd(18)}${"Kind".padEnd(14)}${"Calls".padStart(6)}${"Tokens (in / out)".padStart(21)}${"Cache (read / write)".padStart(23)}${"Cost".padStart(11)}`);
+  p(`  ${"─".repeat(93)}`);
   for (const l of workersFirst) {
     const c = lineCells(l);
-    p(`  ${lineName(l).padEnd(18)}${kindLabel(l).padEnd(14)}${c.calls.padStart(6)}${c.tok.padStart(21)}${c.cost.padStart(11)}${c.range ?? ""}`);
+    p(`  ${lineName(l).padEnd(18)}${kindLabel(l).padEnd(14)}${c.calls.padStart(6)}${c.tok.padStart(21)}${c.cache.padStart(23)}${c.cost.padStart(11)}${c.range ?? ""}`);
   }
-  p(`  ${"─".repeat(70)}`);
-  p(`  ${"Cash".padEnd(59)}${fmtUSD(cashUsd).padStart(11)}`);
+  p(`  ${"─".repeat(93)}`);
+  p(`  ${"Cash".padEnd(82)}${fmtUSD(cashUsd).padStart(11)}`);
   p();
   for (const n of lineNotes) wrap(n).forEach((l, i) => p(`${i ? "    " : "  "}${l}`));
   if (rebuild) p(`    ${rebuild}`);
@@ -322,22 +333,22 @@ if (events.length > 0) {
     p(`## Dispatched work — by phase`);
     p();
     if (showModeled) {
-      p(`| Phase | Prov | Calls | Tokens (in / out) | Cash | Modeled |`);
-      p(`|---|:---:|---:|---|---:|---:|`);
+      p(`| Phase | Prov | Calls | Tokens (in / out) | Cache (read / write) | Cash | Modeled |`);
+      p(`|---|:---:|---:|---|---|---:|---:|`);
     } else {
-      p(`| Phase | Prov | Calls | Tokens (in / out) | Cash |`);
-      p(`|---|:---:|---:|---|---:|`);
+      p(`| Phase | Prov | Calls | Tokens (in / out) | Cache (read / write) | Cash |`);
+      p(`|---|:---:|---:|---|---|---:|`);
     }
-    const row = (label, prov, r) => p(`| ${label} | ${prov} | ${r.calls} | ${fmtCompact(r.tokIn)} / ${fmtCompact(r.tokOut)} | ${fmtUSD(r.cash)} |${showModeled ? ` ${fmtUSD(r.modeled)} |` : ""}`);
+    const row = (label, prov, r) => p(`| ${label} | ${prov} | ${r.calls} | ${fmtCompact(r.tokIn)} / ${fmtCompact(r.tokOut)} | ${fmtCache(r.cacheRead, r.cacheWrite)} | ${fmtUSD(r.cash)} |${showModeled ? ` ${fmtUSD(r.modeled)} |` : ""}`);
     for (const [phase, rec] of rows) row(`\`${phase}\``, provTag(rec), rec);
     row("**All phases**", "", totals);
     p();
   } else {
     p(`  Dispatched work — by phase`);
     p();
-    const header = `  ${"Phase".padEnd(22)}${"Prov".padStart(5)}${"Calls".padStart(7)}${"Tokens (in / out)".padStart(20)}${"Cash".padStart(11)}${showModeled ? "Modeled".padStart(11) : ""}`;
+    const header = `  ${"Phase".padEnd(22)}${"Prov".padStart(5)}${"Calls".padStart(7)}${"Tokens (in / out)".padStart(20)}${"Cache (read / write)".padStart(23)}${"Cash".padStart(11)}${showModeled ? "Modeled".padStart(11) : ""}`;
     const rule = `  ${"─".repeat(header.length - 2)}`;
-    const row = (label, prov, r) => p(`  ${label.padEnd(22)}${prov.padStart(5)}${String(r.calls).padStart(7)}${`${fmtCompact(r.tokIn)} / ${fmtCompact(r.tokOut)}`.padStart(20)}${fmtUSD(r.cash).padStart(11)}${showModeled ? fmtUSD(r.modeled).padStart(11) : ""}`);
+    const row = (label, prov, r) => p(`  ${label.padEnd(22)}${prov.padStart(5)}${String(r.calls).padStart(7)}${`${fmtCompact(r.tokIn)} / ${fmtCompact(r.tokOut)}`.padStart(20)}${fmtCache(r.cacheRead, r.cacheWrite).padStart(23)}${fmtUSD(r.cash).padStart(11)}${showModeled ? fmtUSD(r.modeled).padStart(11) : ""}`);
     p(header);
     p(rule);
     for (const [phase, rec] of rows) row(phase, provTag(rec), rec);

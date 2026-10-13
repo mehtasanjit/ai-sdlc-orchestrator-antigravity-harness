@@ -159,6 +159,40 @@ export interface OrchestratorUnloggedBilled {
   pct_of_booked: number;
 }
 
+/**
+ * The token buckets a rollup row carries, enough to re-price its cost_usd:
+ * fresh input, cache reads, cache writes (the total, with the 1-hour share
+ * beside it, as events store them) and output (thinking is a share of it).
+ */
+export interface TokenColumns {
+  input_tokens: number;
+  input_tokens_cached: number;
+  input_tokens_cache_write: number;
+  input_tokens_cache_write_1h: number;
+  output_tokens: number;
+  output_tokens_reasoning: number;
+}
+
+export function emptyTokenColumns(): TokenColumns {
+  return {
+    input_tokens: 0,
+    input_tokens_cached: 0,
+    input_tokens_cache_write: 0,
+    input_tokens_cache_write_1h: 0,
+    output_tokens: 0,
+    output_tokens_reasoning: 0,
+  };
+}
+
+export function addTokenColumns(row: Partial<TokenColumns>, tokens: Partial<TokenColumns>): void {
+  row.input_tokens = (row.input_tokens ?? 0) + (tokens.input_tokens ?? 0);
+  row.input_tokens_cached = (row.input_tokens_cached ?? 0) + (tokens.input_tokens_cached ?? 0);
+  row.input_tokens_cache_write = (row.input_tokens_cache_write ?? 0) + (tokens.input_tokens_cache_write ?? 0);
+  row.input_tokens_cache_write_1h = (row.input_tokens_cache_write_1h ?? 0) + (tokens.input_tokens_cache_write_1h ?? 0);
+  row.output_tokens = (row.output_tokens ?? 0) + (tokens.output_tokens ?? 0);
+  row.output_tokens_reasoning = (row.output_tokens_reasoning ?? 0) + (tokens.output_tokens_reasoning ?? 0);
+}
+
 export interface Manifest {
   pass: string;
   policy_name: string;
@@ -284,7 +318,11 @@ export interface Manifest {
    * the in-session field existed it was the plain sum.
    */
   true_total_cost_usd?: number;
-  model_breakdown: Record<string, { calls: number; cost_usd: number; input_tokens: number; output_tokens: number }>;
+  /** Dispatched-work 1-hour cache writes, a share of total_input_tokens_cache_write. Absent on older manifests. */
+  total_input_tokens_cache_write_1h?: number;
+  /** Dispatched-work thinking tokens, a share of total_output_tokens. Absent on older manifests. */
+  total_output_tokens_reasoning?: number;
+  model_breakdown: Record<string, { calls: number; cost_usd: number } & TokenColumns>;
   /** Older manifests without token fields still load; dashboard falls back. */
   phase_breakdown: Record<string, {
     calls: number;
@@ -292,14 +330,11 @@ export interface Manifest {
     models: string[];
     input_tokens?: number;
     input_tokens_cached?: number;
+    input_tokens_cache_write?: number;
+    input_tokens_cache_write_1h?: number;
     output_tokens?: number;
-    by_model?: Record<string, {
-      calls: number;
-      cost_usd: number;
-      input_tokens: number;
-      input_tokens_cached: number;
-      output_tokens: number;
-    }>;
+    output_tokens_reasoning?: number;
+    by_model?: Record<string, { calls: number; cost_usd: number } & TokenColumns>;
   }>;
   module_breakdown: Record<string, { calls: number; cost_usd: number }>;
   task_type_breakdown: Record<string, { calls: number; cost_usd: number }>;
@@ -329,6 +364,18 @@ export function cacheWriteBuckets(tokens: { input_cache_write?: number; input_ca
   return {
     input_tokens_cache_write: (fiveMinute ?? 0) + (oneHour ?? 0),
     ...(oneHour !== undefined ? { input_tokens_cache_write_1h: oneHour } : {}),
+  };
+}
+
+/** An event's token buckets as rollup columns; an absent bucket is 0. */
+export function eventTokenColumns(ev: TelemetryEvent): TokenColumns {
+  return {
+    input_tokens: ev.input_tokens ?? 0,
+    input_tokens_cached: ev.input_tokens_cached ?? 0,
+    input_tokens_cache_write: ev.input_tokens_cache_write ?? 0,
+    input_tokens_cache_write_1h: ev.input_tokens_cache_write_1h ?? 0,
+    output_tokens: ev.output_tokens ?? 0,
+    output_tokens_reasoning: ev.output_tokens_reasoning ?? 0,
   };
 }
 
@@ -363,49 +410,32 @@ export function buildManifest(allEvents: TelemetryEvent[], opts: {
   const phase_breakdown: Manifest["phase_breakdown"] = {};
   const module_breakdown: Manifest["module_breakdown"] = {};
   const task_type_breakdown: Manifest["task_type_breakdown"] = {};
-  let total_cost_usd = 0,
-    total_input_tokens = 0,
-    total_input_tokens_cached = 0,
-    total_input_tokens_cache_write = 0,
-    total_output_tokens = 0;
+  let total_cost_usd = 0;
+  const totals = emptyTokenColumns();
 
   for (const ev of events) {
+    const tokens = eventTokenColumns(ev);
     total_cost_usd += ev.cost_usd;
-    total_input_tokens += ev.input_tokens;
-    total_input_tokens_cached += ev.input_tokens_cached;
-    total_input_tokens_cache_write += ev.input_tokens_cache_write ?? 0;
-    total_output_tokens += ev.output_tokens;
+    addTokenColumns(totals, tokens);
 
-    const mb = (model_breakdown[ev.model] ??= {
-      calls: 0,
-      cost_usd: 0,
-      input_tokens: 0,
-      output_tokens: 0,
-    });
+    const mb = (model_breakdown[ev.model] ??= { calls: 0, cost_usd: 0, ...emptyTokenColumns() });
     mb.calls++;
     mb.cost_usd += ev.cost_usd;
-    mb.input_tokens += ev.input_tokens;
-    mb.output_tokens += ev.output_tokens;
+    addTokenColumns(mb, tokens);
 
     const pb = (phase_breakdown[ev.phase] ??= {
       calls: 0, cost_usd: 0, models: [],
-      input_tokens: 0, input_tokens_cached: 0, output_tokens: 0,
+      ...emptyTokenColumns(),
       by_model: {},
     });
     pb.calls++;
     pb.cost_usd += ev.cost_usd;
-    pb.input_tokens = (pb.input_tokens ?? 0) + ev.input_tokens;
-    pb.input_tokens_cached = (pb.input_tokens_cached ?? 0) + ev.input_tokens_cached;
-    pb.output_tokens = (pb.output_tokens ?? 0) + ev.output_tokens;
+    addTokenColumns(pb, tokens);
     if (!pb.models.includes(ev.model)) pb.models.push(ev.model);
-    const pbm = ((pb.by_model ??= {})[ev.model] ??= {
-      calls: 0, cost_usd: 0, input_tokens: 0, input_tokens_cached: 0, output_tokens: 0,
-    });
+    const pbm = ((pb.by_model ??= {})[ev.model] ??= { calls: 0, cost_usd: 0, ...emptyTokenColumns() });
     pbm.calls++;
     pbm.cost_usd += ev.cost_usd;
-    pbm.input_tokens += ev.input_tokens;
-    pbm.input_tokens_cached += ev.input_tokens_cached;
-    pbm.output_tokens += ev.output_tokens;
+    addTokenColumns(pbm, tokens);
 
     const modb = (module_breakdown[ev.module] ??= { calls: 0, cost_usd: 0 });
     modb.calls++;
@@ -441,6 +471,9 @@ export function buildManifest(allEvents: TelemetryEvent[], opts: {
       input_tokens: orchEvents.reduce((s, ev) => s + ev.input_tokens, 0),
       input_tokens_cached: orchEvents.reduce((s, ev) => s + ev.input_tokens_cached, 0),
       input_tokens_cache_write: orchEvents.reduce((s, ev) => s + (ev.input_tokens_cache_write ?? 0), 0),
+      ...(orchEvents.some((ev) => ev.input_tokens_cache_write_1h !== undefined)
+        ? { input_tokens_cache_write_1h: orchEvents.reduce((s, ev) => s + (ev.input_tokens_cache_write_1h ?? 0), 0) }
+        : {}),
       output_tokens: orchEvents.reduce((s, ev) => s + ev.output_tokens, 0),
       events: orchEvents.length,
       provenance: "transcript",
@@ -455,10 +488,12 @@ export function buildManifest(allEvents: TelemetryEvent[], opts: {
     ended_at,
     duration_sec,
     total_cost_usd,
-    total_input_tokens,
-    total_input_tokens_cached,
-    total_input_tokens_cache_write,
-    total_output_tokens,
+    total_input_tokens: totals.input_tokens,
+    total_input_tokens_cached: totals.input_tokens_cached,
+    total_input_tokens_cache_write: totals.input_tokens_cache_write,
+    total_input_tokens_cache_write_1h: totals.input_tokens_cache_write_1h,
+    total_output_tokens: totals.output_tokens,
+    total_output_tokens_reasoning: totals.output_tokens_reasoning,
     orchestrator_overhead,
     true_total_cost_usd,
     model_breakdown,

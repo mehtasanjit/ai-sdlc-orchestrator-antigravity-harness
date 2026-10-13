@@ -59,8 +59,8 @@ test("on a seat run the report prints separate lines, a cash figure without the 
 
     const md = report(dir, "--markdown");
     assert.match(md, /\| claude worker \| \*\*modeled\*\* \| 1 \|/);
-    assert.match(md, /\| \*\*Cash\*\* \| \| \| \| \*\*\$0\.0031\*\* \|/);
-    assert.match(md, /\| Phase \| Prov \| Calls \| Tokens \(in \/ out\) \| Cash \| Modeled \|/);
+    assert.match(md, /\| \*\*Cash\*\* \| \| \| \| \| \*\*\$0\.0031\*\* \|/);
+    assert.match(md, /\| Phase \| Prov \| Calls \| Tokens \(in \/ out\) \| Cache \(read \/ write\) \| Cash \| Modeled \|/);
     assert.doesNotMatch(md, /\$0\.0531/);
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
@@ -80,7 +80,7 @@ test("a tier:orchestrator event in telemetry.jsonl stays out of every sum", () =
   const dir = runDir([ev({}), conductor], { env: { ANTHROPIC_API_KEY: "k" } });
   try {
     const text = report(dir);
-    assert.match(text, /^\s+codegen\s+V\s+1\s+1\.0K \/ 100\s+\$0\.0011/m, "one codegen call, the vendor one");
+    assert.match(text, /^\s+codegen\s+V\s+1\s+1\.0K \/ 100\s+0 \/ 0\s+\$0\.0011/m, "one codegen call, the vendor one");
     assert.match(text, /gemini workers\s+cash\s+1\s/);
     assert.match(text, /Cash\s+\$0\.0011\n/);
     assert.doesNotMatch(text, /\$9\.99|\$10\./);

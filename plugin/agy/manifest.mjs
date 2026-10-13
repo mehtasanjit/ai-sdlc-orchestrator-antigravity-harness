@@ -211,7 +211,10 @@ export function costLines({ dispatched, modeled, policy, pin, env = process.env,
     calls: events.length,
     input_tokens: events.reduce((s, e) => s + (e.input_tokens ?? 0), 0),
     input_tokens_cached: events.reduce((s, e) => s + (e.input_tokens_cached ?? 0), 0),
+    input_tokens_cache_write: events.reduce((s, e) => s + (e.input_tokens_cache_write ?? 0), 0),
+    input_tokens_cache_write_1h: events.reduce((s, e) => s + (e.input_tokens_cache_write_1h ?? 0), 0),
     output_tokens: events.reduce((s, e) => s + (e.output_tokens ?? 0), 0),
+    output_tokens_reasoning: events.reduce((s, e) => s + (e.output_tokens_reasoning ?? 0), 0),
   });
   const billed = dispatched.filter((e) => e.model && e.provenance !== "none");
   const on = (line) => billed.filter((e) => workerLineOf(e, policy) === line);
@@ -371,7 +374,9 @@ export function buildHarnessManifest({ runDir, policyName, runId, env = process.
       input_tokens: base.total_input_tokens,
       input_tokens_cached: base.total_input_tokens_cached,
       input_tokens_cache_write: base.total_input_tokens_cache_write ?? 0,
+      input_tokens_cache_write_1h: base.total_input_tokens_cache_write_1h ?? 0,
       output_tokens: base.total_output_tokens,
+      output_tokens_reasoning: base.total_output_tokens_reasoning ?? 0,
     },
     driver: {
       input_tokens: driverLine.input_tokens,
