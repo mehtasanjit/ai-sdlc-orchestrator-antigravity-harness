@@ -15,7 +15,9 @@ brownfield:
 | **Judgment** — requirements, architecture / change_plan, packet planning, senior code review, security review | premium | Claude Opus 5, effort high, through the bridge |
 | **Discovery** — the Tier 1 read of your repo before Gate 0 | driver | The conductor's own local read, never dispatched. The policy has no `discovery` rule; the conductor logs a zero-cost `in_session` row for it |
 | **Mechanical** — codegen packets, doc packets, test-code packets, debug packets | mechanical | Gemini Flash |
-| **Escalation** — after 2 mechanical retries fail on a packet | premium | Claude Opus 5 (auto) |
+| **Root-cause analysis** — `bug_diagnose`, in any phase | premium | Claude Opus 5 |
+| **Escalation** — a `codegen`, `tests` or `debug` packet at `retry_count` 2 or more | premium | Claude Opus 5 (auto) |
+| **Fallback** — a `codegen` packet whose `task_type` the policy does not list, or a phase no rule names | premium | Claude Opus 5, stamped `routing.fallback: true` and listed under `fallback_packets` in `manifest.json` |
 | **Test execution** — running your test command | local | Bash on your machine, no model call |
 
 Only which phases FIRE changes per intent (per the intent matrix in
@@ -26,7 +28,7 @@ Only which phases FIRE changes per intent (per the intent matrix in
 | Intent | Judgment phases (premium) | Mechanical phases (Flash) |
 |---|---|---|
 | `docs` | requirements, senior review, security review | doc_addition, doc_update |
-| `bugfix` | requirements (reproduce + diagnose), senior review, security review | bug_reproduce, bug_diagnose, bug_fix_apply, test_add |
+| `bugfix` | requirements (reproduce + diagnose), `bug_diagnose`, senior review, security review | bug_reproduce, bug_fix_apply, test_add |
 | `feature-extend` | requirements, architecture (change_plan), senior review, security review | mixed `existing_file_edit` + `new_file_add` |
 | `feature-new` | requirements, architecture (full subsystem design), senior review, security review | full codegen mix (`new_file_add`, `test_add`, `doc_addition`, wiring packets) |
 | `refactor` | requirements (delta), architecture (refactor plan), senior review, security review | `refactor_extract`, `patch_apply` |
@@ -54,17 +56,35 @@ is explicitly `estimated`.
 
 ## Escalation
 
-The policy YAML supports a rule matching on `retry_count`:
+The policy YAML supports a rule matching on `retry_count`. The default policy carries two,
+each above the Flash rule for the same phases:
 
 ```yaml
+- when: { phase: [codegen, tests], retry_count: { gte: 2 } }
+  use: opus
+  reason: "Escalation: 2 mechanical-tier attempts failed"
 - when: { phase: debug, retry_count: { gte: 2 } }
   use: opus
   reason: "Escalation: 2 mechanical-tier attempts failed"
 ```
 
-Behavior: a `debug` packet dispatched to Gemini Flash that fails validation twice
-auto-escalates to Opus 5 on the third attempt. Prevents infinite mechanical-tier retries when
-Flash can't solve a particular puzzle.
+Behavior: a `codegen`, `tests` or `debug` packet dispatched to Gemini Flash that fails
+validation twice auto-escalates to Opus 5 on the third attempt. A refined packet keeps its
+`phase` and `task_type` and raises `retry_count` by one; relabeling it changes the rule it
+matches.
+
+## Codegen task types the default policy routes to Flash
+
+The `codegen` rule lists the task types `plugin/skills/pipeline/SKILL.md` and
+`plugin/skills/pipeline/stacks/*.md` tell the planner to use:
+
+| Source | Task types |
+|---|---|
+| Greenfield packet table | `controller_handler`, `service_method`, `dto`, `module_wiring`, `migration`, `seed_data`, `entity`, `guard`, `interceptor`, `filter`, `prisma_schema`, `env_docs`, `env_test_fixture`, `test_unit`, `test_integration`, `docstring`, `readme_section` |
+| Frontend packets | `react_component`, `react_page`, `api_client`, `frontend_util`, `frontend_config`, `frontend_html` |
+| Brownfield primitives | `new_file_add`, `existing_file_edit`, `patch_apply`, `bug_reproduce`, `bug_fix_apply`, `refactor_extract`, `dependency_add`, `test_add`, `test_backfill`, `doc_addition`, `doc_update` |
+
+Any other `codegen` task type falls to the policy default (Opus 5) with `routing.fallback: true`.
 
 ## How to configure
 
@@ -102,22 +122,19 @@ is falling to the cheap tier, and if that's broken, every packet escalates to pr
 run costs MORE than a one-model run while appearing to succeed. That's the one outcome the plugin
 exists to disprove.
 
-## Advanced — per-task-type overrides (v1.5)
+## Per-task-type overrides
 
 The policy YAML supports rules matching on `task_type` in addition to `phase`, so you can
 route a specific task inside a "mechanical" phase to premium:
 
 ```yaml
-# Example — not shipping in v1
-- when:
-    phase: codegen
-    task_type: bug_diagnose
+- when: { task_type: bug_diagnose }
   use: opus
-  reason: "Diagnosis is judgment work, not codegen"
+  reason: "Judgment: root-cause analysis"
 ```
 
-v1 uses phase-level defaults only. If you want per-task-type overrides, add them to your own
-policy YAML. Rules are evaluated top-to-bottom, first match wins — put more-specific rules
+The default policy ships this one. Add your own per-task-type overrides to your own policy
+YAML. Rules are evaluated top-to-bottom, first match wins — put more-specific rules
 above less-specific ones.
 
 ## Where to look after a run

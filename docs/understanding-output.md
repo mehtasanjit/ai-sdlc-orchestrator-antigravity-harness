@@ -200,7 +200,7 @@ Same line shape as telemetry, so the two files can be concatenated for analysis 
 | `price_warnings` | The driver block's card differs from the dated list for a day the run spent on; the list was used |
 | `local_record` | The same conversation as agy's local record holds it ([check 18](verification/p1-agy-runtime.md)): `record` and `stream` token totals side by side, and `agrees` (within 1%). `found: false` when the record is not on this machine |
 
-`driver-manifest.json` also records `driver_reported_models` (every model name any agy event carried; empty when agy names none, which proves nothing either way), `driver_model_mismatch` (reported names that are neither the pinned model nor its slug: the run was not on the pin), and `bridge_build` (`stale: true` when the bridge's `dist/` was older than its `src/`).
+`driver-manifest.json` also records `driver_reported_models` (every model name any agy event carried; empty when agy names none, and then only the local record's names can verify the pin), `driver_model_mismatch` (reported names that are neither the pinned model nor its slug: the run was not on the pin), and `bridge_build` (`stale: true` when the bridge's `dist/` was older than its `src/`).
 
 ### `manifest.json`
 
@@ -215,6 +215,8 @@ The dispatched rollup, then three blocks this harness adds.
 | `session_window` | `{start, end, duration_sec, anchor, exact}`. `anchor` is `launcher` (headless: `driver-manifest.json`), `markers` (the run's `run.start` and `run.end` lines in `orchestrator.log`), `markers+dispatches` (one marker missing; that end is the first or last dispatch), `dispatches` (no marker), or `none`. `exact` is `true` only for `launcher` and `markers`; otherwise the window is a lower bound |
 | `dispatch_window` | `{start, end, duration_sec, basis}` from the completion stamps of the first and last dispatched event. `null` with no dispatches |
 
+**Fallback routing** — `fallback_packets` lists every packet no policy rule matched, so the policy's `default` chose its model (`task_id`, `phase`, `task_type`, `model_id`, `attempts`, `cost_usd`); `fallback_cost_usd` is their sum. The bridge stamps those events `routing.fallback: true` and logs `route.fallback` at WARN. The figure is part of the dispatched rollup, not an extra cost; on a Claude line on the seat it is modeled, not cash. `node tools/report.mjs` lists the packets with each one's kind.
+
 **`harness`**
 
 | Field | Meaning |
@@ -224,7 +226,7 @@ The dispatched rollup, then three blocks this harness adds.
 | `auth_mode` | `vendor` — the only mode this runtime accepts |
 | `provider_source` | Where each leg's dollars come from: `driver` (`google-seat` or `gemini-api-key`), `claude` (`anthropic-api`, `vertex`, `claude-seat` or `mixed`), `gemini` (the Gemini line's `wallet`) |
 | `arm` | The Claude line's arm: `A` (Anthropic key), `B` (Vertex), `seat` (Claude Code signed in to claude.ai), `mixed`, or `null` when no Claude call ran or no wallet could be named |
-| `pin` | `model`, `effort`, `slug`, `billing_mode`, `verified`, `pending_checks` — the driver pin `run.mjs` asserted, and whether every check it depends on has passed live |
+| `pin` | `model`, `effort`, `slug`, `billing_mode`, `verified`, `unverified_reason`, `pending_checks`, `observed_models` — the driver pin `run.mjs` asserted. `verified` is `true` only when no check is pending and agy named the conducting model and every name was the pin; otherwise `unverified_reason` is `model_mismatch`, `pending_checks` or `no_model_observed` ([running.md](running.md#the-pin-gate)) |
 | `delegated` | Whether any packet went to the agent worker |
 | `cable` | One-paragraph description of the wiring: driver runtime and models, driver auth, worker models, `claude_worker_auth` (names the arm, the GCP project and region on arm B, or the seat), `summary` (each worker model and the adapter its events recorded, or `adapter not recorded`). The studies console renders these display strings verbatim: `driver_display`, `worker_sdk` (`model-dispatch`), `worker_sdk_label`, `worker_display`, `worker_transport` (each worker line's wallet), `handoff_note`, `driver_cost_note` (modeled, or unmeasured and not free) and `billing_note` |
 | `worker_cost_usd`, `worker_cost_usd_modeled`, `worker_cost_basis` | The worker lines of `cost.lines` split by kind: cash a vendor invoices, and Claude seat calls priced at the Anthropic card. A `mixed` Claude line splits at its seat share; an `unclassified` line counts as cash. Neither includes the driver |

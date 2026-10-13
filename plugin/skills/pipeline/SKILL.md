@@ -277,9 +277,11 @@ For each packet, in dependency order:
 Dispatch it with the command above. The bridge routes per policy — you do not choose the model.
 Validate the returned structured output against the schema; if invalid, construct a *refined*
 packet (new id, `retry_count+1`, with the validation error appended to instruction) and
-re-dispatch. After 2 mechanical-tier retries fail, the policy escalates to the premium tier
-automatically (rule with `retry_count: { gte: 2 }`) — the routing decision is the policy's, and
-the escalated packet dispatches exactly like every other one.
+re-dispatch. The refined packet keeps the original `phase` and `task_type`: a new label
+(`code_fix`, `test_refinement`, ...) matches no rule, falls to the policy default, and is
+flagged `routing.fallback` in the run record. After 2 mechanical-tier retries fail, the policy
+escalates to the premium tier automatically (rule with `retry_count: { gte: 2 }`) — the routing
+decision is the policy's, and the escalated packet dispatches exactly like every other one.
 
 Write the returned file content to disk at the packet's stated `artifact_path`.
 

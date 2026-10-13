@@ -125,6 +125,21 @@ rules:
     use: opus
     reason: "Judgment: delta design for feature-extend / refactor / deps"
 
+  # Root-cause analysis emits a note, not code; whichever phase the planner
+  # files it under, it is judgment.
+  - when: { task_type: bug_diagnose }
+    use: opus
+    reason: "Judgment: root-cause analysis"
+
+  # Above the codegen and tests rules, which would otherwise keep a failing
+  # packet on the mechanical tier forever.
+  - when: { phase: [codegen, tests], retry_count: { gte: 2 } }
+    use: opus
+    reason: "Escalation: 2 mechanical-tier attempts failed"
+
+  # The task types pipeline/SKILL.md and stacks/*.md tell the planner to
+  # use. An unlisted type falls to the default below and is stamped
+  # routing.fallback.
   - when:
       phase: codegen
       task_type:
@@ -144,6 +159,24 @@ rules:
         - frontend_util
         - frontend_config
         - frontend_html
+        - prisma_schema
+        - env_docs
+        - env_test_fixture
+        - test_unit
+        - test_integration
+        - docstring
+        - readme_section
+        - new_file_add
+        - existing_file_edit
+        - patch_apply
+        - bug_reproduce
+        - bug_fix_apply
+        - refactor_extract
+        - dependency_add
+        - test_add
+        - test_backfill
+        - doc_addition
+        - doc_update
     use: gemini-flash
     reason: "Schema-driven boilerplate"
   - when: { phase: tests }

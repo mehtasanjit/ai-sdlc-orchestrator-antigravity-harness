@@ -171,6 +171,7 @@ export function pickModel(
         modelId: resolved.modelId,
         reason: rule.reason ?? "fell through to policy default",
         ruleIndex: -1,
+        fallback: true,
         ...(resolved.selection ? { selection: resolved.selection } : {}),
       };
     }

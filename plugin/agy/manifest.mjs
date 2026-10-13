@@ -28,7 +28,7 @@ import { parse as parseYaml } from "yaml";
 
 import { buildManifest } from "../mcp/model-dispatch/dist/telemetry.js";
 import { resolveGeminiBackend } from "../mcp/model-dispatch/dist/adapters/geminiEndpoint.js";
-import { readPin, driverSlug, pendingPinChecks } from "./telemetry/fairnessPin.mjs";
+import { readPin, driverSlug, pendingPinChecks, pinVerification } from "./telemetry/fairnessPin.mjs";
 import { driverRange, driverRangeNote, driverRangeNotes } from "./telemetry/driverRange.mjs";
 import { isMain } from "../scripts/lib/is-main.mjs";
 import { conductorWork } from "./telemetry/conductorWork.mjs";
@@ -306,6 +306,7 @@ export function buildHarnessManifest({ runDir, policyName, runId, env = process.
 
   const dispatched = telemetry.filter((e) => e.tier !== "orchestrator");
   const base = buildManifest(dispatched, { pass, policy_name });
+  Object.assign(base, fallbackRouting(dispatched));
   const markers = readRunMarkers(runDir, pass);
   base.dispatch_window = dispatched.length
     ? { start: base.started_at, end: base.ended_at, duration_sec: base.duration_sec, basis: "completion stamps (ts) of the first and last dispatched event" }
@@ -339,7 +340,7 @@ export function buildHarnessManifest({ runDir, policyName, runId, env = process.
       gemini: geminiLine.wallet,
     },
     arm: claudeLine.arm,
-    pin: driverManifest?.pin ?? (pin ? { model: pin.model, effort: pin.effort, slug: driverSlug(pin), billing_mode: pin.billing_mode, verified: pendingPinChecks().length === 0, pending_checks: pendingPinChecks() } : null),
+    pin: pinRecord({ driverManifest, pin, collector }),
     delegated: true,
     cable: {
       driver_runtime: `${RUNTIME_NAME} ${version ?? driverManifest?.agy_version ?? ""}`.trim(),
@@ -413,6 +414,51 @@ export function buildHarnessManifest({ runDir, policyName, runId, env = process.
   };
 
   return { ...base, harness, usage, cost };
+}
+
+/**
+ * The driver pin and whether a model agy recorded proves it held. A launcher
+ * record written before `observed_models` existed stamped `verified` from the
+ * checks alone, so it is re-derived from the models that record names. An
+ * interactive run's models are the collector's, from agy's conversation record.
+ */
+export function pinRecord({ driverManifest = null, pin = null, collector = null }) {
+  if (driverManifest?.pin) {
+    const recorded = driverManifest.pin;
+    if (recorded.observed_models) return recorded;
+    const observed = [...new Set([...(driverManifest.driver_reported_models ?? []), ...(driverManifest.driver_usage?.local_record?.models ?? [])])];
+    const pending = recorded.pending_checks ?? pendingPinChecks();
+    return { ...recorded, ...pinVerification({ pending, observed, offPin: driverManifest.driver_model_mismatch ?? [] }), observed_models: observed };
+  }
+  if (!pin) return null;
+  const pending = pendingPinChecks();
+  const observed = collector?.reported_models ?? [];
+  return {
+    model: pin.model, effort: pin.effort, slug: driverSlug(pin), billing_mode: pin.billing_mode,
+    ...pinVerification({ pending, observed, offPin: collector?.model_mismatch ?? [] }),
+    pending_checks: pending, observed_models: observed,
+  };
+}
+
+/**
+ * Packets the policy's `default` routed because no rule matched. Events
+ * written before the bridge stamped `routing.fallback` are read from a
+ * dispatch's rule_index -1; a `--log-phase` row has the same index but is
+ * routed_by "manual" and carries no dollars.
+ */
+export function fallbackRouting(dispatched) {
+  const isFallback = (e) => e.routing?.fallback === true || (e.routed_by === "orchestrator" && e.routing?.rule_index === -1);
+  const packets = new Map();
+  let total = 0;
+  for (const e of dispatched.filter(isFallback)) {
+    const id = e.task_id ?? "?";
+    const pkt = packets.get(id) ?? { task_id: id, phase: e.phase ?? null, task_type: e.task_type ?? null, model_id: e.model_id ?? e.model ?? null, attempts: 0, cost_usd: 0 };
+    pkt.attempts += 1;
+    pkt.cost_usd += e.cost_usd ?? 0;
+    total += e.cost_usd ?? 0;
+    packets.set(id, pkt);
+  }
+  return { fallback_cost_usd: r6(total), fallback_packets: [...packets.values()].map((p) => ({ ...p, cost_usd: r6(p.cost_usd) })) };
 }
 
 /** The one-line CLI summary the interactive conductor relays. */

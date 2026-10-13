@@ -53,7 +53,7 @@ export interface OrchestratorTokens {
 }
 
 /**
- * One price collect-orchestrator-usage.mjs billed transcript messages at:
+ * One price the Claude Code harness's transcript collector (not shipped here) billed messages at:
  * messages of one model and role at the same period, rates and modifiers.
  */
 export interface OrchestratorModelCost {
@@ -106,7 +106,7 @@ export interface ReceiptTokens {
 
 /**
  * One model's receipt tokens that no transcript message recorded (receipt minus
- * log, per bucket), as collect-orchestrator-usage.mjs priced them when it booked
+ * log, per bucket), as the Claude Code harness's transcript collector priced them when it booked
  * a receipt: calls Claude Code bills but never logs, or a helper whose
  * transcript file is missing (`attribution_complete` tells the two apart).
  */
@@ -181,9 +181,9 @@ export interface Manifest {
   total_output_tokens: number;
   /**
    * The run's own overhead — reasoning, file reads, growing-conversation
-   * re-sends — reconstructed from session transcripts by
-   * collect-orchestrator-usage.mjs. Present only after the collector runs;
-   * derived from `tier: "orchestrator"` events, which buildManifest
+   * re-sends — reconstructed from session transcripts by the Claude Code
+   * harness's collector, which this harness does not ship. Present only when
+   * such events exist; derived from `tier: "orchestrator"` events, which buildManifest
    * PARTITIONS OUT of every dispatched sum above so the two spends are
    * never blended silently.
    */

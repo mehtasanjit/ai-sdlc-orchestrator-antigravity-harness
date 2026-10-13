@@ -42,7 +42,7 @@ import { parse as parseYaml } from "yaml";
 
 import { conversationIdFrom, driverUsage, offPinModels, parseEventStream, parseInvocations, reportedModels } from "./telemetry/event-reader.mjs";
 import { driverPrice, unpricedDriverRefusal } from "./telemetry/driverPrice.mjs";
-import { assertPinnedInvocation, driverSlug, findPinRejection, pendingPinChecks, readPin } from "./telemetry/fairnessPin.mjs";
+import { assertPinnedInvocation, driverSlug, findPinRejection, pendingPinChecks, pinVerification, readPin } from "./telemetry/fairnessPin.mjs";
 import { defaultRunRoot, materialiseRunRoot, removeRunRoot } from "./runRoot.mjs";
 import { buildHarnessManifest, agyVersion } from "./manifest.mjs";
 import { driverRangeNotes } from "./telemetry/driverRange.mjs";
@@ -355,7 +355,7 @@ export async function crossCheckLocalRecord({ conversationId, since, modeled, ho
   const record = { input: sum(inRun, "fresh") + sum(inRun, "cached"), input_cached: sum(inRun, "cached"), output: sum(inRun, "output"), thinking: sum(inRun, "thinking") };
   const stream = { input: sum(modeled, "input_tokens") + sum(modeled, "input_tokens_cached"), input_cached: sum(modeled, "input_tokens_cached"), output: sum(modeled, "output_tokens"), thinking: sum(modeled, "output_tokens_reasoning") };
   const close = (a, b) => Math.abs(a - b) <= Math.max(0.01 * Math.max(a, b), 1);
-  return { found: true, calls: inRun.length, record, stream, agrees: Object.keys(record).every((k) => close(record[k], stream[k])) };
+  return { found: true, calls: inRun.length, models: [...new Set(inRun.map((c) => c.model).filter(Boolean))], record, stream, agrees: Object.keys(record).every((k) => close(record[k], stream[k])) };
 }
 
 /** A stream with a guaranteed trailing newline, so concatenated invocations never share a line. */
@@ -448,7 +448,7 @@ export function pinGateMessage(pending) {
     `run: the driver pin is not live-verified — checks ${pending.join(", ")} in ` +
     `docs/verification/p1-agy-runtime.md are still pending, and nothing may be pinned on a pending check. ` +
     `Run the checks in a signed-in agy session and record them, or pass --allow-unverified-pin to run anyway ` +
-    `with pin_verified: false stamped in the manifest.`
+    `with pin.verified: false stamped in the manifest.`
   );
 }
 
@@ -537,7 +537,6 @@ async function main(args) {
   for (const w of launchPrice.warnings) console.error(`run: warning — driver price: ${w}`);
 
   const pending = pendingPinChecks();
-  const pinVerified = pending.length === 0;
   const inlineEnv = Boolean(args["inline-env"]);
   const runRoot = inlineEnv ? defaultRunRoot(runId) : null;
   const cwd = runRoot ?? HARNESS_ROOT;
@@ -550,7 +549,7 @@ async function main(args) {
           policy: policyName,
           policy_source: resolvedPolicy.source,
           policy_path: resolvedPolicy.path,
-          pin: { ...pin, slug, verified: pinVerified, pending_checks: pending },
+          pin: { ...pin, slug, ...pinVerification({ pending }), pending_checks: pending },
           driver_price: { basis: launchPrice.basis, period: launchPrice.period, pricing: launchPrice.pricing },
           run_id: runId,
           mode: mode ?? null,
@@ -570,7 +569,7 @@ async function main(args) {
     return 0;
   }
 
-  if (!pinVerified && !args["allow-unverified-pin"]) throw new Error(pinGateMessage(pending));
+  if (pending.length && !args["allow-unverified-pin"]) throw new Error(pinGateMessage(pending));
 
   mkdirSync(outputDir, { recursive: true });
   renderSkills(outputDir, renderValues);
@@ -690,6 +689,11 @@ async function main(args) {
       );
     }
     if (localRecord) usageSummary.local_record = localRecord;
+    const observedModels = [...new Set([...driverModels, ...(localRecord?.models ?? [])])];
+    const verification = pinVerification({ pending, observed: observedModels, offPin: offPinModels(observedModels, pin, slug) });
+    if (verification.unverified_reason === "no_model_observed") {
+      console.error(`run ${runId}: neither agy's stream nor its local conversation record named the model that conducted — pin.verified is false.`);
+    }
     if (offPin.length) {
       console.error(`run ${runId}: agy reported driver model(s) ${offPin.join(", ")}, not the pinned ${slug} — the run is not on the pinned driver.`);
     }
@@ -714,7 +718,7 @@ async function main(args) {
       gates: gateMode,
       mode: mode ?? null,
       intent: resolvedIntent ? { resolved: resolvedIntent, source: intentSource } : null,
-      pin: { model: pin.model, effort: pin.effort, slug, billing_mode: pin.billing_mode, verified: pinVerified, pending_checks: pending },
+      pin: { model: pin.model, effort: pin.effort, slug, billing_mode: pin.billing_mode, ...verification, pending_checks: pending, observed_models: observedModels },
       conversation_id: conversationId,
       started_at: started,
       ended_at: new Date().toISOString(),
