@@ -33,6 +33,7 @@ import { driverRange, driverRangeNote, driverRangeNotes } from "./telemetry/driv
 import { isMain } from "../scripts/lib/is-main.mjs";
 import { conductorWork } from "./telemetry/conductorWork.mjs";
 import { inferRunId, readGates, readRunMarkers, runOutcome, sessionWindow } from "./telemetry/runWindow.mjs";
+import { studiesConsoleFields } from "./telemetry/consoleFields.mjs";
 
 export const HARNESS_NAME = "antigravity";
 export const RUNTIME_NAME = "antigravity-cli";
@@ -378,6 +379,9 @@ export function buildHarnessManifest({ runDir, policyName, runId, env = process.
     written_by: "plugin/agy/manifest.mjs",
     written_at: now(),
   };
+  const forConsole = studiesConsoleFields({ lines, dispatched, pin: harness.pin, harness });
+  Object.assign(harness.cable, forConsole.cable);
+  Object.assign(harness, forConsole.harness);
 
   const usage = {
     dispatched: {
