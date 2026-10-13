@@ -186,6 +186,20 @@ test("the token bounds travel with the cost bounds", () => {
   assert.equal(summary.tokens_high.input_tokens, 3500, "per-invocation reading: 1000 + 2500");
 });
 
+// ── check 14: the pin from what agy reports ───────────────────────────────
+
+test("agy 1.3.0's init event and local record name the pin, so a run on it is verified", async () => {
+  const { reportedModels, offPinModels } = await import("../../plugin/agy/telemetry/event-reader.mjs");
+  const stream = '{"event":"init","conversation_id":"57809ecf","init":{"model":"gemini-3.8-flash-high","cwd":"/p","tools":["view_file"]}}';
+  const pin = readPin(parseYaml(readFileSync(join(ROOT, "plugin", "config", "policies", "antigravity-flash38-plus-opus5.yaml"), "utf8")));
+  const observed = [...reportedModels(parseEventStream(stream)), "gemini-3.8-flash"];
+  assert.deepEqual(offPinModels(observed, pin, driverSlug(pin)), []);
+  assert.deepEqual(pinVerification({ pending: [], observed, offPin: [] }), { verified: true });
+  const doc = readFileSync(join(ROOT, "docs", "verification", "p1-agy-runtime.md"), "utf8");
+  const row = doc.split("\n").find((l) => l.startsWith("| 14 |"));
+  assert.ok(row.includes(`\`${driverSlug(pin)}\``) && /\*\*PASS — live list recorded/.test(row), "the pinned slug is on the recorded live list");
+});
+
 // ── check 17: how agy's counters nest ─────────────────────────────────────
 
 // Recorded live on agy 1.3.0 (p1 check 17): five model calls in one process.
