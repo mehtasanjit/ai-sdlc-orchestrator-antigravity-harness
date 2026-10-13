@@ -232,7 +232,7 @@ export function costLines({ dispatched, modeled, policy, pin, env = process.env,
       kind: "modeled",
       model: pin?.model ?? null,
       billing_mode: pin?.billing_mode ?? null,
-      basis: `MODELED from agy stream-json usage at the ${pin?.model ?? "driver"} card (${pin?.billing_mode ?? "seat"}); thinking at the output rate, cache reads at the cached rate${driverRangeNote(driverUsage)}`,
+      basis: `MODELED from agy stream-json usage at ${driverPriceText(modeled, pin)} (${pin?.billing_mode ?? "seat"}); thinking at the output rate, cache reads at the cached rate${driverRangeNote(driverUsage)}`,
       ...sum(modeled),
       thinking_tokens: modeled.reduce((s, e) => s + (e.output_tokens_reasoning ?? 0), 0),
       ...driverRange(driverUsage),
@@ -247,6 +247,14 @@ export function costLines({ dispatched, modeled, policy, pin, env = process.env,
           basis: "UNCLASSIFIED: no known worker adapter or model prefix on these events, so they are on neither worker's line; counted as cash" }]
       : []),
   ];
+}
+
+/** Which price the modeled driver turns were billed at, from what each event recorded. */
+export function driverPriceText(modeled, pin) {
+  const periods = [...new Set(modeled.filter((e) => e.price_period).map((e) => `${e.price_period.from}..${e.price_period.to ?? "open"}`))];
+  if (!periods.length) return `the ${pin?.model ?? "driver"} card in the policy's driver block`;
+  const custom = modeled.some((e) => e.price_basis === "custom");
+  return `the dated price list for ${pin?.model ?? "the driver"} (period ${periods.join(", ")}${custom ? "; custom-priced" : ""})`;
 }
 
 /** One line per cost line, workers first, each with its kind and never a total. */
@@ -321,6 +329,12 @@ export function buildHarnessManifest({ runDir, policyName, runId, env = process.
     ...(driverLine.resume_check ? { driver_cost_resume_check: driverLine.resume_check } : {}),
     ...(driverLine.resumed_without_earlier_record ? { driver_resumed_without_earlier_record: true } : {}),
     ...(driverLine.invocations_without_usage ? { driver_invocations_without_usage: driverLine.invocations_without_usage } : {}),
+    ...(driverManifest && "driver_reported_models" in driverManifest ? { driver_reported_models: driverManifest.driver_reported_models } : {}),
+    ...(driverManifest?.driver_model_mismatch ? { driver_model_mismatch: driverManifest.driver_model_mismatch } : {}),
+    ...(driverManifest?.driver_usage?.token_readings ? { driver_token_readings: driverManifest.driver_usage.token_readings } : {}),
+    ...(driverManifest?.driver_usage?.results_with_unproven_reading ? { driver_results_with_unproven_reading: driverManifest.driver_usage.results_with_unproven_reading } : {}),
+    ...(driverManifest?.driver_usage?.price_warnings ? { driver_price_warnings: driverManifest.driver_usage.price_warnings } : {}),
+    ...(driverManifest?.bridge_build?.stale ? { bridge_build_stale: driverManifest.bridge_build.files } : {}),
     agy_invocations: driverManifest?.agy_invocations ?? null,
     completed: driverManifest?.completed ?? null,
     gates: driverManifest?.gates ?? null,

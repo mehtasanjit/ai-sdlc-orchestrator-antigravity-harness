@@ -156,12 +156,32 @@ Same line shape as telemetry, so the two files can be concatenated for analysis 
   "output_tokens": 580,
   "output_tokens_reasoning": 80,
   "cost_usd": 0.00324,
+  "price_basis": "list",
+  "price_period": { "from": "2026-09-02", "to": "2026-12-31" },
   "invocation": 2,
-  "usage_reading": "per-invocation"
+  "usage_reading": "per-invocation",
+  "token_reading": "cache-in-input+thinking-apart",
+  "token_reading_check": "adds_up"
 }
 ```
 
-`output_tokens_reasoning` is agy's `thinking_tokens`, billed at the output rate; `input_tokens_cached` is its `cache_read_tokens`, at the cached rate. agy's `usage` is cumulative within one process. Each line carries `invocation` (which `agy --print` process reported it) and `usage_reading` (how a resumed process was priced). While [check 16](verification/p1-agy-runtime.md) is pending the reading is `per-invocation`: a resumed process's counters are priced as fresh, the upper bound. No event carries a timestamp; `ts` is the reader's arrival clock.
+`output_tokens_reasoning` is agy's `thinking_tokens`, billed at the output rate; `input_tokens_cached` is its `cache_read_tokens`, at the cached rate. Whether `input_tokens` already holds the cache reads, and whether `output_tokens` already holds the thinking, is decided per result by which layout sums to agy's own `total_tokens`:
+
+| `token_reading` | Sums to `total_tokens` as |
+|---|---|
+| `cache-in-input+thinking-apart` | input + output + thinking |
+| `cache-in-input+thinking-in-output` | input + output |
+| `cache-apart+thinking-apart` | input + cache + output + thinking |
+| `cache-apart+thinking-in-output` | input + cache + output |
+
+| `token_reading_check` | Meaning |
+|---|---|
+| `adds_up` | One reading fits, or every fitting reading prices the same |
+| `ambiguous` | Two readings fit and price differently; the dearer is booked |
+| `does_not_add_up` | No reading fits; the dearest (`cache-apart+thinking-apart`) is booked |
+| `no_total` | No `total_tokens`; the dearest is booked |
+
+`price_basis` and `price_period` name the dated price-list period the turn was billed at: the period in force on the day its `agy --print` process started, looked up through the same list every dispatched model uses. The `driver:` block's `pricing` is checked against it, and a mismatch is in `driver_usage.price_warnings`. agy's `usage` is cumulative within one process. Each line carries `invocation` (which `agy --print` process reported it) and `usage_reading` (how a resumed process was priced). While [check 16](verification/p1-agy-runtime.md) is pending the reading is `per-invocation`: a resumed process's counters are priced as fresh, the upper bound. No event carries a timestamp; `ts` is the reader's arrival clock.
 
 `driver-manifest.json` → `driver_usage` holds the evidence behind the line:
 
@@ -173,6 +193,11 @@ Same line shape as telemetry, so the two files can be concatenated for analysis 
 | `resumed_without_earlier_record` | Set when a `--resume` launch carried no earlier record |
 | `invocations[]` | Per `agy --print` process: exit status, wall clock, the count of results that reported usage and of all-zero ones, the last `status`, the conversation id, `num_turns`, `duration_seconds`, the raw cumulative `usage`, the line count that splits `driver-events.jsonl`, and `carried_from_earlier_launch` for an invocation a `--resume` read back |
 | `invocations_without_usage` | Processes with no result that reported usage: no `result` event, or only an all-zero error result (the shape check 8 recorded). The per-invocation figure is missing their tokens |
+| `token_readings` | How many results were booked under each `token_reading (token_reading_check)` |
+| `results_with_unproven_reading` | Results whose check is not `adds_up`; booked at the dearer reading |
+| `price_warnings` | The driver block's card differs from the dated list for a day the run spent on; the list was used |
+
+`driver-manifest.json` also records `driver_reported_models` (every model name any agy event carried; empty when agy names none, which proves nothing either way), `driver_model_mismatch` (reported names that are neither the pinned model nor its slug: the run was not on the pin), and `bridge_build` (`stale: true` when the bridge's `dist/` was older than its `src/`).
 
 ### `manifest.json`
 

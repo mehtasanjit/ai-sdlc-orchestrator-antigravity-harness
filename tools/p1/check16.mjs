@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 /**
  * Reads the two streams `tools/p1/live-checks.sh 16` records and says what
- * they show about check 16 (usage across a `--conversation` resume).
+ * they show about check 16 (usage across a `--conversation` resume) and
+ * check 17 (how agy's usage counters nest).
  *
  *   node tools/p1/check16.mjs --conversation <first.jsonl>
  *   node tools/p1/check16.mjs <first.jsonl> <first-exit> <resume.jsonl> <resume-exit>
@@ -11,6 +12,7 @@
 
 import { readFileSync } from "node:fs";
 import { isMain } from "../../plugin/scripts/lib/is-main.mjs";
+import { readingsThatFit } from "../../plugin/agy/telemetry/tokenLayouts.mjs";
 
 function events(text) {
   const out = [];
@@ -61,6 +63,21 @@ export function verdict(first, resume) {
   return { verdict: "inconclusive", reason: `resume output_tokens ${b} against the first call's ${a} fits neither reading` };
 }
 
+/**
+ * Check 17: which layout of agy's counters each non-zero result adds up to.
+ * Answered when every result fits exactly one layout and all fit the same one.
+ */
+export function layoutVerdict(results) {
+  const usable = results.filter((r) => r?.usage && (r.usage.total_tokens ?? 0) > 0);
+  if (!usable.length) return { verdict: "invalid", reason: "no result reported non-zero usage" };
+  const fits = usable.map((r) => readingsThatFit(r.usage));
+  if (fits.some((f) => f.length === 0)) return { verdict: "inconclusive", reason: `a result's counters add up to no layout: ${JSON.stringify(usable[fits.findIndex((f) => !f.length)].usage)}` };
+  const common = fits.reduce((a, b) => a.filter((x) => b.includes(x)));
+  if (common.length === 1) return { verdict: common[0], reason: `every result sums to total_tokens only as ${common[0]}` };
+  if (common.length === 0) return { verdict: "inconclusive", reason: "the results fit different layouts" };
+  return { verdict: "inconclusive", reason: `the counters fit ${common.join(" and ")} alike; a result with both cache reads and thinking settles it` };
+}
+
 if (isMain(import.meta.url)) {
   const argv = process.argv.slice(2);
   if (argv[0] === "--conversation") {
@@ -80,5 +97,7 @@ if (isMain(import.meta.url)) {
   }
   const v = verdict(first, resume);
   console.log(`\n   check 16: ${v.verdict.toUpperCase()} — ${v.reason}`);
+  const layout = layoutVerdict([first.result, resume.result]);
+  console.log(`   check 17: ${layout.verdict.toUpperCase()} — ${layout.reason}`);
   process.exit(v.verdict === "invalid" ? 1 : 0);
 }

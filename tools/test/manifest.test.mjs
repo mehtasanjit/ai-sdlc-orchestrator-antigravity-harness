@@ -406,3 +406,20 @@ test("on the seat the Claude line is modeled, leaves the cash figure, and the ca
     assert.equal(claudeWallet({ ANTHROPIC_API_KEY: "k" }, login).arm, "A");
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
+
+test("the driver line names the dated period it was priced at, and the harness block carries the model and reading checks", () => {
+  const dir = runDir();
+  try {
+    const modeled = JSON.parse(readFileSync(join(dir, "driver-cost-modeled.jsonl"), "utf8"));
+    writeFileSync(join(dir, "driver-cost-modeled.jsonl"), JSON.stringify({ ...modeled, price_basis: "list", price_period: { from: "2026-09-02", to: "2026-12-31" } }) + "\n");
+    const dm = JSON.parse(readFileSync(join(dir, "driver-manifest.json"), "utf8"));
+    writeFileSync(join(dir, "driver-manifest.json"), JSON.stringify({
+      ...dm, driver_reported_models: ["gemini-3.1-pro-high"], driver_model_mismatch: ["gemini-3.1-pro-high"],
+      driver_usage: { token_readings: { "cache-apart+thinking-apart (no_total)": 1 }, results_with_unproven_reading: 1, invocations: [], invocations_without_usage: [] },
+    }));
+    const m = buildHarnessManifest({ runDir: dir, env: {}, now: () => "N" });
+    assert.match(m.cost.lines[0].basis, /dated price list for gemini-3\.8-flash \(period 2026-09-02\.\.2026-12-31\)/);
+    assert.deepEqual(m.harness.driver_model_mismatch, ["gemini-3.1-pro-high"]);
+    assert.equal(m.harness.driver_results_with_unproven_reading, 1);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});

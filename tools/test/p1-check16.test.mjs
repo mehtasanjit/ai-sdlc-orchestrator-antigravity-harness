@@ -55,3 +55,13 @@ test("the CLI prints a verdict and exits non-zero when the check gave no answer"
     assert.match(bad.stdout, /check 16: INVALID/);
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
+
+test("check 17 names the one counter layout every result adds up to, and nothing less", async () => {
+  const { layoutVerdict } = await import("../p1/check16.mjs");
+  const r = (u) => ({ status: "OK", usage: u });
+  assert.equal(layoutVerdict([r({ input_tokens: 1000, output_tokens: 200, thinking_tokens: 50, cache_read_tokens: 400, total_tokens: 1250 })]).verdict, "cache-in-input+thinking-apart");
+  assert.equal(layoutVerdict([r({ input_tokens: 1000, output_tokens: 200, thinking_tokens: 50, cache_read_tokens: 400, total_tokens: 1650 })]).verdict, "cache-apart+thinking-apart");
+  assert.equal(layoutVerdict([r({ input_tokens: 1000, output_tokens: 200, thinking_tokens: 0, cache_read_tokens: 0, total_tokens: 1200 })]).verdict, "inconclusive", "no cache, no thinking: every layout fits");
+  assert.equal(layoutVerdict([r({ input_tokens: 1, output_tokens: 1, total_tokens: 99 })]).verdict, "inconclusive");
+  assert.equal(layoutVerdict([{ status: "ERROR", usage: { total_tokens: 0 } }]).verdict, "invalid");
+});

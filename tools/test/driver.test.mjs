@@ -233,12 +233,81 @@ test("buildRunArtifacts models the driver's own cost from the result usage, labe
   assert.equal(e.provenance, "modeled");
   assert.equal(e.tier, "orchestrator");
   assert.equal(e.billing_mode, "seat");
-  assert.equal(e.input_tokens, 600, "input is split so cache reads are not priced twice");
+  // total_tokens 1650 = 1000 + 400 + 200 + 50: the cache reads are on top of input_tokens, not inside it.
+  assert.equal(e.token_reading, "cache-apart+thinking-apart");
+  assert.equal(e.token_reading_check, "adds_up");
+  assert.equal(e.input_tokens, 1000, "the counters' own total says input_tokens holds no cache reads");
   assert.equal(e.input_tokens_cached, 400);
   assert.equal(e.output_tokens, 250, "thinking tokens bill at the output rate");
   assert.equal(e.output_tokens_reasoning, 50);
-  const expected = (600 * 0.75 + 400 * 0.075 + 250 * 3.75) / 1e6;
-  assert.equal(e.cost_usd, Math.round(expected * 1e6) / 1e6, "priced by computeCostUsd, rounded to 6 places");
+  const expected = (1000 * 0.75 + 400 * 0.075 + 250 * 3.75) / 1e6;
+  assert.ok(Math.abs(e.cost_usd - expected) <= 1e-6, `priced by computeCostUsd: ${e.cost_usd} vs ${expected}`);
+});
+
+const resultWith = (usage) => JSON.stringify({ event: "result", result: { conversation_id: "c1", status: "OK", usage } });
+
+test("each result is booked under the token reading its total_tokens adds up to", () => {
+  const book = (usage) => buildRunArtifacts({ jsonl: resultWith(usage), pin: PIN, passId: "r", policyName: DEFAULT_POLICY, now: () => "T" }).modeled[0];
+  const inside = book({ input_tokens: 1000, output_tokens: 200, thinking_tokens: 50, cache_read_tokens: 400, total_tokens: 1250 });
+  assert.equal(inside.token_reading, "cache-in-input+thinking-apart");
+  assert.deepEqual([inside.input_tokens, inside.input_tokens_cached, inside.output_tokens], [600, 400, 250]);
+  const thinkingInside = book({ input_tokens: 1000, output_tokens: 200, thinking_tokens: 50, cache_read_tokens: 400, total_tokens: 1600 });
+  assert.equal(thinkingInside.token_reading, "cache-apart+thinking-in-output");
+  assert.deepEqual([thinkingInside.input_tokens, thinkingInside.output_tokens, thinkingInside.output_tokens_reasoning], [1000, 200, 50]);
+});
+
+test("counters that add up to no reading, or no total, are booked at the dearest reading and flagged", () => {
+  for (const [usage, check] of [
+    [{ input_tokens: 1000, output_tokens: 200, thinking_tokens: 50, cache_read_tokens: 400, total_tokens: 9999 }, "does_not_add_up"],
+    [{ input_tokens: 1000, output_tokens: 200, thinking_tokens: 50, cache_read_tokens: 400 }, "no_total"],
+  ]) {
+    const { modeled, driverUsage } = buildRunArtifacts({ jsonl: resultWith(usage), pin: PIN, passId: "r", policyName: DEFAULT_POLICY, now: () => "T" });
+    assert.equal(modeled[0].token_reading_check, check);
+    assert.equal(modeled[0].input_tokens, 1000, "nothing subtracted");
+    assert.equal(modeled[0].output_tokens, 250, "thinking added");
+    assert.equal(driverUsage.results_with_unproven_reading, 1);
+  }
+});
+
+test("two readings that both add up but price differently book the dearer and say ambiguous", () => {
+  // cache 50 and thinking 50: input+output+thinking and input+cache+output are both 1250.
+  const usage = { input_tokens: 1000, output_tokens: 200, thinking_tokens: 50, cache_read_tokens: 50, total_tokens: 1250 };
+  const e = buildRunArtifacts({ jsonl: resultWith(usage), pin: PIN, passId: "r", policyName: DEFAULT_POLICY, now: () => "T" }).modeled[0];
+  assert.equal(e.token_reading_check, "ambiguous");
+  assert.equal(e.token_reading, "cache-in-input+thinking-apart", "thinking at the output rate costs more than 50 more fresh input");
+});
+
+test("the driver line is priced from the dated list on the day each agy process started", () => {
+  const usage = { input_tokens: 1_000_000, output_tokens: 0, thinking_tokens: 0, cache_read_tokens: 0, total_tokens: 1_000_000 };
+  const driver = { model_name: "gemini-3.8-flash", pricing: PIN.pricing };
+  const { modeled, driverUsage } = buildRunArtifacts({
+    invocations: [
+      { stdout: resultWith(usage), status: 0, wall_ms: 1, started_at: "2026-12-31T23:00:00Z" },
+      { stdout: JSON.stringify({ event: "result", result: { conversation_id: "c2", status: "OK", usage } }), status: 0, wall_ms: 1, started_at: "2027-01-01T01:00:00Z" },
+    ],
+    pin: PIN, passId: "r", policyName: DEFAULT_POLICY, now: () => "T", driver,
+  });
+  assert.deepEqual(modeled.map((e) => e.cost_usd), [0.75, 1.5], "the introductory card ends 31 Dec 2026; the next card bills from 1 Jan 2027");
+  assert.deepEqual(modeled.map((e) => e.price_period.from), ["2026-09-02", "2027-01-01"]);
+  assert.equal(modeled[0].price_basis, "list");
+  assert.ok(driverUsage.price_warnings?.length, "the 2026 card in the driver block differs from the 2027 list and says so");
+});
+
+test("a driver model with no price on the run's day is refused", () => {
+  const driver = { model_name: "gemini-3.8-flash", pricing: PIN.pricing };
+  assert.throws(
+    () => buildRunArtifacts({ invocations: [{ stdout: STREAM, status: 0, wall_ms: 1, started_at: "2026-08-01T00:00:00Z" }], pin: PIN, passId: "r", policyName: DEFAULT_POLICY, now: () => "T", driver }),
+    /driver model 'gemini-3\.8-flash' has no price on 2026-08-01/,
+  );
+});
+
+test("a model the stream names is recorded, and one that is not the pin is flagged", () => {
+  const ok = buildRunArtifacts({ jsonl: STREAM, pin: PIN, passId: "r", policyName: DEFAULT_POLICY, now: () => "T" });
+  assert.deepEqual(ok.reportedModels, [SLUG]);
+  assert.deepEqual(ok.offPinModels, []);
+  const other = STREAM.replace(`"model":"${SLUG}"`, '"model":"gemini-3.1-pro-high"');
+  assert.deepEqual(buildRunArtifacts({ jsonl: other, pin: PIN, passId: "r", policyName: DEFAULT_POLICY, now: () => "T" }).offPinModels, ["gemini-3.1-pro-high"]);
+  assert.deepEqual(buildRunArtifacts({ jsonl: resultWith({ input_tokens: 1, total_tokens: 1 }), pin: PIN, passId: "r", policyName: DEFAULT_POLICY, now: () => "T" }).reportedModels, [], "agy names no model: nothing to check, nothing assumed");
 });
 
 test("buildRunArtifacts records each invocation's line count, so a later --resume can split the stream", () => {

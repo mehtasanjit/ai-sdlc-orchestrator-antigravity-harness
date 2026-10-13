@@ -36,7 +36,8 @@ import { dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parse as parseYaml } from "yaml";
 
-import { conversationIdFrom, driverUsage, parseEventStream, parseInvocations } from "./telemetry/event-reader.mjs";
+import { conversationIdFrom, driverUsage, offPinModels, parseEventStream, parseInvocations, reportedModels } from "./telemetry/event-reader.mjs";
+import { driverPrice, unpricedDriverRefusal } from "./telemetry/driverPrice.mjs";
 import { assertPinnedInvocation, driverSlug, findPinRejection, pendingPinChecks, readPin } from "./telemetry/fairnessPin.mjs";
 import { defaultRunRoot, materialiseRunRoot, removeRunRoot } from "./runRoot.mjs";
 import { buildHarnessManifest, agyVersion } from "./manifest.mjs";
@@ -226,20 +227,38 @@ export function spawnAgy(args, { spawnFn = spawn, cwd, agyBin = "agy", env = pro
  * reported by the launch that ran it. `resumedFirst`: this launch's first process resumed a
  * conversation whose earlier record was not carried.
  */
-export function buildRunArtifacts({ jsonl, invocations, pin, passId, policyName, now, resumeUsage, resumedFirst = false }) {
+/**
+ * `driver`: the policy's driver block, priced through the dated list on the
+ * day each agy process started (`invocations[i].started_at`, else `runStartedAt`);
+ * without it the pin's flat card prices every turn.
+ */
+export function buildRunArtifacts({ jsonl, invocations, pin, passId, policyName, now, resumeUsage, resumedFirst = false, driver = null, runStartedAt = null }) {
   const runs = invocations ?? [{ stdout: jsonl, status: null, wall_ms: null }];
   const events = parseInvocations(runs.map((r) => r.stdout), now);
   const rejection = findPinRejection(events.filter((e) => !runs[(e.invocation ?? 1) - 1]?.carried));
+  const priceWarnings = new Set();
+  const priceFor = driver
+    ? (invocation) => {
+        const day = runs[(invocation ?? 1) - 1]?.started_at ?? runStartedAt ?? new Date().toISOString();
+        const price = driverPrice(driver, day);
+        for (const w of price.warnings ?? []) priceWarnings.add(w);
+        if (price.unpriced) throw new Error(unpricedDriverRefusal(driver.model_name, day.slice(0, 10), price.reason));
+        return price;
+      }
+    : null;
   const { modeled, summary } = driverUsage(
     events,
-    { pass: passId, model: pin.model, pricing: pin.pricing, policyName, billingMode: pin.billing_mode, now },
+    { pass: passId, model: pin.model, pricing: pin.pricing, priceFor, policyName, billingMode: pin.billing_mode, now },
     { invocations: runs, resumedFirst, ...(resumeUsage ? { resumeUsage } : {}) },
   );
   summary.invocations.forEach((s, i) => {
     s.lines = streamLines(runs[i].stdout);
     if (runs[i].carried) s.carried_from_earlier_launch = true;
   });
-  return { events, rejection, modeled, driverUsage: summary };
+  if (priceWarnings.size) summary.price_warnings = [...priceWarnings];
+  const reported = reportedModels(events);
+  const offPin = offPinModels(reported, pin, driverSlug(pin));
+  return { events, rejection, modeled, driverUsage: summary, reportedModels: reported, offPinModels: offPin };
 }
 
 /** A stream with a guaranteed trailing newline, so concatenated invocations never share a line. */
@@ -282,7 +301,7 @@ export function priorInvocations(outputDir, conversationId, { read = readFileSyn
   return carried(recorded.map((i) => {
     const stdout = lines.slice(at, at + i.lines).join("\n");
     at += i.lines;
-    return { stdout, status: i.exit_status ?? null, wall_ms: i.wall_ms ?? null, carried: true };
+    return { stdout, status: i.exit_status ?? null, wall_ms: i.wall_ms ?? null, carried: true, ...(i.started_at ? { started_at: i.started_at } : {}) };
   }));
 }
 
@@ -398,6 +417,10 @@ async function main(args) {
   const buildWarning = staleBuildWarning(build);
   if (buildWarning) console.error(`run: warning — ${buildWarning}`);
 
+  const launchPrice = driverPrice(policy.driver, new Date());
+  if (launchPrice.unpriced) throw new Error(unpricedDriverRefusal(pin.model, new Date().toISOString().slice(0, 10), launchPrice.reason));
+  for (const w of launchPrice.warnings) console.error(`run: warning — driver price: ${w}`);
+
   const pending = pendingPinChecks();
   const pinVerified = pending.length === 0;
   const inlineEnv = Boolean(args["inline-env"]);
@@ -411,6 +434,7 @@ async function main(args) {
         {
           policy: policyName,
           pin: { ...pin, slug, verified: pinVerified, pending_checks: pending },
+          driver_price: { basis: launchPrice.basis, period: launchPrice.period, pricing: launchPrice.pricing },
           run_id: runId,
           mode: mode ?? null,
           intent: resolvedIntent ? { resolved: resolvedIntent, source: intentSource } : null,
@@ -443,8 +467,9 @@ async function main(args) {
   const launches = [...prior.invocations];
   const launch = async (agyArgv) => {
     const t0 = Date.now();
+    const startedAt = new Date(t0).toISOString();
     const r = await spawnAgy(agyArgv, { cwd, agyBin });
-    launches.push({ stdout: r.stdout, status: r.status, wall_ms: Date.now() - t0 });
+    launches.push({ stdout: r.stdout, status: r.status, wall_ms: Date.now() - t0, started_at: startedAt });
     return r;
   };
 
@@ -488,12 +513,24 @@ async function main(args) {
     writeFileSync(join(outputDir, "driver-events.jsonl"), stdout, "utf-8");
     writeFileSync(stderrPath, priorStderr + stderr, "utf-8");
 
-    const { events, rejection, modeled, driverUsage: usageSummary } = buildRunArtifacts({ invocations: launches, pin, passId: runId, policyName, resumedFirst: Boolean(resumeFrom) && prior.invocations.length === 0 });
+    const { events, rejection, modeled, driverUsage: usageSummary, reportedModels: driverModels, offPinModels: offPin } = buildRunArtifacts({
+      invocations: launches, pin, passId: runId, policyName, driver: policy.driver, runStartedAt: started,
+      resumedFirst: Boolean(resumeFrom) && prior.invocations.length === 0,
+    });
     writeFileSync(
       join(outputDir, "driver-cost-modeled.jsonl"),
       modeled.map((e) => JSON.stringify(e)).join("\n") + (modeled.length ? "\n" : ""),
       "utf-8",
     );
+    if (offPin.length) {
+      console.error(`run ${runId}: agy reported driver model(s) ${offPin.join(", ")}, not the pinned ${slug} — the run is not on the pinned driver.`);
+    }
+    if (usageSummary.results_with_unproven_reading) {
+      console.error(
+        `run ${runId}: ${usageSummary.results_with_unproven_reading} driver result(s) reported counters that no token reading adds up to ` +
+          "unambiguously; they are booked at the dearest reading (driver_usage.token_readings).",
+      );
+    }
     if (usageSummary.invocations_without_usage.length) {
       console.error(
         `run ${runId}: agy invocation(s) ${usageSummary.invocations_without_usage.join(", ")} reported no usage ` +
@@ -517,6 +554,8 @@ async function main(args) {
       agy_invocations: launches.length,
       completed: runIsComplete(outputDir),
       driver_cost_usd_modeled: usageSummary.cost_usd,
+      driver_reported_models: driverModels,
+      ...(offPin.length ? { driver_model_mismatch: offPin } : {}),
       driver_usage: usageSummary,
       pin_rejection: rejection,
       events_captured: events.length,

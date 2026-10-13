@@ -12,6 +12,9 @@
  */
 
 import { computeCostUsd } from "../../mcp/model-dispatch/dist/pricing.js";
+import { DEAREST_READING, TOKEN_READINGS, readingsThatFit, tokensUnder } from "./tokenLayouts.mjs";
+
+export { TOKEN_READINGS };
 
 /**
  * How `usage` behaves across `--print --conversation <id>`, which starts a new
@@ -110,24 +113,42 @@ export function extractTurnUsage(events, { resume = "cumulative" } = {}) {
 }
 
 /**
- * One `provenance: "modeled"` event per result, priced from the driver
- * block's card. Thinking tokens bill at the output rate; `cache_read_tokens`
- * at `input_cached`; `input_tokens` is taken as inclusive of cache reads and
- * split so nothing is priced twice.
+ * The reading one result's counters support: the one whose parts sum to
+ * `total_tokens`. Several readings can add up when the counters coincide;
+ * when they price alike any of them is right, and when they do not the
+ * dearer is booked and the result is marked `ambiguous`. When none adds up,
+ * or no total is reported, the dearest reading is booked, so an unproven
+ * reading can over-state the driver line but never under-state it.
+ */
+export function tokenReading(usage, pricing) {
+  const fits = readingsThatFit(usage);
+  const cost = (name) => computeCostUsd(tokensUnder(usage, name).tokens, pricing);
+  if (fits.length === 0) {
+    const check = typeof usage.total_tokens === "number" && usage.total_tokens > 0 ? "does_not_add_up" : "no_total";
+    return { name: DEAREST_READING, check, tokens: tokensUnder(usage, DEAREST_READING).tokens };
+  }
+  const dearest = fits.reduce((a, b) => (cost(b) > cost(a) ? b : a));
+  const alike = fits.every((name) => cost(name) === cost(dearest));
+  return { name: dearest, check: alike ? "adds_up" : "ambiguous", tokens: tokensUnder(usage, dearest).tokens };
+}
+
+/**
+ * One `provenance: "modeled"` event per result. Thinking tokens bill at the
+ * output rate and `cache_read_tokens` at `input_cached`; how the counters
+ * nest is decided per result by tokenReading. `priceFor(invocation)` gives
+ * the dated list's price on the day that agy process started; `pricing` is
+ * the flat card used without it.
  *
  * `tier: "orchestrator"` so buildManifest partitions these out of dispatched
  * sums if the file is ever concatenated with telemetry.jsonl.
  */
 export function modeledDriverCostEvents(events, opts) {
-  const { pass, model, pricing, policyName = null, billingMode = "seat", resume = "cumulative", now = () => new Date().toISOString() } = opts;
+  const { pass, model, pricing, priceFor = null, policyName = null, billingMode = "seat", resume = "cumulative", now = () => new Date().toISOString() } = opts;
   return extractTurnUsage(events, { resume }).map(({ turn_index, invocation, usage }) => {
-    const cached = usage.cache_read_tokens ?? 0;
+    const price = priceFor ? priceFor(invocation) : { pricing };
+    const reading = tokenReading(usage, price.pricing);
+    const tokens = reading.tokens;
     const thinking = usage.thinking_tokens ?? 0;
-    const tokens = {
-      input: Math.max(0, (usage.input_tokens ?? 0) - cached),
-      input_cached: cached,
-      output: (usage.output_tokens ?? 0) + thinking,
-    };
     return {
       ts: now(),
       pass,
@@ -151,12 +172,16 @@ export function modeledDriverCostEvents(events, opts) {
       input_tokens_cached: tokens.input_cached,
       output_tokens: tokens.output,
       output_tokens_reasoning: thinking,
-      cost_usd: computeCostUsd(tokens, pricing),
+      cost_usd: computeCostUsd(tokens, price.pricing),
+      ...(price.basis ? { price_basis: price.basis } : {}),
+      ...(price.period ? { price_period: price.period } : {}),
       latency_ms: null,
       success: true,
       retry_count: 0,
       invocation,
       usage_reading: resume,
+      token_reading: reading.name,
+      token_reading_check: reading.check,
     };
   });
 }
@@ -203,8 +228,15 @@ export function driverUsage(events, opts, { invocations = [], resumeUsage = RESU
       num_turns: last?.num_turns ?? null,
       duration_seconds: last?.duration_seconds ?? null,
       cumulative_usage: last?.usage ?? null,
+      ...(inv.started_at ? { started_at: inv.started_at } : {}),
     };
   });
+  const readings = {};
+  for (const e of modeled) {
+    const key = `${e.token_reading} (${e.token_reading_check})`;
+    readings[key] = (readings[key] ?? 0) + 1;
+  }
+  const unproven = modeled.filter((e) => e.token_reading_check !== "adds_up").length;
   const missing = perInvocation.filter((p) => p.result_events === 0).map((p) => p.invocation);
 
   return {
@@ -219,9 +251,37 @@ export function driverUsage(events, opts, { invocations = [], resumeUsage = RESU
       tokens_high: sumTokens(high),
       invocations: perInvocation,
       invocations_without_usage: missing,
+      token_readings: readings,
+      ...(unproven ? { results_with_unproven_reading: unproven } : {}),
       ...(resumedFirst ? { resumed_without_earlier_record: true } : {}),
     },
   };
+}
+
+/**
+ * Every model name the stream reports, from any event. No agy event is known
+ * to name the answering model (fairnessPin.mjs findPinRejection), so an empty
+ * list is the usual answer and proves nothing; a name that is there and is
+ * not the pin is a run on the wrong model.
+ */
+export function reportedModels(events) {
+  const seen = new Set();
+  const visit = (v, depth) => {
+    if (!v || typeof v !== "object" || depth > 4) return;
+    for (const [k, x] of Object.entries(v)) {
+      if (/^(model|model_name|modelName|model_id|modelId)$/.test(k) && typeof x === "string" && x) seen.add(x);
+      else if (x && typeof x === "object") visit(x, depth + 1);
+    }
+  };
+  for (const ev of events) visit(ev, 0);
+  return [...seen];
+}
+
+/** Reported names that are neither the pinned model nor its effort slug. */
+export function offPinModels(reported, pin, slug) {
+  const norm = (name) => String(name).toLowerCase().replace(/^models\//, "").trim();
+  const allowed = new Set([norm(pin.model), norm(slug)]);
+  return reported.filter((name) => !allowed.has(norm(name)));
 }
 
 /** Tool calls the conductor made, for the human-readable trajectory. */
