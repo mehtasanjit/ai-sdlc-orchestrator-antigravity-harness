@@ -26,7 +26,7 @@ import { spawnSync } from "node:child_process";
 import { join, resolve } from "node:path";
 import { parse as parseYaml } from "yaml";
 
-import { buildManifest } from "../mcp/model-dispatch/dist/telemetry.js";
+import { buildManifest, modelShares } from "../mcp/model-dispatch/dist/telemetry.js";
 import { resolveGeminiBackend } from "../mcp/model-dispatch/dist/adapters/geminiEndpoint.js";
 import { readPin, driverSlug, pendingPinChecks } from "./telemetry/fairnessPin.mjs";
 import { driverRange, driverRangeNote, driverRangeNotes } from "./telemetry/driverRange.mjs";
@@ -243,7 +243,7 @@ export function costLines({ dispatched, modeled, policy, pin, env = process.env,
       ...driverRange(driverUsage),
     },
     { line: "gemini_workers", kind: "cash", ...lineWallet(gemini, { wallet: door.wallet }), leaf: door.leaf, models: [...new Set(gemini.map((e) => e.model))], ...sum(gemini) },
-    { line: "claude_worker", kind: claudeKind, ...claudeWallets, models: [...new Set(claude.map((e) => e.model))], ...sum(claude),
+    { line: "claude_worker", kind: claudeKind, ...claudeWallets, models: [...new Set(claude.flatMap((e) => modelShares(e).map((s) => s.model)))], ...sum(claude),
       cli_reported_cost_usd: r6(claude.reduce((s, e) => s + (e.cli_reported_cost_usd ?? 0), 0)),
       ...(claudeKind === "modeled" ? { basis: `MODELED: the Claude worker ran on a ${seatText(claudeWallets.subscription)} — tokens priced at the Anthropic card, no invoice exists` } : {}),
       ...(claudeKind === "mixed" ? { seat_modeled_usd: seatUsd, basis: `MIXED: $${seatUsd} of this line ran on a claude.ai seat (modeled, no invoice) and the rest is counted as cash; wallets[] splits it` } : {}) },

@@ -131,6 +131,7 @@ Fields the report reads: `phase`, `provenance`, `input_tokens`, `input_tokens_ca
 - `price_basis` is `list` (the dated price list in [plugin/mcp/model-dispatch/src/prices.ts](../plugin/mcp/model-dispatch/src/prices.ts)) or `custom` (the policy's `pricing:` block under `pricing_override: true`).
 - A Gemini completion line (`model_id: flash-completion`) adds `thinking_level`, the `thinkingConfig.thinkingLevel` the request carried (`LOW` under the shipped policy, `null` when it carried none), and `output_tokens_reasoning`, the attempt's `thoughtsTokenCount`. The reasoning count is already inside `output_tokens` and billed at the output rate; on an attempt that hit the output cap it shows how much of the ceiling went to thinking.
 - An Opus line (the `claude-agent-sdk` adapter, or `claude-cli`) adds `cli_reported_cost_usd` — the SDK's own figure for the call, kept as a cross-check and never booked — and `ttl_split` (`transcript`, `approximate` or `no_cache_writes`) saying how the 5-minute / 1-hour cache-write buckets were told apart. `input_tokens_cache_write_1h` holds the 1-hour share when it is known; it bills at 2× input instead of 1.25×.
+- `worker_per_model` is a Claude worker attempt's ledger: one row per model the call billed, with that model's `tokens` (`input_cache_write` is the 5-minute share, disjoint from `input_cache_write_1h`) and `cost_usd`. A `claude-agent-sdk` call that also billed a Haiku call carries a `claude-haiku-4-5` row, and the manifest books those tokens and dollars on Haiku's own `model_breakdown` row instead of Opus's.
 - `provenance: "none"` with `task_type: "in_session"` or `"skipped"` is a phase the conductor logged without dispatching (`dispatch.mjs --log-phase`). Zero tokens, zero cost; its work, if any, accrues to the driver loop.
 - `latency_ms` is a real wall-clock figure on dispatched calls and `null` on logged-only lines.
 
@@ -207,6 +208,8 @@ The dispatched rollup, then three blocks this harness adds.
 **Dispatched rollup** — `total_cost_usd`, `total_input_tokens`, `total_input_tokens_cached`, `total_input_tokens_cache_write`, `total_input_tokens_cache_write_1h`, `total_output_tokens`, `total_output_tokens_reasoning`, `model_breakdown`, `phase_breakdown` (with `by_model` inside each phase), `module_breakdown`, `task_type_breakdown`, `duration_sec`, `pass`, `policy_name`. Dispatched work only, always.
 
 Every `model_breakdown` row, `phase_breakdown` row and `by_model` row, every `cost.lines[]` entry and `usage.dispatched` carry the same token columns, so you re-price any row from its own tokens:
+
+A `model_breakdown` or `by_model` row's `calls` counts attempts routed to that model; `side_calls` counts attempts routed to another model that also billed this one, such as the Agent SDK's Haiku call under an Opus dispatch.
 
 | Column | Billed at |
 |---|---|

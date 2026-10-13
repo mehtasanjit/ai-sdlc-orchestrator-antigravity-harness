@@ -4,8 +4,28 @@
 
 import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
-import type { ModelPricing, PriceBasis, TelemetryEvent } from "./types.js";
+import type { AttemptRecord, ModelPricing, PriceBasis, TelemetryEvent, WorkerModelCost } from "./types.js";
 import type { AppliedModifiers, PeriodRef } from "./prices.js";
+
+declare module "./types.js" {
+  interface TelemetryEvent {
+    /**
+     * A Claude worker attempt's per-model ledger, copied from the attempt: one
+     * row per model the call billed, so a side model (the Agent SDK's Haiku
+     * call) is not booked as the routed model. The rows' tokens sum to the
+     * event's; `tokens.input_cache_write` is the 5-minute share, disjoint from
+     * `input_cache_write_1h`. Absent on adapters that keep no ledger.
+     */
+    worker_per_model?: WorkerModelCost[];
+  }
+}
+
+/** The fields a dispatched event takes from its attempt beyond the token buckets. */
+export function attemptEventFields(att: AttemptRecord): Pick<TelemetryEvent, "worker_per_model"> {
+  return {
+    worker_per_model: att.per_model?.length ? att.per_model : undefined,
+  };
+}
 
 export function appendEvent(jsonlPath: string, ev: TelemetryEvent): void {
   mkdirSync(dirname(jsonlPath), { recursive: true });
@@ -193,6 +213,60 @@ export function addTokenColumns(row: Partial<TokenColumns>, tokens: Partial<Toke
   row.output_tokens_reasoning = (row.output_tokens_reasoning ?? 0) + (tokens.output_tokens_reasoning ?? 0);
 }
 
+export type ModelRow = { calls: number; side_calls?: number; cost_usd: number } & TokenColumns;
+
+/** One model's share of an event: its tokens and dollars, and whether it is the model the event was routed to. */
+export interface ModelShare {
+  model: string;
+  routed: boolean;
+  cost_usd: number;
+  tokens: TokenColumns;
+}
+
+/**
+ * An event split by the model each token billed on. Without a per-model
+ * ledger the whole event is its routed model's. With one, every other
+ * model's row is its own share and the routed model takes the remainder, so
+ * the shares always sum to the event's tokens and dollars.
+ */
+export function modelShares(ev: TelemetryEvent): ModelShare[] {
+  const whole = eventTokenColumns(ev);
+  const rows = ev.worker_per_model ?? [];
+  const isRouted = (r: WorkerModelCost) => r.model === ev.model || (r.reported_as ?? []).includes(ev.model);
+  const others = rows.filter((r) => !isRouted(r));
+  if (rows.length <= 1) {
+    return [{ model: ev.model, routed: true, cost_usd: ev.cost_usd, tokens: whole }];
+  }
+  const shares: ModelShare[] = others.map((r) => ({
+    model: r.model,
+    routed: false,
+    cost_usd: r.cost_usd ?? 0,
+    tokens: {
+      input_tokens: r.tokens.input,
+      input_tokens_cached: r.tokens.input_cached,
+      input_tokens_cache_write: r.tokens.input_cache_write + r.tokens.input_cache_write_1h,
+      input_tokens_cache_write_1h: r.tokens.input_cache_write_1h,
+      output_tokens: r.tokens.output,
+      output_tokens_reasoning: 0,
+    },
+  }));
+  const rest = (key: keyof TokenColumns) => Math.max(0, whole[key] - shares.reduce((s, x) => s + x.tokens[key], 0));
+  shares.unshift({
+    model: ev.model,
+    routed: true,
+    cost_usd: ev.cost_usd - shares.reduce((s, x) => s + x.cost_usd, 0),
+    tokens: {
+      input_tokens: rest("input_tokens"),
+      input_tokens_cached: rest("input_tokens_cached"),
+      input_tokens_cache_write: rest("input_tokens_cache_write"),
+      input_tokens_cache_write_1h: rest("input_tokens_cache_write_1h"),
+      output_tokens: rest("output_tokens"),
+      output_tokens_reasoning: whole.output_tokens_reasoning,
+    },
+  });
+  return shares;
+}
+
 export interface Manifest {
   pass: string;
   policy_name: string;
@@ -322,7 +396,13 @@ export interface Manifest {
   total_input_tokens_cache_write_1h?: number;
   /** Dispatched-work thinking tokens, a share of total_output_tokens. Absent on older manifests. */
   total_output_tokens_reasoning?: number;
-  model_breakdown: Record<string, { calls: number; cost_usd: number } & TokenColumns>;
+  /**
+   * One row per billed model, rolled up from each event's worker_per_model
+   * when it has one. `calls` counts attempts routed to the model;
+   * `side_calls` counts attempts routed to another model that billed this
+   * one too (absent when none).
+   */
+  model_breakdown: Record<string, ModelRow>;
   /** Older manifests without token fields still load; dashboard falls back. */
   phase_breakdown: Record<string, {
     calls: number;
@@ -334,7 +414,7 @@ export interface Manifest {
     input_tokens_cache_write_1h?: number;
     output_tokens?: number;
     output_tokens_reasoning?: number;
-    by_model?: Record<string, { calls: number; cost_usd: number } & TokenColumns>;
+    by_model?: Record<string, ModelRow>;
   }>;
   module_breakdown: Record<string, { calls: number; cost_usd: number }>;
   task_type_breakdown: Record<string, { calls: number; cost_usd: number }>;
@@ -365,6 +445,14 @@ export function cacheWriteBuckets(tokens: { input_cache_write?: number; input_ca
     input_tokens_cache_write: (fiveMinute ?? 0) + (oneHour ?? 0),
     ...(oneHour !== undefined ? { input_tokens_cache_write_1h: oneHour } : {}),
   };
+}
+
+function addModelShare(rows: Record<string, ModelRow>, share: ModelShare): void {
+  const row = (rows[share.model] ??= { calls: 0, cost_usd: 0, ...emptyTokenColumns() });
+  if (share.routed) row.calls++;
+  else row.side_calls = (row.side_calls ?? 0) + 1;
+  row.cost_usd += share.cost_usd;
+  addTokenColumns(row, share.tokens);
 }
 
 /** An event's token buckets as rollup columns; an absent bucket is 0. */
@@ -418,10 +506,8 @@ export function buildManifest(allEvents: TelemetryEvent[], opts: {
     total_cost_usd += ev.cost_usd;
     addTokenColumns(totals, tokens);
 
-    const mb = (model_breakdown[ev.model] ??= { calls: 0, cost_usd: 0, ...emptyTokenColumns() });
-    mb.calls++;
-    mb.cost_usd += ev.cost_usd;
-    addTokenColumns(mb, tokens);
+    const shares = modelShares(ev);
+    for (const share of shares) addModelShare(model_breakdown, share);
 
     const pb = (phase_breakdown[ev.phase] ??= {
       calls: 0, cost_usd: 0, models: [],
@@ -431,11 +517,10 @@ export function buildManifest(allEvents: TelemetryEvent[], opts: {
     pb.calls++;
     pb.cost_usd += ev.cost_usd;
     addTokenColumns(pb, tokens);
-    if (!pb.models.includes(ev.model)) pb.models.push(ev.model);
-    const pbm = ((pb.by_model ??= {})[ev.model] ??= { calls: 0, cost_usd: 0, ...emptyTokenColumns() });
-    pbm.calls++;
-    pbm.cost_usd += ev.cost_usd;
-    addTokenColumns(pbm, tokens);
+    for (const share of shares) {
+      if (!pb.models.includes(share.model)) pb.models.push(share.model);
+      addModelShare((pb.by_model ??= {}), share);
+    }
 
     const modb = (module_breakdown[ev.module] ??= { calls: 0, cost_usd: 0 });
     modb.calls++;

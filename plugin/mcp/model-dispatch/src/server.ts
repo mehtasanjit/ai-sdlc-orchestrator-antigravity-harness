@@ -28,7 +28,7 @@ import {
 } from "./routing.js";
 import { assessModels, parseAuthMode, type AuthMode } from "./preflight.js";
 import { checkModelPrice, withEffectivePrices } from "./effectivePrice.js";
-import { appendEvent, cacheWriteBuckets, normalizeDirectTierEvent } from "./telemetry.js";
+import { appendEvent, attemptEventFields, cacheWriteBuckets, normalizeDirectTierEvent } from "./telemetry.js";
 import { checkRunCostCap, runCostCapRefusal } from "./runCostCap.js";
 import { createAdapter } from "./adapters/index.js";
 import {
@@ -545,6 +545,7 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
         };
         const events: TelemetryEvent[] = attempts.map((att) => ({
           ...baseEvent,
+          ...attemptEventFields(att),
           input_tokens: att.tokens.input,
           input_tokens_cached: att.tokens.input_cached,
           // Cache writes, disjoint from input_tokens: the total written, plus
