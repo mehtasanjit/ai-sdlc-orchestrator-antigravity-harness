@@ -17,11 +17,12 @@ import { fileURLToPath } from "node:url";
 const DEFAULT_SERVER_ENTRY = join(dirname(fileURLToPath(import.meta.url)), "server.js");
 
 /**
- * Must exceed the largest `worker_timeout_sec` any shipped policy sets (540s
- * for the agent worker), or the client abandons a call the adapter is still
- * working on. The SDK default is 60s.
+ * Must exceed every adapter deadline — the largest `worker_timeout_sec` any
+ * shipped policy sets and each adapter's built-in default (1800s for the Agent
+ * SDK) — or the client abandons a call the adapter is still working on and
+ * never sees its timeout error. The SDK default is 60s.
  */
-export const DEFAULT_TOOL_TIMEOUT_MS = 900_000;
+export const DEFAULT_TOOL_TIMEOUT_MS = 2_100_000;
 
 export interface BridgeClientOptions {
   /** Override the server entry point — tests point this at a fixture server. */
