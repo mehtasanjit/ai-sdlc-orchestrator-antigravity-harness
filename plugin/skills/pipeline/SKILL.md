@@ -255,6 +255,24 @@ the escalated packet dispatches exactly like every other one.
 
 Write the returned file content to disk at the packet's stated `artifact_path`.
 
+**Brownfield: record every write for `/mmo:revert`.** Gate 0 ran `write-provenance.mjs --init`.
+Around every file you write into the project — a packet's `artifact_path`, a refinement, a fix in
+Phase 7, an `.env.example` key — run, with the run's id and the repo root:
+
+```bash
+node "${MMO_PLUGIN_ROOT}/scripts/write-provenance.mjs" --before --run-id=<run_id> --path=<artifact_path> --packet-id=<packet id> --project-root="<repo-root>"
+#   ... write the file ...
+node "${MMO_PLUGIN_ROOT}/scripts/write-provenance.mjs" --after --run-id=<run_id> --path=<artifact_path> --project-root="<repo-root>"
+```
+
+`--before` takes the file's first snapshot in this run (its hash, and a backup copy when git cannot
+restore it) and keeps it: a retry or a second packet on the same file never replaces it, so
+`/mmo:revert` restores the file as it was before the run, not an earlier attempt. A tooling step
+that writes files itself (a deps run's install rewriting `package.json` and the lockfile) gets the
+same `--before` for each file it writes, then the step, then `--after`. Files under the run's own
+`.sdlc/runs/<run_id>/` are the record, not the project: they need no provenance. Greenfield runs
+skip this; their whole tree is new.
+
 ### Phase 6 — senior_code_review
 
 Dispatch one packet per module (`phase: "senior_code_review"`, `task_type: "review"`) whose inputs
@@ -325,6 +343,15 @@ never to report an absence it could not confirm. Attach whole files here for the
 Phase 6.
 
 ### Phase 9 — generate_final_report
+
+**Brownfield: close the undo record first**, after the last project write and before the report:
+
+```bash
+node "${MMO_PLUGIN_ROOT}/scripts/write-provenance.mjs" --finalize --run-id=<run_id> --project-root="<repo-root>"
+```
+
+It records the git head after the run and the commits between the two heads, which `/mmo:revert`
+needs to tell this run's changes from a later run's.
 
 **`manifest.json` is written by code, never by you, and it comes first.** `SUMMARY.md` copies its
 cost lines; it never computes them.
