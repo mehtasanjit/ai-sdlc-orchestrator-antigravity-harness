@@ -431,7 +431,17 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
           select_slot: decision.selection?.slot,
           select_chosen: decision.selection?.chosen,
           select_overridden: decision.selection?.overridden,
+          fallback: decision.fallback,
         });
+        if (decision.fallback) {
+          log("warn", "route.fallback", {
+            packet_id: packet.id,
+            phase: packet.phase,
+            task_type: packet.task_type,
+            model_id: decision.modelId,
+            rule_reason: decision.reason,
+          });
+        }
 
         const capCheck = checkRunCostCap(policy.hard_cost_cap_usd, a.telemetry_path, packet.pass_id);
         if (capCheck && !capCheck.allowed) {
@@ -536,6 +546,7 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
             policy_version: policy.version,
             rule_index: decision.ruleIndex,
             rule_reason: decision.reason,
+            ...(decision.fallback ? { fallback: true as const } : {}),
             // Undefined unless the rule went through a slot; JSON.stringify
             // drops undefined keys, so unslotted policies produce identical
             // events to before slots existed.

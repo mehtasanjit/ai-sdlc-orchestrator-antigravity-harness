@@ -441,6 +441,35 @@ if (retried.length > 0) {
   }
 }
 
+// ─── fallback routing ─────────────────────────────────────────────────
+
+const fallbackPackets = (built.fallback_packets ?? []).map((pkt) => {
+  const ev = events.find((e) => e.task_id === pkt.task_id);
+  return { ...pkt, kind: ev ? kindOf(ev) : "cash" };
+});
+if (fallbackPackets.length > 0) {
+  const kinds = [...new Set(fallbackPackets.map((pkt) => pkt.kind))];
+  // One figure only when every packet is the same kind of dollar.
+  const heading = `Packets no policy rule matched (sent to the policy default)${kinds.length === 1 ? `: ${kinds[0]} ${fmtUSD(built.fallback_cost_usd)}` : ""}`;
+  if (asMarkdown) {
+    p(`## ${heading}`);
+    p();
+    p(`| Packet | Phase | Task type | Model | Attempts | Cost |`);
+    p(`|---|---|---|---|---:|---:|`);
+    for (const pkt of fallbackPackets) {
+      p(`| \`${pkt.task_id}\` | ${pkt.phase ?? "—"} | ${pkt.task_type ?? "—"} | ${pkt.model_id ?? "—"} | ${pkt.attempts} | ${pkt.kind} ${fmtUSD(pkt.cost_usd)} |`);
+    }
+    p();
+  } else {
+    p(`  ${heading}`);
+    p();
+    for (const pkt of fallbackPackets) {
+      p(`  ${String(pkt.task_id).padEnd(22)} ${String(pkt.phase ?? "—").padEnd(14)} ${String(pkt.task_type ?? "—").padEnd(22)} ${pkt.model_id ?? "—"} → ${pkt.kind} ${fmtUSD(pkt.cost_usd)}`);
+    }
+    p();
+  }
+}
+
 // ─── delegation receipts ──────────────────────────────────────────────
 
 const delegationDir = join(runDir, "delegation");

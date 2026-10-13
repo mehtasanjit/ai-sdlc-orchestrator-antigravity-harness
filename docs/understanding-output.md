@@ -206,6 +206,8 @@ The dispatched rollup, then three blocks this harness adds.
 
 **Dispatched rollup** — `total_cost_usd`, `total_input_tokens`, `total_input_tokens_cached`, `total_input_tokens_cache_write`, `total_output_tokens`, `model_breakdown`, `phase_breakdown` (with `by_model` inside each phase), `module_breakdown`, `task_type_breakdown`, `duration_sec`, `pass`, `policy_name`. Dispatched work only, always.
 
+**Fallback routing** — `fallback_packets` lists every packet no policy rule matched, so the policy's `default` chose its model (`task_id`, `phase`, `task_type`, `model_id`, `attempts`, `cost_usd`); `fallback_cost_usd` is their sum. The bridge stamps those events `routing.fallback: true` and logs `route.fallback` at WARN. The figure is part of the dispatched rollup, not an extra cost; on a Claude line on the seat it is modeled, not cash. `node tools/report.mjs` lists the packets with each one's kind.
+
 **`harness`**
 
 | Field | Meaning |

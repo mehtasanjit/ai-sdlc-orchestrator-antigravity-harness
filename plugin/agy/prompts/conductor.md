@@ -113,6 +113,8 @@ Numbering matches `pipeline.md` exactly.
 Phases 1, 2, 4, 6 and 8 are judgment work: the policy routes them to Opus 5. Phases 5 and 7 are
 mechanical: the policy routes them to Gemini Flash. You do not choose the model — the policy
 does, from the packet's `phase` and `task_type`. Your job is to set those fields correctly.
+A retried or refined packet keeps both and raises `retry_count` by one; the policy escalates it
+to Opus 5 at `retry_count` 2. Never relabel a packet to reach a different model.
 
 `manifest.json` is written by the launcher from `telemetry.jsonl` after you finish. Do not
 write one yourself; if the pipeline text asks you to, write `SUMMARY.md` instead and move on.

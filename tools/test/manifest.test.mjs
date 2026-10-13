@@ -11,7 +11,7 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { buildHarnessManifest, costLines, claudeWallet, describeCostLines, geminiDoor, workerLineOf, HARNESS_NAME, RUNTIME_NAME } from "../../plugin/agy/manifest.mjs";
+import { buildHarnessManifest, costLines, claudeWallet, describeCostLines, fallbackRouting, geminiDoor, workerLineOf, HARNESS_NAME, RUNTIME_NAME } from "../../plugin/agy/manifest.mjs";
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const POLICY = "antigravity-flash38-plus-opus5";
@@ -438,5 +438,38 @@ test("a directory shared by two runs books only this run's events and this run's
     const r0 = buildHarnessManifest({ runDir: dir, runId: "r0", env: { ANTHROPIC_API_KEY: "k", GEMINI_API_KEY: "g" }, now: () => "N" });
     assert.equal(r0.total_cost_usd, 80);
     assert.equal(r0.harness.agy_invocations, null, "r1's launcher record is not r0's");
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test("fallback_cost_usd sums the dispatches no policy rule matched, one row per packet", () => {
+  const fb = { rule_index: -1, rule_reason: "Unrecognized task — fail safe to premium", fallback: true };
+  const events = [
+    ev({}),
+    ev({ task_id: "tp_fix", task_type: "code_fix", model: "claude-opus-5", model_id: "opus", routing: { ...ev({}).routing, ...fb }, cost_usd: 0.3 }),
+    ev({ task_id: "tp_fix", task_type: "code_fix", model: "claude-opus-5", model_id: "opus", routing: { ...ev({}).routing, ...fb }, cost_usd: 0.2 }),
+    // Written before the bridge stamped `fallback`: read from rule_index -1.
+    ev({ task_id: "tp_old", task_type: "new_file_add", model: "claude-opus-5", routing: { ...ev({}).routing, rule_index: -1 }, cost_usd: 0.1 }),
+    // A --log-phase row has rule_index -1 too, but is no dispatch.
+    ev({ task_id: "discovery-in_session", phase: "discovery", task_type: "in_session", routed_by: "manual", provenance: "none", routing: { ...ev({}).routing, rule_index: -1 }, cost_usd: 0 }),
+  ];
+  const r = fallbackRouting(events);
+  assert.equal(r.fallback_cost_usd, 0.6);
+  assert.deepEqual(r.fallback_packets.map((p) => [p.task_id, p.task_type, p.model_id, p.attempts, p.cost_usd]), [
+    ["tp_fix", "code_fix", "opus", 2, 0.5],
+    ["tp_old", "new_file_add", "claude-opus-5", 1, 0.1],
+  ]);
+  assert.deepEqual(fallbackRouting([ev({})]), { fallback_cost_usd: 0, fallback_packets: [] });
+});
+
+test("the manifest carries fallback_cost_usd and fallback_packets beside the dispatched rollup", () => {
+  const dir = runDir();
+  try {
+    writeFileSync(join(dir, "telemetry.jsonl"), readFileSync(join(dir, "telemetry.jsonl"), "utf8") + JSON.stringify(ev({
+      task_id: "tp_x", task_type: "dom_component", model: "claude-opus-5", model_id: "opus", cost_usd: 0.04,
+      routing: { policy_name: POLICY, policy_version: 1, rule_index: -1, rule_reason: "x", fallback: true },
+    })) + "\n");
+    const m = buildHarnessManifest({ runDir: dir, env: { ANTHROPIC_API_KEY: "k", GEMINI_API_KEY: "g" } });
+    assert.equal(m.fallback_cost_usd, 0.04);
+    assert.deepEqual(m.fallback_packets.map((p) => p.task_id), ["tp_x"]);
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });

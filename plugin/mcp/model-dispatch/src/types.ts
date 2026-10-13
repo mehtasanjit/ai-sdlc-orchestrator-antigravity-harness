@@ -112,6 +112,8 @@ export interface TelemetryEvent {
     policy_version: number;
     rule_index: number;      // -1 = default
     rule_reason: string;
+    /** Present (true) only when no rule matched and the policy default routed the packet. */
+    fallback?: true;
     /**
      * Present only when the matched rule named a slot. `overridden`
      * distinguishes an explicit run choice from an inherited default.
@@ -462,6 +464,8 @@ export interface RoutingDecision {
   modelId: string;
   reason: string;
   ruleIndex: number;   // -1 if default
+  /** Set when no rule matched and the policy's `default` chose the model. */
+  fallback?: true;
   /** Present only when the matched rule named a slot. */
   selection?: { slot: string; chosen: string; overridden: boolean };
 }

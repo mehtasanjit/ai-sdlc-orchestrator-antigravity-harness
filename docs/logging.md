@@ -115,7 +115,7 @@ event-name index for `grep`.
 | Group | Events | Emitted by |
 |---|---|---|
 | Run lifecycle | `run.start`, `phase.start`, `phase.end`, `phase.skip`, `gate.open`, `gate.resolved`, `run.end` | `plugin/scripts/mmo-log.mjs`. The shipped conductor prompt does not call it — on this harness the phase record is `gates.jsonl` and the `--log-phase` lines in `telemetry.jsonl`; the CLI is kept for a prompt that wants the trace |
-| Model dispatch (MCP) | `tool.call.start`, `tool.call.end`, `packet.validate.fail`, `route.decide`, `adapter.construct`, `dispatch.start`, `dispatch.attempt`, `dispatch.end`, `dispatch.error`, `telemetry.append` | `plugin/mcp/model-dispatch/src/server.ts` |
+| Model dispatch (MCP) | `tool.call.start`, `tool.call.end`, `packet.validate.fail`, `route.decide`, `route.fallback`, `adapter.construct`, `dispatch.start`, `dispatch.attempt`, `dispatch.end`, `dispatch.error`, `telemetry.append` | `plugin/mcp/model-dispatch/src/server.ts` |
 | Vendor / Agent Platform API | `api.anthropic.request`, `api.anthropic.response`, `api.gemini.backend`, `api.gemini.request`, `api.gemini.response`, `api.gemini.cache.create`, `api.gemini.cache.hit` | The adapters under `plugin/mcp/model-dispatch/src/adapters/` |
 | AG SDK worker delegation | `agsdk.spawn`, `agsdk.inventory.before`, `agsdk.worker.stderr`, `agsdk.sidecar`, `agsdk.toolcall`, `agsdk.diff`, `agsdk.exit`, `agsdk.record.write` | `AntigravityWorkerAdapter.ts` |
 | Policy, preflight, credentials | `policy.load`, `policy.adapter.deprecated`, `preflight.model`, `preflight.result`, `credential.discover`, `env.legacy_name`, `env.placeholder.strip` | `server.ts`, `credential-discovery.mjs`, `envBootstrap.ts` |

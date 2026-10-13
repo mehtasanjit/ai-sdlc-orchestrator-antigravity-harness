@@ -114,3 +114,22 @@ test("a manifest.json that books the lines differently is named, with the comman
     assert.match(text, /gemini workers\s+cash\s+1\s+.*\$0\.0011/, "the report books from telemetry, not from the stale file");
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
+
+test("packets the policy default routed are listed with their kind of dollar", () => {
+  const fallback = { routing: { policy_name: POLICY, policy_version: 1, rule_index: -1, rule_reason: "Unrecognized task — fail safe to premium", fallback: true } };
+  const dir = runDir([ev({}), ev({ ...OPUS, phase: "codegen", task_type: "code_fix", task_id: "tp_fix", model_id: "opus", cost_usd: 0.25, ...fallback })], { env: { ANTHROPIC_API_KEY: "k", GEMINI_API_KEY: "g" } });
+  try {
+    const text = report(dir);
+    assert.match(text, /Packets no policy rule matched \(sent to the policy default\): cash \$0\.2500/);
+    assert.match(text, /tp_fix\s+codegen\s+code_fix\s+opus → cash \$0\.2500/);
+    const md = report(dir, "--markdown");
+    assert.match(md, /\| `tp_fix` \| codegen \| code_fix \| opus \| 1 \| cash \$0\.2500 \|/);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test("a run with no fallback packet prints no fallback section", () => {
+  const dir = runDir([ev({})], { env: { GEMINI_API_KEY: "g" } });
+  try {
+    assert.doesNotMatch(report(dir), /no policy rule matched/);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});

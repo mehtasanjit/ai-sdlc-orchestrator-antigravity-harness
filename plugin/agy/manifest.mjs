@@ -302,6 +302,7 @@ export function buildHarnessManifest({ runDir, policyName, runId, env = process.
 
   const dispatched = telemetry.filter((e) => e.tier !== "orchestrator");
   const base = buildManifest(dispatched, { pass, policy_name });
+  Object.assign(base, fallbackRouting(dispatched));
   if (driverManifest?.started_at) base.started_at = driverManifest.started_at;
   if (driverManifest?.ended_at) base.ended_at = driverManifest.ended_at;
   if (driverManifest?.started_at && driverManifest?.ended_at) {
@@ -396,6 +397,27 @@ export function buildHarnessManifest({ runDir, policyName, runId, env = process.
   };
 
   return { ...base, harness, usage, cost };
+}
+
+/**
+ * Packets the policy's `default` routed because no rule matched. Events
+ * written before the bridge stamped `routing.fallback` are read from a
+ * dispatch's rule_index -1; a `--log-phase` row has the same index but is
+ * routed_by "manual" and carries no dollars.
+ */
+export function fallbackRouting(dispatched) {
+  const isFallback = (e) => e.routing?.fallback === true || (e.routed_by === "orchestrator" && e.routing?.rule_index === -1);
+  const packets = new Map();
+  let total = 0;
+  for (const e of dispatched.filter(isFallback)) {
+    const id = e.task_id ?? "?";
+    const pkt = packets.get(id) ?? { task_id: id, phase: e.phase ?? null, task_type: e.task_type ?? null, model_id: e.model_id ?? e.model ?? null, attempts: 0, cost_usd: 0 };
+    pkt.attempts += 1;
+    pkt.cost_usd += e.cost_usd ?? 0;
+    total += e.cost_usd ?? 0;
+    packets.set(id, pkt);
+  }
+  return { fallback_cost_usd: r6(total), fallback_packets: [...packets.values()].map((p) => ({ ...p, cost_usd: r6(p.cost_usd) })) };
 }
 
 /** The one-line CLI summary the interactive conductor relays. */
