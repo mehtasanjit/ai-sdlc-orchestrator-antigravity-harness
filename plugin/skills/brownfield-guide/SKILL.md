@@ -23,10 +23,12 @@ setup is one-time per machine and happens separately.
   case) — propose the job type from the wording at step 4a, confirm it with one question, then
   continue as if `intent: <id>` had been supplied. With an empty `seed_description` this line
   is inert.
-- `run_id`, `output_dir` and `code_dir` (headless launches only) — the launcher chose them. Use
-  them everywhere this guide says `<run-id>`, `.sdlc/runs/<run-id>` and the code directory; do not
-  mint a run id of your own. `output_dir` is `.sdlc/runs/<run_id>` and `code_dir` the repo root
-  unless the launch said otherwise.
+- `run_id`, `project_root`, `output_dir` and `code_dir` (headless launches only) — the launcher
+  chose them. Use them everywhere this guide says `<run-id>`, `.sdlc/runs/<run-id>` and the code
+  directory; do not mint a run id of your own. Your shell does not start in the project on a
+  headless launch, so every `--project-root="$(pwd)"` below is `--project-root="<project_root>"`,
+  and every relative `.sdlc/...` path is under `<project_root>`. `output_dir` is
+  `<project_root>/.sdlc/runs/<run_id>` and `code_dir` the project root unless the launch said otherwise.
 - `intent_source: inferred` next to `intent: <id>` (headless launches only) — the launcher
   already ran step 4a's inference on `seed_description`. Treat `intent` as chosen; say on Gate
   0's Intent line that it was proposed from the wording.
@@ -37,7 +39,14 @@ setup is one-time per machine and happens separately.
 
 # 1. Setup-status check — resume or fresh
 
-Before anything else, invoke:
+Before anything else, record when this run started — the collector counts your own model calls
+from this moment (`run_started_at`, used at Phase 9):
+
+```bash
+date -u +%Y-%m-%dT%H:%M:%SZ
+```
+
+Then invoke:
 
 ```bash
 node "${MMO_PLUGIN_ROOT}/scripts/session-hydrate.mjs" --json

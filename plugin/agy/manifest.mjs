@@ -292,7 +292,10 @@ export function buildHarnessManifest({ runDir, policyName, runId, env = process.
   const driverManifest = launcherRecord && (!launcherRecord.run_id || launcherRecord.run_id === pass) ? launcherRecord : null;
   const collectorRecord = readJson(join(runDir, "driver-collector.json"));
   const collector = !driverManifest && collectorRecord && (!collectorRecord.run_id || collectorRecord.run_id === pass) ? collectorRecord : null;
-  const otherRuns = [...new Set([...allTelemetry, ...allModeled].map((e) => e.pass).filter((p) => p != null && p !== pass))];
+  const otherRuns = [...new Set([...allTelemetry, ...allModeled].map((e) => e.pass).filter((p) => p != null && p !== pass))].map((run) => {
+    const lines = allTelemetry.filter((e) => e.pass === run && e.tier !== "orchestrator");
+    return { run, dispatched_events: lines.length, dispatched_cost_usd: r6(lines.reduce((s, e) => s + (e.cost_usd ?? 0), 0)) };
+  });
   const policy_name = policyName ?? driverManifest?.policy ?? policy?.name ?? telemetry.find((e) => e.routing?.policy_name)?.routing.policy_name ?? null;
   if (!pass) throw new Error(`manifest: no run id — pass --run-id, or run the launcher so driver-manifest.json carries one (${runDir}).`);
   if (!policy_name) throw new Error(`manifest: no policy name — pass --policy, or leave policy_snapshot.yaml in ${runDir}.`);

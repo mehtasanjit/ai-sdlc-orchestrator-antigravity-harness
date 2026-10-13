@@ -390,64 +390,73 @@ async function checkOneTarget(target, call) {
   const absTarget = isAbsolute(target) ? target : resolve(cwd, target);
   const realAbs = realTarget(absTarget);
 
-  // The session's own project: a write that leaves it while its contract binds is refused.
+  // The session's own project. Inside means inside once links are followed: the
+  // real form alone decides, so /tmp and /private/tmp spellings agree.
   const sessionRoot = gitRoot(cwd);
   const sessionState = sessionRoot ? contractState(sessionRoot) : { binding: false };
-  if (sessionState.binding) {
-    const inside = relUnder(sessionRoot, absTarget) !== null && relUnder(realRoot(sessionRoot), realAbs) !== null;
-    if (!inside) {
-      return {
-        deny: true,
-        msg: `${absTarget} resolves OUTSIDE the project whose contract this session holds (${sessionRoot}), as written or through a link. ` +
-          `Cross-project writes are refused: a brownfield run writes only inside its own project.`,
-        ctx: { root: sessionRoot, path: absTarget, runId: sessionState.runId },
-      };
-    }
+  if (sessionState.binding && relUnder(realRoot(sessionRoot), realAbs) === null) {
+    return {
+      deny: true,
+      msg: `${absTarget} resolves OUTSIDE the project whose contract this session holds (${sessionRoot}), as written or through a link. ` +
+        `Cross-project writes are refused: a brownfield run writes only inside its own project.`,
+      ctx: { root: sessionRoot, path: absTarget, runId: sessionState.runId },
+    };
   }
 
-  // Only the contract at the root of the git project holding the target counts.
-  const root = gitRoot(dirname(absTarget)) ?? sessionRoot;
-  const state = root ? contractState(root) : { binding: false };
-  const forms = root ? [...new Set([relUnder(root, absTarget), relUnder(realRoot(root), realAbs)])] : [null];
+  // Every binding contract on the path judges the write: the session's, and the
+  // contract at the root of the git project holding the target when that is a
+  // different project (a submodule or a nested repo inside the session's).
+  const targetRoot = gitRoot(dirname(realAbs)) ?? gitRoot(dirname(absTarget)) ?? sessionRoot;
+  const judges = [];
+  if (sessionState.binding) judges.push({ root: sessionRoot, state: sessionState });
+  if (targetRoot && targetRoot !== sessionRoot) {
+    const own = contractState(targetRoot);
+    if (own.binding) judges.push({ root: targetRoot, state: own });
+  }
 
-  if (!state.binding) {
+  if (!judges.length) {
     // The greenfield test fixture: creating a missing `.env` from the run's
     // own `.env.test` before `npm test`. An existing `.env` is never touched,
     // `.env.*` stays refused, and a binding contract never reaches here.
     if (basename(absTarget) === ".env" && !existsSync(absTarget)) return { deny: false };
-    for (const p of [...forms.filter(Boolean), toPosix(absTarget), toPosix(realAbs)]) {
+    const forms = targetRoot ? [relUnder(targetRoot, absTarget), relUnder(realRoot(targetRoot), realAbs)].filter(Boolean) : [];
+    for (const p of [...forms, toPosix(absTarget), toPosix(realAbs)]) {
       const hit = hardcodedHit(p);
       if (hit) {
         return {
           deny: true,
           msg: `${target} matches always-off-limits pattern "${hit}" (no brownfield contract binds here; this net covers credentials, MCP config, ` +
             `other AI tools' rules and git's own store, in any letter case).`,
-          ctx: { root, path: toPosix(absTarget), matchedRule: hit },
+          ctx: { root: targetRoot, path: toPosix(absTarget), matchedRule: hit },
         };
       }
     }
     return { deny: false };
   }
 
-  if (state.tampered) {
-    return {
-      deny: true,
-      msg: `every write is refused: ${state.tampered}. Ending run ${state.runId} is the person's decision: ` +
-        `node plugin/scripts/write-contract.mjs --abandon --run-id ${state.runId} --reason "<why>".`,
-      ctx: { root, path: toPosix(absTarget), runId: state.runId, matchedRule: "tampered" },
-    };
-  }
-
-  if (forms.includes(null)) {
-    return {
-      deny: true,
-      msg: `${absTarget} leads outside the project of live run ${state.runId} (${root}) through a link; a write there is a write outside the project.`,
-      ctx: { root, path: toPosix(absTarget), runId: state.runId },
-    };
-  }
-  for (const rel of forms) {
-    const verdict = judgeUnderContract(rel, state);
-    if (verdict) return { deny: true, msg: verdict.msg, ctx: { root, path: rel, runId: state.runId, matchedRule: verdict.rule, strict: state.contract?.strict } };
+  for (const { root, state } of judges) {
+    if (state.tampered) {
+      return {
+        deny: true,
+        msg: `every write is refused: ${state.tampered}. Ending run ${state.runId} is the person's decision: ` +
+          `node plugin/scripts/write-contract.mjs --abandon --run-id ${state.runId} --reason "<why>".`,
+        ctx: { root, path: toPosix(absTarget), runId: state.runId, matchedRule: "tampered" },
+      };
+    }
+    const real = relUnder(realRoot(root), realAbs);
+    if (real === null) {
+      return {
+        deny: true,
+        msg: `${absTarget} leads outside the project of live run ${state.runId} (${root}) through a link; a write there is a write outside the project.`,
+        ctx: { root, path: toPosix(absTarget), runId: state.runId },
+      };
+    }
+    // Judged as written too, when the written form lies under the root: an
+    // off-limits name reached through a link is refused either way.
+    for (const rel of new Set([real, relUnder(root, absTarget)].filter((x) => x !== null))) {
+      const verdict = judgeUnderContract(rel, state);
+      if (verdict) return { deny: true, msg: verdict.msg, ctx: { root, path: rel, runId: state.runId, matchedRule: verdict.rule, strict: state.contract?.strict } };
+    }
   }
   return { deny: false };
 }

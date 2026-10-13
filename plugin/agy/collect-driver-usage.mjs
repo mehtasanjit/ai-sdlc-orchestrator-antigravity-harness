@@ -12,10 +12,12 @@
  *   node plugin/agy/collect-driver-usage.mjs <run-dir> [--run-id=<id>] [--project-root=<path>]
  *        [--since=<iso>] [--until=<iso>] [--conversation=<id>[,<id>...]]
  *
- * --since defaults to the run directory's creation time (the run's start),
- * --until to now, --project-root to the current directory.
+ * --since is the time the run started (the skills record it at their first
+ * step); without it, the run directory's creation time, which is later than
+ * the first steps of a brownfield run. --until defaults to now,
+ * --project-root to the current directory.
  */
-import { existsSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 
 import { LOCAL_RECORD_FIELDS, agyHome, collectConversationUsage } from "./telemetry/conversationUsage.mjs";
@@ -123,6 +125,9 @@ if (isMain(import.meta.url)) {
     const { modeled, evidence } = await collectDriverUsage({ runDir, runId, projectRoot, since, until, conversationIds, version: agyVersion() });
     writeFileSync(join(runDir, "driver-collector.json"), JSON.stringify(evidence, null, 2) + "\n");
     if (!modeled.length) {
+      // An earlier collection's lines are not this window's: a re-collect that finds nothing leaves none behind.
+      const stale = join(runDir, "driver-cost-modeled.jsonl");
+      if (existsSync(stale) && readFileSync(stale, "utf8").split("\n").filter(Boolean).every((l) => { try { return JSON.parse(l).usage_source === RECORD_SOURCE; } catch { return false; } })) rmSync(stale);
       console.log(`collect-driver-usage: no agy model calls for ${projectRoot} between ${since} and ${until}; the driver line stays NOT MEASURED.`);
       process.exit(0);
     }

@@ -31,6 +31,7 @@ node '{{PLUGIN_ROOT}}/agy/dispatch.mjs' \
   --out=<path-for-result.json> \
   --policy={{POLICY}} \
   --project-root='{{PROJECT_ROOT}}' \
+  --run-id={{RUN_ID}} \
   --telemetry='{{OUTPUT_DIR}}/telemetry.jsonl'
 ```
 

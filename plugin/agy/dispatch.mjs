@@ -12,7 +12,7 @@
  *
  * Usage:
  *   node dispatch.mjs --packet=<packet.json> --out=<result.json> \
- *                     --telemetry=<path> [--policy=<name>] [--project-root=<path>] \
+ *                     --telemetry=<path> [--run-id=<id>] [--policy=<name>] [--project-root=<path>] \
  *                     [--work-dir=<path>]
  *   node dispatch.mjs --log-phase=<state> --task-type=skipped|in_session \
  *                     --telemetry=<path> --out=<receipt.json> \
@@ -219,6 +219,13 @@ export async function runDispatch(args, { connect, env = process.env } = {}) {
       packet = JSON.parse(readFileSync(resolve(args.packet), "utf-8"));
     } catch (err) {
       throw new Error(`dispatch: could not read the packet at ${args.packet} — ${err.message}`);
+    }
+    // The launcher's run id is the run's: a packet the conductor stamped otherwise would leave
+    // the run's cost cap and its manifest.
+    const runId = typeof args["run-id"] === "string" ? args["run-id"] : null;
+    if (runId && packet && typeof packet === "object" && packet.pass_id !== runId) {
+      console.error(`dispatch: packet ${packet.id ?? "?"} named pass_id ${JSON.stringify(packet.pass_id)}; dispatched as run ${runId}.`);
+      packet = { ...packet, pass_id: runId };
     }
     toolName = "execute_with_model";
     toolArgs = buildExecuteArgs({

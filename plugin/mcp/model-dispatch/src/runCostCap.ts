@@ -4,6 +4,17 @@
  */
 
 import { existsSync, readFileSync } from "node:fs";
+import { basename, dirname } from "node:path";
+
+/**
+ * A telemetry file inside a run's own folder (`.sdlc/runs/<run-id>/`) is that
+ * run's whole ledger: every event in it counts, whatever `pass` a packet
+ * carried, so a mis-stamped pass_id cannot hide spend from the cap.
+ */
+export function isRunFolderLedger(telemetryPath: string): boolean {
+  const runDir = dirname(telemetryPath);
+  return basename(dirname(runDir)) === "runs" && basename(dirname(dirname(runDir))) === ".sdlc";
+}
 
 export interface RunCostCapCheck {
   allowed: boolean;
@@ -60,7 +71,7 @@ export function checkRunCostCap(
 ): RunCostCapCheck | null {
   if (capUsd === undefined || !telemetryPath) return null;
   const lines = existsSync(telemetryPath) ? readFileSync(telemetryPath, "utf-8").split("\n") : [];
-  return evaluateRunCostCap(capUsd, lines, passId);
+  return evaluateRunCostCap(capUsd, lines, isRunFolderLedger(telemetryPath) ? undefined : passId);
 }
 
 export function runCostCapRefusal(check: RunCostCapCheck, telemetryPath: string): string {

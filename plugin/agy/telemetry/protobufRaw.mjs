@@ -21,7 +21,7 @@ function varint(buf, at) {
 
 const UTF8 = new TextDecoder("utf-8", { fatal: true });
 
-function decodeInto(buf, path, depth, out) {
+function decodeInto(buf, path, depth, out, textPaths) {
   let at = 0;
   const fields = [];
   while (at < buf.length) {
@@ -51,7 +51,7 @@ function decodeInto(buf, path, depth, out) {
       const sub = buf.subarray(at, end);
       at = end;
       const nested = [];
-      if (depth < 8 && sub.length > 0 && tryDecode(sub, p, depth + 1, nested)) fields.push(...nested);
+      if (!textPaths.has(p) && depth < 8 && sub.length > 0 && tryDecode(sub, p, depth + 1, nested, textPaths)) fields.push(...nested);
       else {
         let text = null;
         try { text = UTF8.decode(sub); } catch { text = null; }
@@ -64,17 +64,21 @@ function decodeInto(buf, path, depth, out) {
   out.push(...fields);
 }
 
-function tryDecode(buf, path, depth, out) {
+function tryDecode(buf, path, depth, out, textPaths) {
   try {
-    decodeInto(buf, path, depth, out);
+    decodeInto(buf, path, depth, out, textPaths);
     return true;
   } catch {
     return false;
   }
 }
 
-/** Every field of a message, or null when the bytes are not a message. */
-export function decodeRaw(bytes) {
+/**
+ * Every field of a message, or null when the bytes are not a message.
+ * `textPaths` are read as text without trying them as a message first: a
+ * short string such as "85" also parses as a valid message.
+ */
+export function decodeRaw(bytes, { textPaths = new Set() } = {}) {
   const out = [];
-  return tryDecode(Buffer.from(bytes ?? []), "", 0, out) ? out : null;
+  return tryDecode(Buffer.from(bytes ?? []), "", 0, out, textPaths) ? out : null;
 }

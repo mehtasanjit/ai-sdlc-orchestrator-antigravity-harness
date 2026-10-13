@@ -101,11 +101,13 @@ ended, and a project another live run holds. Ending a run never deletes its fold
 `agy -p` loads no hooks ([check 1](verification/p1-agy-runtime.md)), so nothing refuses a write
 during a headless brownfield run. The run record says so: `driver-manifest.json` and
 `manifest.json` carry `harness.write_guard.state: "off"` with the reason (`"hook"` on an interactive
-run). After the run, `run.mjs` compares `git status` at launch with `git status` at the end and
-lists in `write_guard.after_run_check.outside_contract` every file the run changed that its
-contract does not allow, and warns on stderr. That check detects; it does not prevent. A file that
-was already modified before the run and is modified again is not in the list. Review the diff
-before you keep a headless brownfield change.
+run). After the run, `run.mjs` compares a snapshot taken at launch with one taken at the end —
+every file `git status` lists as changed, untracked or ignored, with its mtime and size — and lists
+in `write_guard.after_run_check.outside_contract` every file the run changed that its contract does
+not allow, and warns on stderr. A file already modified before the run and written again shows;
+so does an ignored `.env`. An ignored folder (`dist/`, `node_modules/`) is one entry, and shows
+when an entry directly inside it is added or removed. That check detects; it does not prevent.
+Review the diff before you keep a headless brownfield change.
 
 ## Credential literals
 

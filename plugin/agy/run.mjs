@@ -111,11 +111,12 @@ export function validIntents(pluginRoot = PLUGIN_ROOT) {
   return (Array.isArray(raw) ? raw : (raw.intents ?? [])).map((i) => i.id);
 }
 
-export function renderHandover({ mode, intent, seed, intentSource, runId, outputDir, codeDir } = {}) {
+export function renderHandover({ mode, intent, seed, intentSource, runId, outputDir, codeDir, projectRoot } = {}) {
   const lines = [];
   if (mode) lines.push(`mode: ${mode}`);
   if (mode === "brownfield") {
     if (runId) lines.push(`run_id: ${runId}`);
+    if (projectRoot) lines.push(`project_root: ${projectRoot}`);
     if (outputDir) lines.push(`output_dir: ${outputDir}`);
     if (codeDir) lines.push(`code_dir: ${codeDir}`);
   }
@@ -316,7 +317,8 @@ export function buildRunArtifacts({ jsonl, invocations, pin, passId, policyName,
         const day = runs[(invocation ?? 1) - 1]?.started_at ?? runStartedAt ?? new Date().toISOString();
         const price = driverPrice(driver, day);
         for (const w of price.warnings ?? []) priceWarnings.add(w);
-        if (price.unpriced) throw new Error(unpricedDriverRefusal(driver.model_name, day.slice(0, 10), price.reason));
+        // The launch refused an unpriced day; a run that crosses into one keeps its record, with the turns flagged.
+        if (price.unpriced) return { pricing: { input: 0, input_cached: 0, output: 0 }, unpriced: unpricedDriverRefusal(driver.model_name, day.slice(0, 10), price.reason) };
         return price;
       }
     : null;
@@ -330,6 +332,8 @@ export function buildRunArtifacts({ jsonl, invocations, pin, passId, policyName,
     if (runs[i].carried) s.carried_from_earlier_launch = true;
   });
   if (priceWarnings.size) summary.price_warnings = [...priceWarnings];
+  const unpriced = modeled.filter((e) => e.unpriced).length;
+  if (unpriced) summary.unpriced_turns = unpriced;
   const reported = reportedModels(events);
   const offPin = offPinModels(reported, pin, driverSlug(pin));
   return { events, rejection, modeled, driverUsage: summary, reportedModels: reported, offPinModels: offPin };
@@ -375,27 +379,29 @@ export function priorInvocations(outputDir, conversationId, { read = readFileSyn
   const none = { invocations: [], started_at: null, pin: null, policy: null };
   const manifestPath = join(outputDir, "driver-manifest.json");
   const eventsPath = join(outputDir, "driver-events.jsonl");
-  if (!conversationId || !exists(manifestPath) || !exists(eventsPath)) return none;
-  let prior;
-  try {
-    prior = JSON.parse(read(manifestPath, "utf-8"));
-  } catch {
-    return none;
-  }
-  if (prior?.conversation_id !== conversationId) return none;
+  if (!conversationId || !exists(eventsPath)) return none;
   const lines = String(read(eventsPath, "utf-8")).split("\n");
   if (lines.at(-1) === "") lines.pop();
+  const asChunks = (ls) => splitAtInit(ls).filter((c) => c.some((l) => l.trim())).map((chunk) => ({ stdout: chunk.join("\n"), status: null, wall_ms: null, carried: true }));
+  let prior = null;
+  try { prior = exists(manifestPath) ? JSON.parse(read(manifestPath, "utf-8")) : null; } catch { prior = null; }
+  if (!prior) {
+    // A launch that died before writing any record: its streamed events are the
+    // record, carried when they belong to the conversation being resumed.
+    return conversationIdFrom(parseEventStream(lines.join("\n"))) === conversationId ? { ...none, invocations: asChunks(lines) } : none;
+  }
+  if (prior.conversation_id !== conversationId) return none;
   const recorded = prior.driver_usage?.invocations;
   const carried = (chunks) => ({ invocations: chunks, started_at: prior.started_at ?? null, pin: prior.pin ?? null, policy: prior.policy ?? null });
-  if (!Array.isArray(recorded) || !recorded.every((i) => Number.isInteger(i.lines))) {
-    return carried(splitAtInit(lines).map((chunk) => ({ stdout: chunk.join("\n"), status: null, wall_ms: null, carried: true })));
-  }
+  if (!Array.isArray(recorded) || !recorded.every((i) => Number.isInteger(i.lines))) return carried(asChunks(lines));
   let at = 0;
-  return carried(recorded.map((i) => {
+  const known = recorded.map((i) => {
     const stdout = lines.slice(at, at + i.lines).join("\n");
     at += i.lines;
     return { stdout, status: i.exit_status ?? null, wall_ms: i.wall_ms ?? null, carried: true, ...(i.started_at ? { started_at: i.started_at } : {}) };
-  }));
+  });
+  // Lines past the recorded boundaries were streamed by a launch that ended before its record was written.
+  return carried([...known, ...asChunks(lines.slice(at))]);
 }
 
 function splitAtInit(lines) {
@@ -513,7 +519,7 @@ async function main(args) {
     POLICY: policyName,
     RUN_ID: runId,
     GATE_INSTRUCTION: GATE_MODES[gateMode],
-    HANDOVER: renderHandover({ mode, intent: resolvedIntent, seed: args.seed, intentSource, runId, outputDir, codeDir }),
+    HANDOVER: renderHandover({ mode, intent: resolvedIntent, seed: args.seed, intentSource, runId, outputDir, codeDir, projectRoot }),
   };
   const promptText = renderPrompt(readFileSync(promptPath, "utf-8"), renderValues);
 
@@ -596,8 +602,18 @@ async function main(args) {
     console.error(`run ${runId}: ${sig} — stopping agy and writing the run record`);
     child?.kill("SIGTERM");
   };
-  process.on("SIGINT", onSignal);
-  process.on("SIGTERM", onSignal);
+  for (const sig of ["SIGINT", "SIGTERM", "SIGHUP"]) process.on(sig, onSignal);
+
+  // A record after every launch, so a launcher that dies before the end still
+  // leaves the invocation boundaries a --resume needs.
+  const provisional = (conversationId) => {
+    writeFileSync(join(outputDir, "driver-manifest.json"), JSON.stringify({
+      harness: "antigravity", run_id: runId, policy: policyName, provisional: true,
+      pin: { model: pin.model, effort: pin.effort, slug, billing_mode: pin.billing_mode },
+      conversation_id: conversationId, started_at: started,
+      driver_usage: { invocations: launches.map((l, i) => ({ invocation: i + 1, exit_status: l.status, wall_ms: l.wall_ms, ...(l.started_at ? { started_at: l.started_at } : {}), lines: streamLines(l.stdout) })) },
+    }, null, 2) + "\n", "utf-8");
+  };
 
   const launch = async (agyArgv) => {
     const t0 = Date.now();
@@ -630,6 +646,7 @@ async function main(args) {
 
     const conversationId = conversationIdFrom(parseEventStream(result.stdout)) ?? resumeFrom;
     let invocations = 1;
+    provisional(conversationId);
 
     while (!interrupted && invocations < maxTurns && result.status === 0 && conversationId && !runIsComplete(outputDir, started)) {
       console.log(`run ${runId}: session incomplete after invocation ${invocations} (no SUMMARY.md yet) — resuming ${conversationId}`);
@@ -637,6 +654,7 @@ async function main(args) {
         buildAgyArgs({ slug, promptText: RESUME_PROMPT, projectRoot, outputDir, printTimeout, resumeConversationId: conversationId }),
       );
       invocations += 1;
+      provisional(conversationId);
     }
     const completed = runIsComplete(outputDir, started);
     if (!completed) {
@@ -743,8 +761,7 @@ async function main(args) {
     console.log(`  Cost report:  node tools/report.mjs '${outputDir}'`);
     return result.status === 0 && !interrupted ? 0 : 1;
   } finally {
-    process.off("SIGINT", onSignal);
-    process.off("SIGTERM", onSignal);
+    for (const sig of ["SIGINT", "SIGTERM", "SIGHUP"]) process.off(sig, onSignal);
     if (runRoot && !args["keep-run-root"]) removeRunRoot(runRoot);
   }
 }

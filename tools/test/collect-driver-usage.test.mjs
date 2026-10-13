@@ -140,3 +140,10 @@ test("a headless run's stream reading is cross-checked against the same conversa
     assert.deepEqual(await crossCheckLocalRecord({ conversationId: "absent", since: "2026-10-13T10:00:00Z", modeled: booked, home }), { found: false });
   } finally { rmSync(home, { recursive: true, force: true }); rmSync(project, { recursive: true, force: true }); }
 });
+
+test("a short text value that also parses as a message is read as text where text is expected", () => {
+  // "85" is 0x38 0x35: field 7, varint 53 — a valid message.
+  const meta = msg(bytes(1, msg(bytes(20, msg(str(1, "last_step_index"), str(2, "85"))))));
+  assert.equal(decodeRaw(meta).find((f) => f.path === ".1.20.2"), undefined, "untold, it decodes as a nested message");
+  assert.equal(decodeRaw(meta, { textPaths: new Set([".1.20.2"]) }).find((f) => f.path === ".1.20.2").value, "85");
+});

@@ -174,6 +174,7 @@ export function modeledDriverCostEvents(events, opts) {
       output_tokens_reasoning: thinking,
       cost_usd: computeCostUsd(tokens, price.pricing),
       ...(price.basis ? { price_basis: price.basis } : {}),
+      ...(price.unpriced ? { unpriced: price.unpriced } : {}),
       ...(price.period ? { price_period: price.period } : {}),
       latency_ms: null,
       success: true,

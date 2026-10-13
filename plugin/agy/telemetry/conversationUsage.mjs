@@ -35,6 +35,8 @@ export const LOCAL_RECORD_FIELDS = Object.freeze({
   step_time: ".1.1",
 });
 
+const TEXT_PATHS = new Set([LOCAL_RECORD_FIELDS.model, LOCAL_RECORD_FIELDS.meta_key, LOCAL_RECORD_FIELDS.meta_value]);
+
 export function agyHome(env = process.env, home = homedir()) {
   return env.MMO_AGY_HOME ? resolve(env.MMO_AGY_HOME) : join(home, ".gemini", "antigravity-cli");
 }
@@ -86,7 +88,7 @@ export async function readConversationRecord(dbPath) {
     }
     const calls = [];
     for (const row of db.prepare("SELECT idx, data FROM gen_metadata ORDER BY idx").all()) {
-      const fields = decodeRaw(row.data);
+      const fields = decodeRaw(row.data, { textPaths: TEXT_PATHS });
       if (!fields) throw new Error(`gen_metadata row ${row.idx} is not a protobuf message`);
       const u = usageOf(fields);
       if (u[F.output] === undefined) continue;

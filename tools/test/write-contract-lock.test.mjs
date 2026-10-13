@@ -160,3 +160,29 @@ test("freeze refuses a second freeze, a run that ended, and a project another li
     assert.equal(freeze(dir, "r2").status, 0, "a new run freezes after the last one ended");
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
+
+test("a nested git project inside a live contract's project is still judged by that contract", () => {
+  const dir = repo();
+  try {
+    mkdirSync(join(dir, "vendor", "lib"), { recursive: true });
+    writeFileSync(join(dir, "vendor", "lib", ".git"), "gitdir: ../../.git/modules/lib\n");
+    freeze(dir);
+    assert.equal(write(dir, join(dir, "vendor", "lib", "src", "evil.js")).decision, "deny", "not in the session contract's allowlist");
+    assert.equal(write(dir, join(dir, "src", "a.ts")).decision, "allow");
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test("a workspace and a target that spell the same folder differently through a link are one project", () => {
+  const real = mkdtempSync(join(tmpdir(), "wc-real-"));
+  const linkParent = mkdtempSync(join(tmpdir(), "wc-link-"));
+  const linked = join(linkParent, "proj");
+  try {
+    mkdirSync(join(real, ".git"));
+    symlinkSync(real, linked);
+    freeze(real);
+    // workspace spelled through the link, target spelled as the real path, and the reverse
+    assert.equal(write(linked, join(real, "src", "a.ts"), linked).decision, "allow");
+    assert.equal(write(real, join(linked, "src", "a.ts"), real).decision, "allow");
+    assert.equal(write(linked, join(real, "README.md"), linked).decision, "deny");
+  } finally { rmSync(real, { recursive: true, force: true }); rmSync(linkParent, { recursive: true, force: true }); }
+});

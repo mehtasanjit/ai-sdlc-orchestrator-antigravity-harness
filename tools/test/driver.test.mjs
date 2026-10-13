@@ -308,12 +308,30 @@ test("the driver line is priced from the dated list on the day each agy process 
   assert.ok(driverUsage.price_warnings?.length, "the 2026 card in the driver block differs from the 2027 list and says so");
 });
 
-test("a driver model with no price on the run's day is refused", () => {
+test("turns on a day the driver has no price are flagged, never lost and never guessed", () => {
   const driver = { model_name: "gemini-3.8-flash", pricing: PIN.pricing };
-  assert.throws(
-    () => buildRunArtifacts({ invocations: [{ stdout: STREAM, status: 0, wall_ms: 1, started_at: "2026-08-01T00:00:00Z" }], pin: PIN, passId: "r", policyName: DEFAULT_POLICY, now: () => "T", driver }),
-    /driver model 'gemini-3\.8-flash' has no price on 2026-08-01/,
-  );
+  const { modeled, driverUsage } = buildRunArtifacts({ invocations: [{ stdout: STREAM, status: 0, wall_ms: 1, started_at: "2026-08-01T00:00:00Z" }], pin: PIN, passId: "r", policyName: DEFAULT_POLICY, now: () => "T", driver });
+  assert.equal(modeled.length, 1);
+  assert.equal(modeled[0].cost_usd, 0);
+  assert.match(modeled[0].unpriced, /driver model 'gemini-3\.8-flash' has no price on 2026-08-01/);
+  assert.equal(driverUsage.unpriced_turns, 1);
+});
+
+test("a resume carries the events a launch streamed before it died, past the recorded boundaries", () => {
+  const dir = tmp();
+  try {
+    const first = [JSON.stringify({ event: "init", conversation_id: "c1" }), JSON.stringify({ event: "result", result: { conversation_id: "c1", status: "OK", usage: { input_tokens: 10, output_tokens: 1, total_tokens: 11 } } })];
+    const dead = [JSON.stringify({ event: "init", conversation_id: "c1" }), JSON.stringify({ event: "result", result: { conversation_id: "c1", status: "OK", usage: { input_tokens: 30, output_tokens: 3, total_tokens: 33 } } })];
+    writeFileSync(join(dir, "driver-events.jsonl"), [...first, ...dead].join("\n") + "\n");
+    writeFileSync(join(dir, "driver-manifest.json"), JSON.stringify({ conversation_id: "c1", driver_usage: { invocations: [{ lines: 2, exit_status: 0 }] } }));
+    const prior = priorInvocations(dir, "c1");
+    assert.equal(prior.invocations.length, 2, "the recorded launch and the one that died before its record");
+    assert.match(prior.invocations[1].stdout, /"input_tokens":30/);
+
+    rmSync(join(dir, "driver-manifest.json"));
+    assert.equal(priorInvocations(dir, "c1").invocations.length, 2, "no record at all: the stream is split at each init");
+    assert.equal(priorInvocations(dir, "other").invocations.length, 0);
+  } finally { cleanup(dir); }
 });
 
 test("a model the stream names is recorded, and one that is not the pin is flagged", () => {
@@ -391,7 +409,7 @@ test("priorInvocations reads the earlier launch of the same conversation back, s
     assert.deepEqual(split.invocations.map((i) => terminated(i.stdout)), [a, second], "a pre-boundary stream is split at each init event");
 
     writeFileSync(join(dir, "driver-manifest.json"), "not json");
-    assert.deepEqual(priorInvocations(dir, "c1").invocations, []);
+    assert.equal(priorInvocations(dir, "c1").invocations.length, 2, "an unreadable record: the streamed events of the same conversation are still carried");
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
@@ -550,6 +568,18 @@ test("buildLogEventArgs writes a zero-cost provenance:none event and refuses wit
   assert.equal(buildLogEventArgs({ phase: "docs", taskType: "skipped", telemetryPath: "/t.jsonl", runId: "r7" }).event.pass, "r7", "--run-id stamps the run");
 });
 
+test("runDispatch stamps the launcher's run id on a packet the conductor stamped otherwise", async () => {
+  const dir = tmp();
+  try {
+    const packetPath = join(dir, "packet.json");
+    writeFileSync(packetPath, JSON.stringify({ id: "p1", phase: "docs", pass_id: "pass1" }));
+    const calls = [];
+    const connect = async () => ({ callTool: async (name, args) => { calls.push(args); return {}; }, close: async () => {} });
+    await runDispatch({ packet: packetPath, out: join(dir, "r.json"), telemetry: join(dir, "t.jsonl"), "run-id": "run-7" }, { connect });
+    assert.equal(calls[0].packet.pass_id, "run-7");
+  } finally { cleanup(dir); }
+});
+
 test("runDispatch refuses a packet dispatch without --telemetry, before connecting to the bridge", async () => {
   const dir = tmp();
   try {
@@ -617,4 +647,10 @@ test("a headless run never defaults a gate mode and refuses prompt, which nobody
     assert.match(launch("--gates=prompt").stderr, /print mode has none/);
     assert.equal(spawnSync(process.execPath, [RUN, "--dry-run", `--project-root=${dir}`, "--run-id=t"], { encoding: "utf8" }).status, 0, "a dry run still prints the invocation");
   } finally { cleanup(dir); }
+});
+
+test("a brownfield handover names the run's id, project root, output and code directories", () => {
+  const h = renderHandover({ mode: "brownfield", intent: "bugfix", runId: "b1", projectRoot: "/p", outputDir: "/p/.sdlc/runs/b1", codeDir: "/p" });
+  for (const line of ["run_id: b1", "project_root: /p", "output_dir: /p/.sdlc/runs/b1", "code_dir: /p"]) assert.ok(h.includes(line), line);
+  assert.ok(!renderHandover({ mode: "greenfield", runId: "g1", projectRoot: "/p" }).includes("project_root"), "greenfield needs none");
 });

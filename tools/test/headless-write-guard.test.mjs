@@ -18,10 +18,28 @@ const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const WRITE_CONTRACT = join(ROOT, "plugin", "scripts", "write-contract.mjs");
 const CONTRACT = { allowlist: ["src/**"], off_limits: ["secrets/**"] };
 
-test("changedSince lists files whose status changed, the plugin's own .sdlc/ aside", () => {
-  const before = [" M src/a.ts", "?? notes.txt"];
-  const after = [" M src/a.ts", "?? notes.txt", " M README.md", "?? src/b.ts", "?? .sdlc/runs/r1/x.json"];
-  assert.deepEqual(changedSince(before, after), ["README.md", "src/b.ts"]);
+test("changedSince lists files whose status or content changed, the plugin's own .sdlc/ aside", () => {
+  const before = new Map([["src/a.ts", " M|1|10"], ["notes.txt", "??|1|5"], ["src/dirty.ts", " M|1|7"]]);
+  const after = new Map([["src/a.ts", " M|1|10"], ["notes.txt", "??|1|5"], ["src/dirty.ts", " M|2|9"], ["README.md", " M|2|3"], ["src/b.ts", "??|2|1"], [".env", "!!|2|4"], [".sdlc/runs/r1/x.json", "??|2|1"]]);
+  assert.deepEqual(changedSince(before, after), [".env", "README.md", "src/b.ts", "src/dirty.ts"], "a dirty file written again, and an ignored .env, both show");
+});
+
+test("the snapshot sees ignored files a run writes", async () => {
+  const { gitStatus } = await import("../../plugin/agy/writeGuard.mjs");
+  const { writeFileSync } = await import("node:fs");
+  const dir = mkdtempSync(join(tmpdir(), "hwg-git-"));
+  try {
+    spawnSync("git", ["init", "-q"], { cwd: dir });
+    writeFileSync(join(dir, ".gitignore"), ".env\ndist/\n");
+    const before = gitStatus(dir);
+    writeFileSync(join(dir, ".env"), "K=1\n");
+    mkdirSync(join(dir, "dist"));
+    writeFileSync(join(dir, "dist", "x.js"), "1");
+    const changed = changedSince(before, gitStatus(dir));
+    assert.ok(changed.includes(".env"));
+    assert.ok(changed.includes("dist/"));
+    assert.deepEqual(outsideContract(changed.filter((p) => p !== ".gitignore"), { allowlist: ["src/**"], off_limits: ["dist/**"] }), [".env", "dist/"]);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
 test("outsideContract names off-limits and not-allowlisted paths, off-limits in any case", () => {
@@ -31,7 +49,7 @@ test("outsideContract names off-limits and not-allowlisted paths, off-limits in 
 test("without a contract for the run, the record says the guard was off and nothing more", () => {
   const dir = mkdtempSync(join(tmpdir(), "hwg-"));
   try {
-    const g = finishWriteGuard({ projectRoot: dir, runId: "r1", statusBefore: [], outcome: "completed", status: () => [] });
+    const g = finishWriteGuard({ projectRoot: dir, runId: "r1", statusBefore: new Map(), outcome: "completed", status: () => new Map() });
     assert.equal(g.state, "off");
     assert.match(g.reason, /print mode loads no hooks/);
     assert.equal(g.after_run_check, undefined);
@@ -44,7 +62,7 @@ test("with this run's contract, the record lists what the run changed outside it
     mkdirSync(join(dir, ".git"));
     const fz = spawnSync(process.execPath, [WRITE_CONTRACT, "--freeze", "--run-id=r1", `--allowlist=${JSON.stringify(CONTRACT.allowlist)}`, `--off-limits=${JSON.stringify(CONTRACT.off_limits)}`, `--project-root=${dir}`], { encoding: "utf8" });
     assert.equal(fz.status, 0, fz.stderr);
-    const g = finishWriteGuard({ projectRoot: dir, runId: "r1", statusBefore: [], outcome: "stopped", status: () => ["?? src/a.ts", " M package.json", "?? secrets/k"] });
+    const g = finishWriteGuard({ projectRoot: dir, runId: "r1", statusBefore: new Map(), outcome: "stopped", status: () => new Map([["src/a.ts", "??|1|1"], ["package.json", " M|1|1"], ["secrets/k", "??|1|1"]]) });
     assert.deepEqual(g.after_run_check, { files_changed: 3, outside_contract: ["package.json", "secrets/k"] });
     assert.equal(g.contract_closed, "stopped");
     assert.equal(contractState(dir).binding, false, "the run's contract no longer holds the project");

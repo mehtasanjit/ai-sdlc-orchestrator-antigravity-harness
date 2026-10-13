@@ -104,6 +104,18 @@ test("with a run id, only that run's events count toward its cap", () => {
   );
 });
 
+test("a telemetry file in a run's own folder counts every event, so a mis-stamped pass_id cannot hide spend", async () => {
+  const { mkdirSync } = await import("node:fs");
+  const dir = mkdtempSync(join(tmpdir(), "mmo-cap-runfolder-"));
+  try {
+    const runDir = join(dir, ".sdlc", "runs", "r1");
+    mkdirSync(runDir, { recursive: true });
+    const path = join(runDir, "telemetry.jsonl");
+    writeFileSync(path, [line({ pass: "r1", cost_usd: 30 }), line({ pass: "typo", cost_usd: 30 })].join("\n") + "\n");
+    assert.equal(checkRunCostCap(50, path, "r1").allowed, false, "the typo'd $30 still counts");
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
 test("the refusal names the spend, the cap and the file, and says no model was called", () => {
   const check = evaluateRunCostCap(50, [line({ cost_usd: 51.25 })]);
   const message = runCostCapRefusal(check, "/runs/r1/telemetry.jsonl");

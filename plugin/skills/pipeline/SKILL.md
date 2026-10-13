@@ -49,6 +49,7 @@ node "${MMO_PLUGIN_ROOT}/agy/dispatch.mjs" \
   --out=<path-for-result.json> \
   --policy=<policy> \
   --project-root="<project_root>" \
+  --run-id=<run_id> \
   --telemetry="<output_dir>/telemetry.jsonl"
 ```
 
@@ -359,12 +360,14 @@ cost lines; it never computes them.
 1. **Interactive: collect your own usage, then run the manifest, before you write `SUMMARY.md`.**
 
    ```
-   node "${MMO_PLUGIN_ROOT}/agy/collect-driver-usage.mjs" "<output_dir>" --run-id=<run_id> --project-root="<project_root>"
+   node "${MMO_PLUGIN_ROOT}/agy/collect-driver-usage.mjs" "<output_dir>" --run-id=<run_id> --project-root="<project_root>" --since=<run_started_at>
    node "${MMO_PLUGIN_ROOT}/agy/manifest.mjs" "<output_dir>" --policy=<policy> --run-id=<run_id>
    ```
 
    The first reads this session's model calls from agy's local conversation record and writes the
-   modeled driver line; without it the driver line is `NOT MEASURED`.
+   modeled driver line; without it the driver line is `NOT MEASURED`. `<run_started_at>` is the
+   time the entry command recorded at its first step, so the setup, pre-check and discovery calls
+   before the run folder existed are counted too.
 
    It writes `manifest.json` and prints one labelled line per wallet, for example
    `gemini workers cash $0.59569 · claude worker modeled $5.600058 · driver NOT MEASURED`.

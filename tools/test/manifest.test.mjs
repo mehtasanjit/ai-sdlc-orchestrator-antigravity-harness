@@ -433,7 +433,7 @@ test("a directory shared by two runs books only this run's events and this run's
     const m = buildHarnessManifest({ runDir: dir, runId: "r1", env: { ANTHROPIC_API_KEY: "k", GEMINI_API_KEY: "g" }, now: () => "N" });
     assert.equal(m.total_cost_usd, 0.053125, "run r0's $80 is not in r1's figure");
     assert.equal(m.cost.driver_modeled_usd, 0.001418, "run r0's driver turn is not in r1's driver line");
-    assert.deepEqual(m.harness.other_runs_in_directory, ["r0"]);
+    assert.deepEqual(m.harness.other_runs_in_directory, [{ run: "r0", dispatched_events: 2, dispatched_cost_usd: 80 }], "another run's dollars are named, never dropped silently");
 
     const r0 = buildHarnessManifest({ runDir: dir, runId: "r0", env: { ANTHROPIC_API_KEY: "k", GEMINI_API_KEY: "g" }, now: () => "N" });
     assert.equal(r0.total_cost_usd, 80);
