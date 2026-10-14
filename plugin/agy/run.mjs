@@ -268,13 +268,28 @@ export function defaultCodeDir(projectRoot, mode) {
  * run (an `--output-dir` reused across runs) is older than this run's start
  * and does not mark this run complete.
  */
-export function runIsComplete(outputDir, since = null, { exists = existsSync, stat = statSync } = {}) {
+export function runIsComplete(outputDir, since = null, { before = null, exists = existsSync, stat = statSync, read = readFileSync } = {}) {
   const path = join(outputDir, "SUMMARY.md");
   if (!exists(path)) return false;
+  // A summary already in the folder when a fresh launch began belongs to an
+  // earlier run however close its mtime is; only a change to it is this run's.
+  if (before) return !sameSummary(before, summaryState(path, { stat, read }));
   if (!since) return true;
   // A second's slack for filesystems that store whole-second mtimes.
   return stat(path).mtimeMs >= Date.parse(since) - 1000;
 }
+
+/** SUMMARY.md as a fresh launch found it, or null when there was none. */
+export function summaryAtLaunch(outputDir, { exists = existsSync, stat = statSync, read = readFileSync } = {}) {
+  const path = join(outputDir, "SUMMARY.md");
+  return exists(path) ? summaryState(path, { stat, read }) : null;
+}
+
+function summaryState(path, { stat, read }) {
+  return { mtimeMs: stat(path).mtimeMs, text: String(read(path, "utf8")) };
+}
+
+const sameSummary = (a, b) => a.mtimeMs === b.mtimeMs && a.text === b.text;
 
 /**
  * `onStdout` / `onStderr` receive each chunk as it arrives, so the launcher
@@ -581,6 +596,7 @@ async function main(args) {
   const prior = priorInvocations(outputDir, resumeFrom);
   assertResumable(prior, { slug, policyName });
   const started = prior.started_at ?? new Date().toISOString();
+  const staleSummary = resumeFrom ? null : summaryAtLaunch(outputDir);
   const launches = [...prior.invocations];
   const statusBefore = gitStatus(projectRoot);
 
@@ -647,7 +663,7 @@ async function main(args) {
     let invocations = 1;
     provisional(conversationId);
 
-    while (!interrupted && invocations < maxTurns && result.status === 0 && conversationId && !runIsComplete(outputDir, started)) {
+    while (!interrupted && invocations < maxTurns && result.status === 0 && conversationId && !runIsComplete(outputDir, started, { before: staleSummary })) {
       console.log(`run ${runId}: session incomplete after invocation ${invocations} (no SUMMARY.md yet) — resuming ${conversationId}`);
       result = await launch(
         buildAgyArgs({ slug, promptText: RESUME_PROMPT, projectRoot, outputDir, printTimeout, resumeConversationId: conversationId }),
@@ -655,7 +671,7 @@ async function main(args) {
       invocations += 1;
       provisional(conversationId);
     }
-    const completed = runIsComplete(outputDir, started);
+    const completed = runIsComplete(outputDir, started, { before: staleSummary });
     if (!completed) {
       console.log(
         `run ${runId}: stopped after ${invocations} invocation(s) without this run's SUMMARY.md — ` +
