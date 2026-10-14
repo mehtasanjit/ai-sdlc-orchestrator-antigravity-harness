@@ -81,6 +81,7 @@ One JSON object per line. Key fields on a dispatched line:
   "module": "ping",
   "model": "gemini-3.8-flash",
   "model_id": "flash-completion",
+  "adapter": "mcp:model-dispatch",
   "tier": "mechanical",
   "provenance": "vendor",
   "routed_by": "policy",
@@ -99,6 +100,7 @@ One JSON object per line. Key fields on a dispatched line:
 Fields the report reads: `phase`, `provenance`, `input_tokens`, `input_tokens_cached`, `input_tokens_cache_write`, `output_tokens`, `cost_usd`, `success`, `retry_count`. Everything else is there for downstream analysis.
 
 - `model` is the vendor's model name; `model_id` is the policy leaf that dispatched. They differ when a policy offers two doors to the same model — `flash-completion` and `flash-agsdk-worker` both carry `"model": "gemini-3.8-flash"`. Group by `model_id` when the door matters; `routing.select` records the choice that led there.
+- `adapter` is the policy adapter that ran the call. The manifest books each event to a cost line from it. Events written before the field existed lack it, and the manifest falls back to the policy snapshot, then to the `claude-` or `gemini-` prefix of `model`.
 - `price_basis` is `list` (the dated price list in [plugin/mcp/model-dispatch/src/prices.ts](../plugin/mcp/model-dispatch/src/prices.ts)) or `custom` (the policy's `pricing:` block under `pricing_override: true`).
 - An Opus line (the `claude-cli` adapter) adds `cli_reported_cost_usd` — Claude Code's own figure for the call, kept as a cross-check and never booked — and `ttl_split` (`transcript`, `approximate` or `no_cache_writes`) saying how the 5-minute / 1-hour cache-write buckets were told apart. `input_tokens_cache_write_1h` holds the 1-hour share when it is known; it bills at 2× input instead of 1.25×.
 - `provenance: "none"` with `task_type: "in_session"` or `"skipped"` is a phase the conductor logged without dispatching (`dispatch.mjs --log-phase`). Zero tokens, zero cost; its work, if any, accrues to the driver loop.
@@ -173,7 +175,7 @@ The dispatched rollup, then three blocks this harness adds.
 | `dispatched_cash_usd` | Bridge dispatches that a vendor invoiced. On arm A or B this equals `total_cost_usd`. On the seat the Opus line is subtracted out, because it was not invoiced either |
 | `driver_modeled_usd` | The conductor's loop at the driver card |
 | `claude_seat_modeled_usd` | Present only on the seat: the Opus line, priced at the Anthropic card, no invoice |
-| `lines[]` | Three entries — `driver`, `gemini_workers`, `claude_worker` — each with `kind` (`cash` or `modeled`), the wallet, models, tokens, `cost_usd`, and on the modeled ones a `basis` sentence |
+| `lines[]` | Three entries — `driver`, `gemini_workers`, `claude_worker` — each with `kind` (`cash` or `modeled`), the wallet, models, tokens, `cost_usd`, and on the modeled ones a `basis` sentence. A fourth, `unclassified`, appears only when an event names no known worker adapter and no `claude-` or `gemini-` model; its dollars stay off both worker lines |
 | `note` | The rule, restated in the file itself: the cash figure and the modeled figures are different kinds of dollars and are not summed |
 
 Rebuild the manifest any time with `node plugin/agy/manifest.mjs <run-dir> --policy=<name> --run-id=<id>`; it is idempotent over the run directory.

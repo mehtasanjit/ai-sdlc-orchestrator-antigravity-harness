@@ -66,10 +66,33 @@ export function geminiDoor(policy, env = process.env) {
  * Adapters that dispatch a Claude worker, and so put their model's dollars on
  * the Claude cost line. Mirrors the bridge's adapter registry
  * (plugin/mcp/model-dispatch/src/adapters/index.ts), which is the source of
- * truth; the two trees do not import each other. A policy naming an adapter
- * missing from here would have its Claude spend silently counted as Gemini.
+ * truth; the two trees do not import each other. An adapter missing from
+ * both sets lands on the `unclassified` line, never on a worker's.
  */
 export const CLAUDE_WORKER_ADAPTERS = new Set(["claude-agent-sdk", "claude-cli"]);
+export const GEMINI_WORKER_ADAPTERS = new Set(["mcp:model-dispatch", "antigravity-worker"]);
+
+/**
+ * The cost line one bridge event belongs to, from what the event itself
+ * recorded: its adapter, else its leaf or model in the policy, else the
+ * vendor prefix of its model name. Interactive runs leave no policy
+ * snapshot and events older than the adapter stamp carry none, so the name
+ * is the last word for them.
+ */
+export function workerLineOf(event, policy = null) {
+  const models = policy?.models ?? [];
+  const adapter = event.adapter
+    ?? (event.model_id != null ? models.find((m) => m.id === event.model_id)?.adapter : undefined)
+    ?? (event.model != null ? models.find((m) => m.model_name === event.model)?.adapter : undefined);
+  if (adapter) {
+    if (CLAUDE_WORKER_ADAPTERS.has(adapter)) return "claude_worker";
+    if (GEMINI_WORKER_ADAPTERS.has(adapter)) return "gemini_workers";
+    return "unclassified";
+  }
+  if (/^claude-/.test(event.model)) return "claude_worker";
+  if (/^gemini-/.test(event.model)) return "gemini_workers";
+  return "unclassified";
+}
 
 /** The three lines. `dispatched` are bridge events (no orchestrator tier). */
 /**
@@ -81,9 +104,6 @@ export const UNMEASURED_DRIVER_BASIS =
   "NOT MEASURED: no headless launcher record (driver-manifest.json). An interactive agy session gives the plugin no usage counters (p1 checks 1, 13), so the conductor's own tokens are in no figure — unmeasured, never free";
 
 export function costLines({ dispatched, modeled, policy, pin, env = process.env, login = null, driverUsage = null, driverMeasured = modeled.length > 0 || driverUsage != null }) {
-  const claudeModels = new Set(
-    (policy?.models ?? []).filter((m) => CLAUDE_WORKER_ADAPTERS.has(m.adapter)).map((m) => m.model_name),
-  );
   const sum = (events) => ({
     cost_usd: r6(events.reduce((s, e) => s + (e.cost_usd ?? 0), 0)),
     calls: events.length,
@@ -92,8 +112,10 @@ export function costLines({ dispatched, modeled, policy, pin, env = process.env,
     output_tokens: events.reduce((s, e) => s + (e.output_tokens ?? 0), 0),
   });
   const billed = dispatched.filter((e) => e.model && e.provenance !== "none");
-  const claude = billed.filter((e) => claudeModels.has(e.model));
-  const gemini = billed.filter((e) => !claudeModels.has(e.model));
+  const on = (line) => billed.filter((e) => workerLineOf(e, policy) === line);
+  const claude = on("claude_worker");
+  const gemini = on("gemini_workers");
+  const unclassified = on("unclassified");
   const wallet = claudeWallet(env, login);
   const door = geminiDoor(policy, env);
   const seat = wallet.arm === "seat";
@@ -115,6 +137,10 @@ export function costLines({ dispatched, modeled, policy, pin, env = process.env,
     { line: "claude_worker", kind: seat ? "modeled" : "cash", wallet: wallet.wallet, arm: wallet.arm, models: [...new Set(claude.map((e) => e.model))], ...sum(claude),
       cli_reported_cost_usd: r6(claude.reduce((s, e) => s + (e.cli_reported_cost_usd ?? 0), 0)),
       ...(seat ? { basis: `MODELED: the Claude worker ran on a claude.ai ${wallet.subscription ?? ""} seat — tokens priced at the Anthropic card, no invoice exists` } : {}) },
+    ...(unclassified.length
+      ? [{ line: "unclassified", kind: "cash", models: [...new Set(unclassified.map((e) => e.model))], adapters: [...new Set(unclassified.map((e) => e.adapter ?? null))], ...sum(unclassified),
+          basis: "UNCLASSIFIED: no known worker adapter or model prefix on these events, so they are on neither worker's line; counted as cash" }]
+      : []),
   ];
 }
 
