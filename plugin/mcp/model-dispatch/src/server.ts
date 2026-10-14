@@ -280,7 +280,10 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
               "project_root.",
           },
           cache_context: { type: "string", description: "Key for explicit context cache (e.g. 'pass2:workforce-ops')" },
-          telemetry_path: { type: "string", description: "JSONL file to append telemetry to" },
+          telemetry_path: {
+            type: "string",
+            description: "The run's <output_dir>/telemetry.jsonl. Required: a paid call with no telemetry event is in no cost line and escapes the cost cap.",
+          },
           log_level: {
             type: "string",
             enum: ["error", "warn", "info", "debug", "trace"],
@@ -288,7 +291,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
           },
           verbose: { type: "boolean", description: "Shorthand for log_level: debug." },
         },
-        required: ["packet"],
+        required: ["packet", "telemetry_path"],
       },
     },
     {
@@ -407,6 +410,12 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
     switch (name) {
       case "execute_with_model": {
         const a = args as any;
+        if (typeof a.telemetry_path !== "string" || !a.telemetry_path) {
+          throw new Error(
+            "execute_with_model: telemetry_path is required — the call is paid, and a paid call with no " +
+              "telemetry event is in no cost line and escapes the cost cap. Pass the run's <output_dir>/telemetry.jsonl.",
+          );
+        }
         const packet = validateTaskPacket(a.packet);
         const policy = ensurePolicy(a.policy_name, a.project_root, a.policy_path);
         const decision = pickModel(

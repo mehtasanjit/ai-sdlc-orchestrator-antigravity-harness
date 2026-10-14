@@ -197,6 +197,27 @@ test("another run's spend in the same telemetry file does not refuse this run's 
   assert.match(error.message, new RegExp(`${NO_KEY_ENV} not set`), "it got past the cap check");
 });
 
+test("execute_with_model refuses a dispatch with no telemetry_path, before any adapter", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "mmo-cost-cap-server-"));
+  const policyPath = join(dir, "policy.yaml");
+  writeFileSync(policyPath, CAPPED_POLICY);
+  delete process.env[NO_KEY_ENV];
+  const bridge = await connectBridge({ env: { MMO_LOG_LEVEL: "error" } });
+  try {
+    for (const telemetry of [{}, { telemetry_path: "" }]) {
+      const error = await bridge
+        .callTool("execute_with_model", { packet: CAP_PACKET, policy_path: policyPath, ...telemetry })
+        .then(() => null, (err) => err);
+      assert.ok(error, "the dispatch must be refused");
+      assert.match(error.message, /telemetry_path is required/);
+      assert.doesNotMatch(error.message, new RegExp(NO_KEY_ENV), "the adapter was never constructed");
+    }
+  } finally {
+    await bridge.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 // --- server wiring (dist-grep: server.js starts a Server on import) ---
 
 const SERVER = join(dirname(fileURLToPath(import.meta.url)), "..", "dist", "server.js");
