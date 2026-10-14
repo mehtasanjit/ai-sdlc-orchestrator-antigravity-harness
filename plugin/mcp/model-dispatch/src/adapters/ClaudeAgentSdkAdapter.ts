@@ -169,7 +169,6 @@ export function agentSdkOptions(
     persistSession: false,
   };
   const effort = config.reasoning?.effort;
-  // Haiku 4.5 rejects an effort level; the policy omits `reasoning` there.
   if (effort) options.effort = effort;
   if (config.prompt_cache_ttl) options.settings = { promptCacheTtl: config.prompt_cache_ttl };
   if (extra.cwd) options.cwd = extra.cwd;

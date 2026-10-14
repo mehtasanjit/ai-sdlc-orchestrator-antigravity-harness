@@ -469,8 +469,7 @@ test("the dispatched event copies the attempt's session record", () => {
 });
 
 test("effort is omitted when the policy sets no reasoning tier", () => {
-  // Haiku 4.5 rejects an effort level, so the policy leaves `reasoning` off.
-  const opts = agentSdkOptions({ model_name: "claude-haiku-4-5" });
+  const opts = agentSdkOptions({ model_name: "claude-opus-5" });
   assert.equal("effort" in opts, false);
 });
 
