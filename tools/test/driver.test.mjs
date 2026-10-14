@@ -25,6 +25,7 @@ import {
   renderHandover,
   validIntents,
   runIsComplete,
+  summaryAtLaunch,
   envPresence,
   redactPrompt,
   pinGateMessage,
@@ -222,6 +223,20 @@ test("a SUMMARY.md older than this run's start does not mark this run complete",
   const stat = () => ({ mtimeMs: Date.parse("2026-10-12T10:00:00Z") });
   assert.equal(runIsComplete("/o", "2026-10-13T09:00:00Z", { exists, stat }), false, "an earlier run's summary");
   assert.equal(runIsComplete("/o", "2026-10-12T09:00:00Z", { exists, stat }), true, "written after this run started");
+});
+
+test("a SUMMARY.md a fresh launch found in its folder ends the run only once it changes, however close its mtime", () => {
+  const exists = () => true;
+  const at = Date.parse("2026-10-14T04:44:36.200Z");
+  const since = "2026-10-14T04:44:36.500Z"; // inside the one-second slack
+  const before = { mtimeMs: at, text: "# first" };
+  const unchanged = { exists, stat: () => ({ mtimeMs: at }), read: () => "# first" };
+  assert.equal(runIsComplete("/o", since, unchanged), true, "without the snapshot the slack would take it as this run's");
+  assert.equal(runIsComplete("/o", since, { ...unchanged, before }), false, "the earlier run's summary, untouched");
+  assert.equal(runIsComplete("/o", since, { exists, stat: () => ({ mtimeMs: at + 900 }), read: () => "# third", before }), true, "rewritten by this run");
+  assert.equal(runIsComplete("/o", since, { exists, stat: () => ({ mtimeMs: at }), read: () => "# third", before }), true, "rewritten within the same whole-second mtime");
+  assert.equal(summaryAtLaunch("/o", { exists: () => false }), null);
+  assert.deepEqual(summaryAtLaunch("/o", unchanged), before);
 });
 
 test("each run gets its own folder; brownfield edits the project root, greenfield writes src/", async () => {
