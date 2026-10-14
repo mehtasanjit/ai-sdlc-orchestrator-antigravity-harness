@@ -34,6 +34,7 @@ import {
   meetsMinVersion, mcpPaths, MIN_AGY_VERSION, AGENT_WORKER_SELECT, observePolicy, claudeArmState, pluginDiscoveryState, probeClaudeLogin,
 } from "../plugin/agy/verify-setup.mjs";
 import { writeMmoSelectFile } from "../plugin/agy/mmoSelect.mjs";
+import { isMain } from "../plugin/scripts/lib/is-main.mjs";
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const PLUGIN_ROOT = join(ROOT, "plugin");
@@ -271,6 +272,6 @@ async function main(args) {
   return blocked ? 1 : 0;
 }
 
-if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
+if (isMain(import.meta.url)) {
   process.exit(await main(parseArgs(process.argv.slice(2))));
 }
