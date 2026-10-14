@@ -49,6 +49,7 @@ node "${MMO_PLUGIN_ROOT}/agy/dispatch.mjs" \
   --out=<path-for-result.json> \
   --policy=<policy> \
   --project-root="<project_root>" \
+  --run-id=<run_id> \
   --telemetry="<output_dir>/telemetry.jsonl"
 ```
 
@@ -68,6 +69,39 @@ toolset, fall back to the command above.
 The rest of this playbook says "dispatch a packet" and shows the command form; read it as either
 route. Every phase's real work goes through one of them — a phase that silently becomes your own
 prose is invisible to the cost record and defeats the measurement this harness exists for.
+
+---
+
+## Run start and end markers (interactive)
+
+The manifest's session window, its `harness.status`, and the driver collector's window come from
+two lines in `<output_dir>/orchestrator.log`. Write them with the log script, never by hand. The
+script writes to `<project_root>/.sdlc/runs/<run_id>/orchestrator.log`, which is `<output_dir>`'s
+log on the default layout.
+
+Before Phase -1 on greenfield (on brownfield the guide logged it at Gate 0; do not log it twice):
+
+```
+node "${MMO_PLUGIN_ROOT}/scripts/mmo-log.mjs" --event=run.start --run-id=<run_id> --started-at=<run_started_at> --mode=greenfield --policy=<policy> --project-root="<project_root>"
+```
+
+After Gate 4 is answered `accept`, or when the run stops at any gate on `abort`, log the end,
+collect your own usage again, and rebuild the manifest, in this order:
+
+```
+node "${MMO_PLUGIN_ROOT}/scripts/mmo-log.mjs" --event=run.end --run-id=<run_id> --outcome=<completed|aborted> --project-root="<project_root>"
+node "${MMO_PLUGIN_ROOT}/agy/collect-driver-usage.mjs" "<output_dir>" --run-id=<run_id> --project-root="<project_root>" --since=<run_started_at>
+node "${MMO_PLUGIN_ROOT}/agy/manifest.mjs" "<output_dir>" --policy=<policy> --run-id=<run_id>
+```
+
+The first collection ran before `SUMMARY.md`, so it stopped before your calls for the final report
+and Gate 4. This one reads up to the `run.end` line and replaces it, so the driver line covers the
+whole run. The rebuilt manifest is the run's final record: the worker lines are the ones
+`SUMMARY.md` already copied, the driver line is now complete, and it adds the run's start, end and
+gate outcome. Tell the user the lines it printed, saying the driver line is the final one. If
+`manifest.mjs` warns that the driver line stops before the run ended, run the last two commands
+again. **Headless: skip all three.** The launcher records the run's window in
+`driver-manifest.json` and builds the manifest after you exit.
 
 ---
 
@@ -249,11 +283,31 @@ For each packet, in dependency order:
 Dispatch it with the command above. The bridge routes per policy — you do not choose the model.
 Validate the returned structured output against the schema; if invalid, construct a *refined*
 packet (new id, `retry_count+1`, with the validation error appended to instruction) and
-re-dispatch. After 2 mechanical-tier retries fail, the policy escalates to the premium tier
-automatically (rule with `retry_count: { gte: 2 }`) — the routing decision is the policy's, and
-the escalated packet dispatches exactly like every other one.
+re-dispatch. The refined packet keeps the original `phase` and `task_type`: a new label
+(`code_fix`, `test_refinement`, ...) matches no rule, falls to the policy default, and is
+flagged `routing.fallback` in the run record. After 2 mechanical-tier retries fail, the policy
+escalates to the premium tier automatically (rule with `retry_count: { gte: 2 }`) — the routing
+decision is the policy's, and the escalated packet dispatches exactly like every other one.
 
 Write the returned file content to disk at the packet's stated `artifact_path`.
+
+**Brownfield: record every write for `/mmo:revert`.** Gate 0 ran `write-provenance.mjs --init`.
+Around every file you write into the project — a packet's `artifact_path`, a refinement, a fix in
+Phase 7, an `.env.example` key — run, with the run's id and the repo root:
+
+```bash
+node "${MMO_PLUGIN_ROOT}/scripts/write-provenance.mjs" --before --run-id=<run_id> --path=<artifact_path> --packet-id=<packet id> --project-root="<repo-root>"
+#   ... write the file ...
+node "${MMO_PLUGIN_ROOT}/scripts/write-provenance.mjs" --after --run-id=<run_id> --path=<artifact_path> --project-root="<repo-root>"
+```
+
+`--before` takes the file's first snapshot in this run (its hash, and a backup copy when git cannot
+restore it) and keeps it: a retry or a second packet on the same file never replaces it, so
+`/mmo:revert` restores the file as it was before the run, not an earlier attempt. A tooling step
+that writes files itself (a deps run's install rewriting `package.json` and the lockfile) gets the
+same `--before` for each file it writes, then the step, then `--after`. Files under the run's own
+`.sdlc/runs/<run_id>/` are the record, not the project: they need no provenance. Greenfield runs
+skip this; their whole tree is new.
 
 ### Phase 6 — senior_code_review
 
@@ -326,14 +380,29 @@ Phase 6.
 
 ### Phase 9 — generate_final_report
 
+**Brownfield: close the undo record first**, after the last project write and before the report:
+
+```bash
+node "${MMO_PLUGIN_ROOT}/scripts/write-provenance.mjs" --finalize --run-id=<run_id> --project-root="<repo-root>"
+```
+
+It records the git head after the run and the commits between the two heads, which `/mmo:revert`
+needs to tell this run's changes from a later run's.
+
 **`manifest.json` is written by code, never by you, and it comes first.** `SUMMARY.md` copies its
 cost lines; it never computes them.
 
-1. **Interactive: run the manifest before you write `SUMMARY.md`.**
+1. **Interactive: collect your own usage, then run the manifest, before you write `SUMMARY.md`.**
 
    ```
+   node "${MMO_PLUGIN_ROOT}/agy/collect-driver-usage.mjs" "<output_dir>" --run-id=<run_id> --project-root="<project_root>" --since=<run_started_at>
    node "${MMO_PLUGIN_ROOT}/agy/manifest.mjs" "<output_dir>" --policy=<policy> --run-id=<run_id>
    ```
+
+   The first reads this session's model calls from agy's local conversation record and writes the
+   modeled driver line; without it the driver line is `NOT MEASURED`. `<run_started_at>` is the
+   time the entry command recorded at its first step, so the setup, pre-check and discovery calls
+   before the run folder existed are counted too.
 
    It writes `manifest.json` and prints one labelled line per wallet, for example
    `gemini workers cash $0.59569 · claude worker modeled $5.600058 · driver NOT MEASURED`.
@@ -343,7 +412,8 @@ cost lines; it never computes them.
    has priced your own loop from the agy stream.
 2. **Write `<output_dir>/SUMMARY.md`:**
    - **Cost.** Interactive: one bullet per line `manifest.mjs` printed, copied with its kind and
-     figure exactly as printed. Headless: one sentence saying the labelled cost lines are in
+     figure exactly as printed. Mark the driver bullet "through the final report": it does not yet
+     hold your calls for Gate 4, which the collection after `run.end` adds to `manifest.json`. Headless: one sentence saying the labelled cost lines are in
      `manifest.json` → `cost.lines`, written by the launcher after this session. Never compute a
      total, never add a `modeled` figure to a `cash` one, and never put a figure on a
      `NOT MEASURED` line. They are different kinds of dollars; their sum is neither the bill nor
@@ -353,7 +423,8 @@ cost lines; it never computes them.
    - Links to the key artifacts.
 
 Your own loop cost is not yours to compute. Headless runs get a modeled driver line from the
-launcher; interactive runs carry the driver as `NOT MEASURED` (see the telemetry contract below).
+launcher; interactive runs get it from `collect-driver-usage.mjs`, and carry the driver as
+`NOT MEASURED` only when that found nothing.
 
 ---
 
@@ -371,7 +442,7 @@ launcher; interactive runs carry the driver as `NOT MEASURED` (see the telemetry
   acceptance: ["<testable bullet>", ...],
   budget: { maxInputTokens: 4000, maxOutputTokens: 3000 },  // codegen initial; adapter doubles on max_tokens truncation up to 3× (see below)
   retry_count: 0,
-  pass_id: "pass1" | "pass2",
+  pass_id: "<run_id>",  // this run's id: the folder name under .sdlc/runs/, and every --run-id
   intent: "docs" | "bugfix" | "feature-extend" | "feature-new" | "refactor" | "test" | "deps"  // brownfield only — omit entirely on greenfield packets
 }
 ```
@@ -427,7 +498,10 @@ with `phase: <name>, task_type: "skipped"` so downstream summaries stay complete
 
 ## HITL gate prompt templates
 
-**Gate delivery.** Interactive, you print the gate block yourself and wait for the user's reply.
+**Gate delivery.** Interactive, you print the gate block yourself and wait for the user's reply,
+then append one line with their decision to `<output_dir>/gates.jsonl`:
+`{"gate": <N>, "artifact": "<file the gate reviewed>", "decision": "approved|revise|aborted|accepted", "note": "<one line>"}`
+(`accepted` for Gate 4's `accept`; the manifest reads Gate 4's last line to mark the run completed).
 Every gate is a fenced `> ⏸ **HITL Gate <N> — <Title>**` block (templates below), printed
 verbatim. Headless, the conductor prompt names the gate mode (`auto-approve` or `auto-abort`):
 print the block anyway, apply the mode's decision, and append the line to `<output_dir>/gates.jsonl`
@@ -465,9 +539,9 @@ mid-gate, session-hydrate detects a non-terminal state and re-prompts on the nex
 >
 > Reply: `approved`, `revise: <comments>`, or `abort`.
 
-On `approved`, freeze the write contract to `.sdlc/local/write-contract.json`
-(schema: `{schema_version:1, active:true, mode:"brownfield", run_id, strict:true, allowlist,
-off_limits}`). Build `off_limits` by concatenating `.sdlc/project.json.off_limits_default`
+On `approved`, freeze the write contract by code with
+`node "${MMO_PLUGIN_ROOT}/scripts/write-contract.mjs" --freeze --run-id=<run_id> --allowlist='<JSON>' --off-limits='<JSON>' --project-root="$(pwd)"`
+(the brownfield guide's step 5); never write `.sdlc/local/write-contract.json` yourself. Build `off_limits` by concatenating `.sdlc/project.json.off_limits_default`
 (the project-level constants — `.env*`, `.mcp.json`, `node_modules/**`, etc., written by setup)
 with the AI-configs from `baseline.ai_configs_detected` and any ticket-specific paths the user
 added at Gate 0. The PreToolUse hook and the packet validator both read the merged list — the
@@ -568,15 +642,15 @@ event and never an ambiguous one:
 ```bash
 node "${MMO_PLUGIN_ROOT}/agy/dispatch.mjs" \
   --log-phase=<state> --task-type=skipped|in_session \
-  --module=<module> --reason='<why in one line>' \
+  --module=<module> --reason='<why in one line>' --run-id=<run_id> \
   --policy=<policy> --telemetry="<output_dir>/telemetry.jsonl" \
   --out="<output_dir>/<state>-skip-receipt.json"
 ```
 
 These carry `provenance: "none"` and all-zero tokens. That is not an estimate — it is the fact
 that no model call was made. Where such work did consume tokens, they were yours. A headless run
-counts them on the modeled driver line. An interactive run measures no driver usage at all (its
-manifest marks the driver line `NOT MEASURED`), so there they are in no figure. Either way the
+counts them on the modeled driver line; an interactive run counts them there too once
+`collect-driver-usage.mjs` has read agy's local record, and otherwise has them in no figure. Either way the
 row and its `--reason` string are the only record that the work happened and that you did it.
 
 **What is never in-session.** Packet planning (Phase 4) and the senior review's refinement

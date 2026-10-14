@@ -185,7 +185,18 @@ export class GeminiFlashAdapter implements ModelAdapter {
           cachedContentName: cacheName,
         });
       } catch (err: any) {
-        const failTokens = { input: estimateTokens(userPrompt), input_cached: 0, output: 0 };
+        const failure = describeVendorFailure(err);
+        // A call Google answered with an error status bills nothing. Vertex AI:
+        // "You're charged only for requests that return a 200 response code."
+        // (VERTEX_PRICING_URL); the Gemini API: "If your request fails with a
+        // 400 or 500 error, you won't be charged for the tokens used." A
+        // connection that failed with no response keeps the stated bound — the
+        // prompt billed as input — since the request may have been answered.
+        const answeredWithError = failure.error_status !== undefined && failure.error_status !== 200;
+        const neverSent = failure.error_code !== undefined && NEVER_SENT_CODES.has(failure.error_code);
+        const failTokens = answeredWithError || neverSent
+          ? { input: 0, input_cached: 0, output: 0 }
+          : { input: estimateTokens(userPrompt), input_cached: 0, output: 0 };
         attempts.push({
           attempt_number: attemptNumber,
           ceiling_used: ceiling,
@@ -195,6 +206,7 @@ export class GeminiFlashAdapter implements ModelAdapter {
           latency_ms: Date.now() - attemptStart,
           success: false,
           error: err?.message ?? String(err),
+          ...failure,
           price_basis: price.basis,
           thinking_level: thinkingLevel ?? null,
         });
@@ -332,4 +344,21 @@ function buildUserPrompt(packet: TaskPacket, headerInline: string): string {
   ]
     .filter(Boolean)
     .join("\n");
+}
+
+/** Node/undici codes of a request that never left this machine, so nothing reached Google to bill. */
+const NEVER_SENT_CODES = new Set(["ENOTFOUND", "ECONNREFUSED", "ENETUNREACH", "EHOSTUNREACH", "ENETDOWN", "EAI_AGAIN"]);
+
+/**
+ * A failed Gemini call, described by the vendor's own fields: the HTTP status
+ * on @google/genai's ApiError, and the Node/undici code of a connection that
+ * failed in transit (on the error or its `cause`). Nothing is read from the
+ * error's wording.
+ */
+export function describeVendorFailure(err: any): { error_status?: number; error_code?: string } {
+  const out: { error_status?: number; error_code?: string } = {};
+  if (typeof err?.status === "number") out.error_status = err.status;
+  const code = err?.cause?.code ?? err?.code;
+  if (typeof code === "string") out.error_code = code;
+  return out;
 }

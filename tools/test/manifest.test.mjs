@@ -11,7 +11,7 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { buildHarnessManifest, costLines, claudeWallet, describeCostLines, geminiDoor, workerLineOf, HARNESS_NAME, RUNTIME_NAME } from "../../plugin/agy/manifest.mjs";
+import { buildHarnessManifest, costLines, claudeWallet, describeCostLines, fallbackRouting, geminiDoor, pinRecord, workerLineOf, HARNESS_NAME, RUNTIME_NAME } from "../../plugin/agy/manifest.mjs";
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const POLICY = "antigravity-flash38-plus-opus5";
@@ -67,7 +67,7 @@ test("buildHarnessManifest keeps the bridge's shape and adds the harness block",
     assert.equal(m.harness.pin.slug, "gemini-3.8-flash-high");
     assert.equal(m.harness.pin.verified, false);
     assert.equal(m.harness.completed, true);
-    assert.equal(m.harness.gates, "auto-approve");
+    assert.equal(m.harness.gate_mode, "auto-approve");
     assert.match(m.harness.driver_cost_basis, /^MODELED/, "the console keys its caption on this prefix");
     assert.equal(m.harness.driver_cost_usd, 0.001418);
     assert.equal(m.harness.written_by, "plugin/agy/manifest.mjs");
@@ -281,7 +281,13 @@ test("an interactive run (no driver-manifest.json, no modeled lines) carries the
     assert.equal(m.usage.driver.provenance, "unmeasured");
     const r = spawnSync(process.execPath, [join(ROOT, "tools", "report.mjs"), dir], { encoding: "utf8" });
     assert.equal(r.status, 0, r.stderr);
+    assert.match(r.stdout, /Driver loop — not measured/);
     assert.match(r.stdout, /NOT MEASURED/);
+    assert.doesNotMatch(r.stdout, /modeled, not measured/);
+    const cli = spawnSync(process.execPath, [join(ROOT, "plugin", "agy", "manifest.mjs"), dir, `--policy=${POLICY}`, "--run-id=r1"], { encoding: "utf8" });
+    assert.equal(cli.status, 0, cli.stderr);
+    assert.match(cli.stdout, /· driver NOT MEASURED$/m, "the line the interactive conductor relays");
+    assert.doesNotMatch(cli.stdout, /driver modeled/);
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
@@ -296,6 +302,14 @@ test("a headless run whose record exists but reported no usage stays modeled, an
     assert.equal(m.cost.lines[0].kind, "modeled");
     assert.deepEqual(m.harness.driver_invocations_without_usage, [1]);
     assert.match(m.harness.driver_cost_basis, /invocation\(s\) 1 reported no usage/);
+    const r = spawnSync(process.execPath, [join(ROOT, "tools", "report.mjs"), dir], { encoding: "utf8" });
+    assert.equal(r.status, 0, r.stderr);
+    assert.match(r.stdout, /No driver turns recorded/);
+    assert.match(r.stdout, /invocation\(s\) 1 reported no usage/, "the notice prints even with no modeled turn");
+    rmSync(join(dir, "telemetry.jsonl"));
+    const bare = spawnSync(process.execPath, [join(ROOT, "tools", "report.mjs"), dir], { encoding: "utf8" });
+    assert.equal(bare.status, 0, "a driver record with lost usage is still a run to report, not a preflight halt");
+    assert.match(bare.stdout, /invocation\(s\) 1 reported no usage/);
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
@@ -391,4 +405,100 @@ test("on the seat the Claude line is modeled, leaves the cash figure, and the ca
     assert.equal(claudeWallet({}, login).arm, "seat");
     assert.equal(claudeWallet({ ANTHROPIC_API_KEY: "k" }, login).arm, "A");
   } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test("the driver line names the dated period it was priced at, and the harness block carries the model and reading checks", () => {
+  const dir = runDir();
+  try {
+    const modeled = JSON.parse(readFileSync(join(dir, "driver-cost-modeled.jsonl"), "utf8"));
+    writeFileSync(join(dir, "driver-cost-modeled.jsonl"), JSON.stringify({ ...modeled, price_basis: "list", price_period: { from: "2026-09-02", to: "2026-12-31" } }) + "\n");
+    const dm = JSON.parse(readFileSync(join(dir, "driver-manifest.json"), "utf8"));
+    writeFileSync(join(dir, "driver-manifest.json"), JSON.stringify({
+      ...dm, driver_reported_models: ["gemini-3.1-pro-high"], driver_model_mismatch: ["gemini-3.1-pro-high"],
+      driver_usage: { token_readings: { "cache-apart+thinking-apart (no_total)": 1 }, results_with_unproven_reading: 1, invocations: [], invocations_without_usage: [] },
+    }));
+    const m = buildHarnessManifest({ runDir: dir, env: {}, now: () => "N" });
+    assert.match(m.cost.lines[0].basis, /dated price list for gemini-3\.8-flash \(period 2026-09-02\.\.2026-12-31\)/);
+    assert.deepEqual(m.harness.driver_model_mismatch, ["gemini-3.1-pro-high"]);
+    assert.equal(m.harness.driver_results_with_unproven_reading, 1);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test("a directory shared by two runs books only this run's events and this run's launcher record", () => {
+  const dir = runDir();
+  try {
+    const other = (over) => JSON.stringify(ev({ pass: "r0", cost_usd: 40, ...over }));
+    writeFileSync(join(dir, "telemetry.jsonl"), readFileSync(join(dir, "telemetry.jsonl"), "utf8") + other({}) + "\n" + other({ model: "claude-opus-5", phase: "security_review" }) + "\n");
+    writeFileSync(join(dir, "driver-cost-modeled.jsonl"), readFileSync(join(dir, "driver-cost-modeled.jsonl"), "utf8") + JSON.stringify({ pass: "r0", tier: "orchestrator", provenance: "modeled", cost_usd: 9, input_tokens: 1, input_tokens_cached: 0, output_tokens: 1 }) + "\n");
+    const m = buildHarnessManifest({ runDir: dir, runId: "r1", env: { ANTHROPIC_API_KEY: "k", GEMINI_API_KEY: "g" }, now: () => "N" });
+    assert.equal(m.total_cost_usd, 0.053125, "run r0's $80 is not in r1's figure");
+    assert.equal(m.cost.driver_modeled_usd, 0.001418, "run r0's driver turn is not in r1's driver line");
+    assert.deepEqual(m.harness.other_runs_in_directory, [{ run: "r0", dispatched_events: 2, dispatched_cost_usd: 80 }], "another run's dollars are named, never dropped silently");
+
+    const r0 = buildHarnessManifest({ runDir: dir, runId: "r0", env: { ANTHROPIC_API_KEY: "k", GEMINI_API_KEY: "g" }, now: () => "N" });
+    assert.equal(r0.total_cost_usd, 80);
+    assert.equal(r0.harness.agy_invocations, null, "r1's launcher record is not r0's");
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test("fallback_cost_usd sums the dispatches no policy rule matched, one row per packet", () => {
+  const fb = { rule_index: -1, rule_reason: "Unrecognized task — fail safe to premium", fallback: true };
+  const events = [
+    ev({}),
+    ev({ task_id: "tp_fix", task_type: "code_fix", model: "claude-opus-5", model_id: "opus", routing: { ...ev({}).routing, ...fb }, cost_usd: 0.3 }),
+    ev({ task_id: "tp_fix", task_type: "code_fix", model: "claude-opus-5", model_id: "opus", routing: { ...ev({}).routing, ...fb }, cost_usd: 0.2 }),
+    // Written before the bridge stamped `fallback`: read from rule_index -1.
+    ev({ task_id: "tp_old", task_type: "new_file_add", model: "claude-opus-5", routing: { ...ev({}).routing, rule_index: -1 }, cost_usd: 0.1 }),
+    // A --log-phase row has rule_index -1 too, but is no dispatch.
+    ev({ task_id: "discovery-in_session", phase: "discovery", task_type: "in_session", routed_by: "manual", provenance: "none", routing: { ...ev({}).routing, rule_index: -1 }, cost_usd: 0 }),
+  ];
+  const r = fallbackRouting(events);
+  assert.equal(r.fallback_cost_usd, 0.6);
+  assert.deepEqual(r.fallback_packets.map((p) => [p.task_id, p.task_type, p.model_id, p.attempts, p.cost_usd]), [
+    ["tp_fix", "code_fix", "opus", 2, 0.5],
+    ["tp_old", "new_file_add", "claude-opus-5", 1, 0.1],
+  ]);
+  assert.deepEqual(fallbackRouting([ev({})]), { fallback_cost_usd: 0, fallback_packets: [] });
+});
+
+test("the manifest carries fallback_cost_usd and fallback_packets beside the dispatched rollup", () => {
+  const dir = runDir();
+  try {
+    writeFileSync(join(dir, "telemetry.jsonl"), readFileSync(join(dir, "telemetry.jsonl"), "utf8") + JSON.stringify(ev({
+      task_id: "tp_x", task_type: "dom_component", model: "claude-opus-5", model_id: "opus", cost_usd: 0.04,
+      routing: { policy_name: POLICY, policy_version: 1, rule_index: -1, rule_reason: "x", fallback: true },
+    })) + "\n");
+    const m = buildHarnessManifest({ runDir: dir, env: { ANTHROPIC_API_KEY: "k", GEMINI_API_KEY: "g" } });
+    assert.equal(m.fallback_cost_usd, 0.04);
+    assert.deepEqual(m.fallback_packets.map((p) => p.task_id), ["tp_x"]);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test("an interactive run's pin is verified from the models agy's conversation record names", () => {
+  const pin = { model: "gemini-3.8-flash", effort: "high", billing_mode: "seat" };
+  const none = pinRecord({ pin });
+  assert.equal(none.verified, false);
+  assert.equal(none.unverified_reason, "no_model_observed", "no collector ran: passed checks alone are not proof");
+  assert.deepEqual(none.observed_models, []);
+  const held = pinRecord({ pin, collector: { reported_models: ["gemini-3.8-flash"] } });
+  assert.equal(held.verified, true);
+  assert.equal(held.unverified_reason, undefined);
+  assert.equal(held.slug, "gemini-3.8-flash-high");
+  const wrong = pinRecord({ pin, collector: { reported_models: ["gemini-3.1-pro"], model_mismatch: ["gemini-3.1-pro"] } });
+  assert.deepEqual([wrong.verified, wrong.unverified_reason], [false, "model_mismatch"]);
+  assert.equal(pinRecord({}), null);
+});
+
+test("a launcher record stamped verified from the checks alone is re-derived from the models it names", () => {
+  const legacy = { pin: { model: "gemini-3.8-flash", effort: "high", slug: "gemini-3.8-flash-high", billing_mode: "seat", verified: true, pending_checks: [] } };
+  const blind = pinRecord({ driverManifest: { ...legacy, driver_reported_models: [] } });
+  assert.deepEqual([blind.verified, blind.unverified_reason], [false, "no_model_observed"]);
+  const seen = pinRecord({ driverManifest: { ...legacy, driver_reported_models: ["gemini-3.8-flash-high"] } });
+  assert.deepEqual([seen.verified, seen.unverified_reason, seen.observed_models], [true, undefined, ["gemini-3.8-flash-high"]]);
+  const local = pinRecord({ driverManifest: { ...legacy, driver_reported_models: [], driver_usage: { local_record: { models: ["gemini-3.8-flash"] } } } });
+  assert.equal(local.verified, true, "the local record's model counts as observed");
+  const off = pinRecord({ driverManifest: { ...legacy, driver_reported_models: ["gemini-3.1-pro"], driver_model_mismatch: ["gemini-3.1-pro"] } });
+  assert.deepEqual([off.verified, off.unverified_reason], [false, "model_mismatch"]);
+  const current = { pin: { ...legacy.pin, verified: false, unverified_reason: "no_model_observed", observed_models: [] } };
+  assert.equal(pinRecord({ driverManifest: current }), current.pin, "a record that already names its observed models is kept as written");
 });

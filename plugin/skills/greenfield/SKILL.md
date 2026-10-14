@@ -123,10 +123,16 @@ expected depth is unclear.
 
 # 3. Confirm where the output goes
 
+Record when this run started, `date -u +%Y-%m-%dT%H:%M:%SZ`, and keep it as `run_started_at`: the
+driver-usage collector at Phase 9 counts your own model calls from that moment.
+
+
 Unless the user says otherwise:
 
 - Generated application code → `./src`
-- Run record — telemetry, manifest, packets, reports → `./.sdlc/`
+- Run record — telemetry, manifest, packets, reports → `./.sdlc/runs/<run-id>/`, where `<run-id>` is
+  `<YYYYMMDD-HHMMSS>-greenfield` at the moment you start. One folder per run: a run's cost, its
+  `SUMMARY.md` and its cost cap are its own, never mixed with an earlier run's
 
 Tell the user both paths. If `./src` already contains files, say so and ask before writing into it.
 
@@ -219,8 +225,10 @@ Invoke the `orchestrator` subagent with the resolved settings from the steps abo
 - `brief_path` — the confirmed brief
 - `auth_mode` — `vendor` or `estimated`, as confirmed in step 5
 - `policy` — the resolved policy name from step 4 (`project.default_policy` or `antigravity-flash38-plus-opus5`)
+- `run_id` — the `<run-id>` from step 3; every packet's `pass_id`
+- `run_started_at` — the time recorded in step 3
 - `code_dir` — `./src`
-- `output_dir` — `./.sdlc`
+- `output_dir` — `./.sdlc/runs/<run-id>`
 
 The orchestrator pauses at four approval gates: after requirements, after design, after the security
 review, and before final acceptance. Relay each gate to the user as it arrives; do not answer them

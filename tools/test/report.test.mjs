@@ -59,8 +59,8 @@ test("on a seat run the report prints separate lines, a cash figure without the 
 
     const md = report(dir, "--markdown");
     assert.match(md, /\| claude worker \| \*\*modeled\*\* \| 1 \|/);
-    assert.match(md, /\| \*\*Cash\*\* \| \| \| \| \*\*\$0\.0031\*\* \|/);
-    assert.match(md, /\| Phase \| Prov \| Calls \| Tokens \(in \/ out\) \| Cash \| Modeled \|/);
+    assert.match(md, /\| \*\*Cash\*\* \| \| \| \| \| \*\*\$0\.0031\*\* \|/);
+    assert.match(md, /\| Phase \| Prov \| Calls \| Tokens \(in \/ out\) \| Cache \(read \/ write\) \| Cash \| Modeled \|/);
     assert.doesNotMatch(md, /\$0\.0531/);
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
@@ -80,7 +80,7 @@ test("a tier:orchestrator event in telemetry.jsonl stays out of every sum", () =
   const dir = runDir([ev({}), conductor], { env: { ANTHROPIC_API_KEY: "k" } });
   try {
     const text = report(dir);
-    assert.match(text, /^\s+codegen\s+V\s+1\s+1\.0K \/ 100\s+\$0\.0011/m, "one codegen call, the vendor one");
+    assert.match(text, /^\s+codegen\s+V\s+1\s+1\.0K \/ 100\s+0 \/ 0\s+\$0\.0011/m, "one codegen call, the vendor one");
     assert.match(text, /gemini workers\s+cash\s+1\s/);
     assert.match(text, /Cash\s+\$0\.0011\n/);
     assert.doesNotMatch(text, /\$9\.99|\$10\./);
@@ -112,5 +112,24 @@ test("a manifest.json that books the lines differently is named, with the comman
     assert.match(text, /manifest\.json books these lines differently/);
     assert.match(text, /node plugin\/agy\/manifest\.mjs '/);
     assert.match(text, /gemini workers\s+cash\s+1\s+.*\$0\.0011/, "the report books from telemetry, not from the stale file");
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test("packets the policy default routed are listed with their kind of dollar", () => {
+  const fallback = { routing: { policy_name: POLICY, policy_version: 1, rule_index: -1, rule_reason: "Unrecognized task — fail safe to premium", fallback: true } };
+  const dir = runDir([ev({}), ev({ ...OPUS, phase: "codegen", task_type: "code_fix", task_id: "tp_fix", model_id: "opus", cost_usd: 0.25, ...fallback })], { env: { ANTHROPIC_API_KEY: "k", GEMINI_API_KEY: "g" } });
+  try {
+    const text = report(dir);
+    assert.match(text, /Packets no policy rule matched \(sent to the policy default\): cash \$0\.2500/);
+    assert.match(text, /tp_fix\s+codegen\s+code_fix\s+opus → cash \$0\.2500/);
+    const md = report(dir, "--markdown");
+    assert.match(md, /\| `tp_fix` \| codegen \| code_fix \| opus \| 1 \| cash \$0\.2500 \|/);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test("a run with no fallback packet prints no fallback section", () => {
+  const dir = runDir([ev({})], { env: { GEMINI_API_KEY: "g" } });
+  try {
+    assert.doesNotMatch(report(dir), /no policy rule matched/);
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });

@@ -2,7 +2,7 @@
 
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![CI](https://github.com/tl-ai-labs/ai-sdlc-orchestrator-antigravity-harness/actions/workflows/test.yml/badge.svg)](https://github.com/tl-ai-labs/ai-sdlc-orchestrator-antigravity-harness/actions/workflows/test.yml)
-[![Version](https://img.shields.io/badge/version-0.1.0-blue)](plugin/plugin.json)
+[![Version](https://img.shields.io/badge/version-0.2.0-blue)](plugin/plugin.json)
 
 ![How the plugin works — you paste two prompts in agy, Gemini 3.8 Flash conducts and dispatches every phase through the bridge, judgment work goes to Claude Opus 5 and mechanical work to Gemini 3.8 Flash, and your project gets both generated code and a full audit trail](docs/assets/hero.svg)
 
@@ -190,7 +190,7 @@ Framed by what you want to do, not by every provider that exists. Full provider 
 
 | If you want to… | You need |
 |---|---|
-| **Try it at all** | Node.js 20+, the Antigravity CLI (`agy` ≥ 1.2.3) signed in to a Google account, Claude Code (`claude`) on PATH, macOS/Linux/WSL2, and one Claude wallet: a claude.ai subscription Claude Code is signed in to (the seat — Opus cost modeled), an `ANTHROPIC_API_KEY` (arm A), or a GCP project with Claude enabled in Model Garden (arm B) |
+| **Try it at all** | Node.js 22.19+, the Antigravity CLI (`agy` ≥ 1.2.3) signed in to a Google account, Claude Code (`claude`) on PATH, macOS/Linux/WSL2, and one Claude wallet: a claude.ai subscription Claude Code is signed in to (the seat — Opus cost modeled), an `ANTHROPIC_API_KEY` (arm A), or a GCP project with Claude enabled in Model Garden (arm B) |
 | **Run the mechanical tier** | The above, plus a Gemini door — a `GEMINI_API_KEY` from [AI Studio](https://aistudio.google.com/app/apikey), or Application Default Credentials from `gcloud auth application-default login` |
 | **Use the Antigravity agent path** | The above, plus Python 3.10+ (macOS ships 3.9, too old) **and** Vertex ADC — there is no API-key door for the agent worker |
 
@@ -262,7 +262,7 @@ Full flag surface for the headless driver is in [docs/running.md](docs/running.m
 
 ## What a run produces
 
-Every artifact lands under `./.sdlc/` (for `/mmo:greenfield` and `run.mjs`'s default `--output-dir`) or `.sdlc/runs/<run-id>/` (for brownfield). Generated source lands under `./src/`.
+Every artifact lands in the run's own folder, `.sdlc/runs/<run-id>/`, for every entry point. Generated source lands under `./src/` (greenfield) or in place (brownfield).
 
 | File | Contents |
 |---|---|
@@ -286,8 +286,8 @@ No measured (paid) run has been published yet; the first will be the [Ping Servi
 
 ```bash
 mkdir -p /tmp/smoke && cp examples/quick-demo/brief.md /tmp/smoke/brief.md
-npm run smoke -- --project-root=/tmp/smoke --output-dir=/tmp/smoke/.sdlc --run-id=smoke1
-node tools/report.mjs /tmp/smoke/.sdlc
+npm run smoke -- --project-root=/tmp/smoke --run-id=smoke1
+node tools/report.mjs /tmp/smoke/.sdlc/runs/smoke1
 ```
 
 The stub speaks the recorded stream-json shapes, needs two invocations (so the resume loop runs), and makes one real $0 bridge call through the dispatch fallback. Nothing it emits is a measurement; every figure in that report is made up and labeled modeled. The same run executes under `npm test` ([tools/test/smoke-run.test.mjs](tools/test/smoke-run.test.mjs)).
@@ -328,7 +328,7 @@ node tools/setup.mjs --project-root /path/to/your/project
 A headless run, dry first — the invocation prints with every credential reported only as set/unset:
 
 ```bash
-node plugin/agy/run.mjs --brief=examples/quick-demo/brief.md --project-root=/path/to/empty/dir --output-dir=/path/to/empty/dir/.sdlc --gates=auto-approve --dry-run
+node plugin/agy/run.mjs --brief=examples/quick-demo/brief.md --project-root=/path/to/empty/dir --gates=auto-approve --dry-run
 ```
 
 ## Documentation

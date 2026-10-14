@@ -16,6 +16,7 @@
  *   ...--user                              machine-wide instead of this folder
  */
 
+import { MIN_NODE, meetsNodeFloor } from "./lib/node-floor.mjs";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { homedir } from "node:os";
@@ -312,6 +313,7 @@ export function hasVertexCredentials(vertex = null) {
  */
 export function evaluate({
   nodeMajor,
+  nodeVersion = null,
   hasClaudeCli,
   hasNodeModules,
   hasDist,
@@ -326,11 +328,11 @@ export function evaluate({
 }) {
   const problems = [];
 
-  if (nodeMajor < 20) {
+  if (nodeVersion ? !meetsNodeFloor(nodeVersion) : nodeMajor < 22) {
     problems.push({
       id: "node-version",
       severity: "blocking",
-      message: `Node ${nodeMajor || "unknown"} detected; this plugin needs Node 20 or newer.`,
+      message: `Node ${nodeVersion ?? (nodeMajor || "unknown")} detected; this plugin needs Node ${MIN_NODE} or newer.`,
       fix: "Install the current LTS from https://nodejs.org (or `nvm install --lts`).",
     });
   }
@@ -578,6 +580,7 @@ function observe(pluginRoot, env = process.env) {
   const adcFile = adcPath();
   return {
     nodeMajor: nodeMajorFrom(process.versions.node),
+    nodeVersion: process.versions.node,
     hasClaudeCli: onPath("claude"),
     hasGcloud: onPath("gcloud"),
     hasNodeModules: existsSync(nodeModules),

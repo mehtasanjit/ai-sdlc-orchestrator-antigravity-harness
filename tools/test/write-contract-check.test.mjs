@@ -71,7 +71,7 @@ test("a shell redirect onto an off-limits path is denied", () => {
   try {
     const { reply } = runHook({ toolCall: { name: "run_command", args: { CommandLine: "echo KEY=1 > .env" } }, workspacePaths: [dir] }, dir);
     assert.equal(reply.decision, "deny");
-    assert.match(reply.reason, /\.env matches off-limits/);
+    assert.match(reply.reason, /\.env matches always-off-limits/);
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
@@ -100,7 +100,7 @@ test("a cross-repo write is refused as a category error", () => {
   try {
     const { reply } = runHook({ toolCall: { name: "code_action", args: { AbsolutePath: join(other, "src", "x.ts") } }, workspacePaths: [dir] }, dir);
     assert.equal(reply.decision, "deny");
-    assert.match(reply.reason, /OUTSIDE the calling session's contracted repo/);
+    assert.match(reply.reason, /resolves OUTSIDE the project whose contract this session holds/);
   } finally { rmSync(dir, { recursive: true, force: true }); rmSync(other, { recursive: true, force: true }); }
 });
 

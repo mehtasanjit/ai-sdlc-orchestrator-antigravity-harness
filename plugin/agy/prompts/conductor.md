@@ -31,6 +31,7 @@ node '{{PLUGIN_ROOT}}/agy/dispatch.mjs' \
   --out=<path-for-result.json> \
   --policy={{POLICY}} \
   --project-root='{{PROJECT_ROOT}}' \
+  --run-id={{RUN_ID}} \
   --telemetry='{{OUTPUT_DIR}}/telemetry.jsonl'
 ```
 
@@ -43,7 +44,7 @@ session would call directly, with the same five tools and the same TaskPacket co
 |---|---|---|
 | `preflight_dispatch` | `--preflight --auth-mode=vendor` | Rule 0 below — before anything else |
 | `execute_with_model` | `--packet=<file>` | Every phase's real model call |
-| `log_telemetry` | `--log-phase=<phase> --task-type=skipped\|in_session` | A zero-cost event for a phase that made no model call |
+| `log_telemetry` | `--log-phase=<phase> --task-type=skipped\|in_session --run-id={{RUN_ID}} --telemetry='{{OUTPUT_DIR}}/telemetry.jsonl'` | A zero-cost event for a phase that made no model call |
 
 If the command exits non-zero, the dispatch failed. Read the result file and stderr, decide
 whether to retry with a refined packet, and say plainly what happened. Never fall back to
@@ -112,6 +113,8 @@ Numbering matches `pipeline.md` exactly.
 Phases 1, 2, 4, 6 and 8 are judgment work: the policy routes them to Opus 5. Phases 5 and 7 are
 mechanical: the policy routes them to Gemini Flash. You do not choose the model — the policy
 does, from the packet's `phase` and `task_type`. Your job is to set those fields correctly.
+A retried or refined packet keeps both and raises `retry_count` by one; the policy escalates it
+to Opus 5 at `retry_count` 2. Never relabel a packet to reach a different model.
 
 `manifest.json` is written by the launcher from `telemetry.jsonl` after you finish. Do not
 write one yourself; if the pipeline text asks you to, write `SUMMARY.md` instead and move on.
@@ -130,12 +133,16 @@ change what gets built, raise that at Gate 1 rather than guessing.
 {{HANDOVER}}
 ## Two directories, both given to you
 
-- **`{{CODE_DIR}}`** — the application being built: source, tests, `package.json`, README.
-- **`{{OUTPUT_DIR}}`** — the run record: `requirements.md`, `design.md`, `packets.json`,
-  `telemetry.jsonl`, the reviews, the final report.
+- **`{{CODE_DIR}}`** — the application being built: source, tests, `package.json`, README. On a
+  brownfield run this is the project root, since edits land across the existing tree.
+- **`{{OUTPUT_DIR}}`** — this run's own record, `.sdlc/runs/{{RUN_ID}}/` unless the launcher was
+  told otherwise: `requirements.md`, `design.md`, `packets.json`, `telemetry.jsonl`, the reviews,
+  the final report and `SUMMARY.md`. No other run writes here.
 
 Never write run bookkeeping into the code directory, and never write application code into the
-output directory. Both paths arrive resolved; do not invent your own.
+output directory. Both paths arrive resolved; do not invent your own. The run id is `{{RUN_ID}}`:
+every packet's `pass_id`, every `--run-id`, and the folder name. On a brownfield run the guide's
+`<run-id>` and `<output_dir>` are these, never a new id of your own.
 
 ## TaskPacket — every dispatch needs all of these
 

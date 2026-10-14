@@ -34,6 +34,20 @@ export function pendingPinChecks(checks = LIVE_PIN_CHECKS) {
     .map(([n]) => Number(n));
 }
 
+/**
+ * Passed checks prove the pin can be asserted, not that it held: `verified`
+ * also needs a model agy itself recorded conducting the run, every one of
+ * them the pin. `observed` is every model name agy reported (the headless
+ * stream, the local conversation record); `offPin` the ones that are not the
+ * pin (event-reader.mjs offPinModels).
+ */
+export function pinVerification({ pending = pendingPinChecks(), observed = [], offPin = [] } = {}) {
+  if (offPin.length) return { verified: false, unverified_reason: "model_mismatch" };
+  if (pending.length) return { verified: false, unverified_reason: "pending_checks" };
+  if (!observed.length) return { verified: false, unverified_reason: "no_model_observed" };
+  return { verified: true };
+}
+
 export function readPin(policy) {
   const d = policy?.driver;
   if (!d) {
@@ -82,9 +96,9 @@ export function assertPinnedInvocation(intended, policy) {
 
 /**
  * The `result` event is the only place agy reports an error for the whole
- * turn; a rejected model slug lands in `result.error`. Nothing in the
- * stream echoes back which model answered, so this can prove a failure,
- * never a success.
+ * turn; a rejected model slug lands in `result.error`. This can prove a
+ * failure, never a success: success is pinVerification's, from the models
+ * agy reported.
  */
 export function findPinRejection(events) {
   for (const ev of events) {

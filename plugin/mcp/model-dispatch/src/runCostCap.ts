@@ -4,6 +4,17 @@
  */
 
 import { existsSync, readFileSync } from "node:fs";
+import { basename, dirname } from "node:path";
+
+/**
+ * A telemetry file inside a run's own folder (`.sdlc/runs/<run-id>/`) is that
+ * run's whole ledger: every event in it counts, whatever `pass` a packet
+ * carried, so a mis-stamped pass_id cannot hide spend from the cap.
+ */
+export function isRunFolderLedger(telemetryPath: string): boolean {
+  const runDir = dirname(telemetryPath);
+  return basename(dirname(runDir)) === "runs" && basename(dirname(dirname(runDir))) === ".sdlc";
+}
 
 export interface RunCostCapCheck {
   allowed: boolean;
@@ -18,8 +29,10 @@ export interface RunCostCapCheck {
 /**
  * `tier: "orchestrator"` lines are left out: they are the post-run collector's
  * reconstruction of the driver session, not spend this bridge dispatched.
+ * With `passId`, only that run's events count: runs that share one telemetry
+ * file (an output directory reused across runs) each get their own cap.
  */
-export function evaluateRunCostCap(capUsd: number, telemetryLines: string[]): RunCostCapCheck {
+export function evaluateRunCostCap(capUsd: number, telemetryLines: string[], passId?: string): RunCostCapCheck {
   let spent = 0;
   let counted = 0;
   let unreadable = 0;
@@ -33,6 +46,7 @@ export function evaluateRunCostCap(capUsd: number, telemetryLines: string[]): Ru
       continue;
     }
     if (!ev || typeof ev !== "object" || ev.tier === "orchestrator") continue;
+    if (passId && typeof ev.pass === "string" && ev.pass !== passId) continue;
     if (typeof ev.cost_usd === "number" && Number.isFinite(ev.cost_usd)) spent += ev.cost_usd;
     counted += 1;
   }
@@ -53,17 +67,18 @@ export function evaluateRunCostCap(capUsd: number, telemetryLines: string[]): Ru
 export function checkRunCostCap(
   capUsd: number | undefined,
   telemetryPath: string | undefined,
+  passId?: string,
 ): RunCostCapCheck | null {
   if (capUsd === undefined || !telemetryPath) return null;
   const lines = existsSync(telemetryPath) ? readFileSync(telemetryPath, "utf-8").split("\n") : [];
-  return evaluateRunCostCap(capUsd, lines);
+  return evaluateRunCostCap(capUsd, lines, isRunFolderLedger(telemetryPath) ? undefined : passId);
 }
 
 export function runCostCapRefusal(check: RunCostCapCheck, telemetryPath: string): string {
   return (
     `execute_with_model: refused. The run has spent $${check.spent_usd.toFixed(4)} across ` +
-    `${check.events_counted} dispatched event(s) in ${telemetryPath}, at or above the policy's ` +
+    `${check.events_counted} dispatched event(s) of this run in ${telemetryPath}, at or above the policy's ` +
     `hard_cost_cap_usd of $${check.cap_usd.toFixed(2)}. No model was called, and every further ` +
-    `dispatch that logs to this file is refused.`
+    `dispatch of this run is refused.`
   );
 }

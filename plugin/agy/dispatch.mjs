@@ -8,25 +8,28 @@
  * speaks MCP to the bridge on its behalf via driverClient.js. The bridge, its
  * five tool signatures and the TaskPacket contract are unchanged.
  *
- * The full result is written to `--out`; stdout carries one summary line.
+ * The full result is written to `--out`; stdout carries one summary line. A
+ * packet dispatch whose `--out` already holds a result moves that one aside
+ * to `<name>.<n>.json` first, so every dispatch's result file survives.
  *
  * Usage:
  *   node dispatch.mjs --packet=<packet.json> --out=<result.json> \
- *                     [--policy=<name>] [--project-root=<path>] \
- *                     [--telemetry=<path>] [--work-dir=<path>]
+ *                     --telemetry=<path> [--run-id=<id>] [--policy=<name>] [--project-root=<path>] \
+ *                     [--work-dir=<path>]
  *   node dispatch.mjs --log-phase=<state> --task-type=skipped|in_session \
  *                     --telemetry=<path> --out=<receipt.json> \
- *                     [--module=<name>] [--reason=<text>] [--policy=<name>]
+ *                     [--run-id=<id>] [--module=<name>] [--reason=<text>] [--policy=<name>]
  *   node dispatch.mjs --preflight --auth-mode=vendor [--policy=<name>] \
  *                     [--project-root=<path>] --out=<result.json>
  */
 
-import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
-import { dirname, resolve } from "node:path";
+import { readFileSync, writeFileSync, mkdirSync, existsSync, renameSync } from "node:fs";
+import { dirname, extname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { readMmoSelectFile } from "./mmoSelect.mjs";
 import { isMain } from "../scripts/lib/is-main.mjs";
+import { staleBuild, staleBuildWarning } from "../scripts/lib/stale-build.mjs";
 
 const BRIDGE_CLIENT = resolve(
   dirname(fileURLToPath(import.meta.url)),
@@ -104,6 +107,22 @@ export function summarize(toolName, result, args = {}) {
   return `dispatch model=${model} success=${success === true} cost_usd=${cost ?? "n/a"}`;
 }
 
+/**
+ * Moves an earlier result at `outPath` to the first free `<name>.<n><ext>`
+ * and returns where it went, or null when there was none. `--out` then
+ * always holds the newest dispatch's result.
+ */
+export function keepEarlierResult(outPath) {
+  const path = resolve(outPath);
+  if (!existsSync(path)) return null;
+  const ext = extname(path);
+  const stem = ext ? path.slice(0, -ext.length) : path;
+  let n = 1;
+  while (existsSync(`${stem}.${n}${ext}`)) n += 1;
+  renameSync(path, `${stem}.${n}${ext}`);
+  return `${stem}.${n}${ext}`;
+}
+
 function writeResult(outPath, payload) {
   mkdirSync(dirname(resolve(outPath)), { recursive: true });
   writeFileSync(resolve(outPath), JSON.stringify(payload, null, 2) + "\n", "utf-8");
@@ -129,7 +148,7 @@ function writeResult(outPath, payload) {
  * and they accrue to the driver loop rather than here; the reason string
  * carries that so the row explains itself.
  */
-export function buildLogEventArgs({ phase, taskType, module, reason, policyName, telemetryPath }) {
+export function buildLogEventArgs({ phase, taskType, module, reason, policyName, telemetryPath, runId }) {
   if (!phase) throw new Error("dispatch: --log-phase=<state> is required for --log-phase.");
   if (!telemetryPath) {
     throw new Error("dispatch: --telemetry=<path> is required for --log-phase — an unwritten event is not a record.");
@@ -143,7 +162,7 @@ export function buildLogEventArgs({ phase, taskType, module, reason, policyName,
   return {
     telemetry_path: telemetryPath,
     event: {
-      pass: null,
+      pass: runId ?? null,
       phase,
       task_type: kind,
       task_id: `${phase}-${kind}`,
@@ -190,6 +209,7 @@ export async function runDispatch(args, { connect, env = process.env } = {}) {
       reason: args.reason,
       policyName: args.policy,
       telemetryPath: args.telemetry,
+      runId: typeof args["run-id"] === "string" ? args["run-id"] : undefined,
     });
   } else if (isPreflight) {
     if (!args["auth-mode"]) {
@@ -206,11 +226,24 @@ export async function runDispatch(args, { connect, env = process.env } = {}) {
     });
   } else {
     if (!args.packet) throw new Error("dispatch: --packet=<path> is required.");
+    if (typeof args.telemetry !== "string" || !args.telemetry) {
+      throw new Error(
+        "dispatch: --telemetry=<path> is required for a packet dispatch — the call is paid, and a paid call " +
+          "with no telemetry event is in no cost line. Pass the run's <output_dir>/telemetry.jsonl.",
+      );
+    }
     let packet;
     try {
       packet = JSON.parse(readFileSync(resolve(args.packet), "utf-8"));
     } catch (err) {
       throw new Error(`dispatch: could not read the packet at ${args.packet} — ${err.message}`);
+    }
+    // The launcher's run id is the run's: a packet the conductor stamped otherwise would leave
+    // the run's cost cap and its manifest.
+    const runId = typeof args["run-id"] === "string" ? args["run-id"] : null;
+    if (runId && packet && typeof packet === "object" && packet.pass_id !== runId) {
+      console.error(`dispatch: packet ${packet.id ?? "?"} named pass_id ${JSON.stringify(packet.pass_id)}; dispatched as run ${runId}.`);
+      packet = { ...packet, pass_id: runId };
     }
     toolName = "execute_with_model";
     toolArgs = buildExecuteArgs({
@@ -225,6 +258,8 @@ export async function runDispatch(args, { connect, env = process.env } = {}) {
   const bridge = await connect({ env: bridgeEnv(projectRoot, env) });
   try {
     const result = await bridge.callTool(toolName, toolArgs);
+    const kept = toolName === "execute_with_model" ? keepEarlierResult(outPath) : null;
+    if (kept) console.error(`dispatch: ${outPath} held an earlier dispatch's result; kept it as ${kept}.`);
     writeResult(outPath, result);
     // The tool call succeeding is not the same as the tool being happy. A
     // preflight that reports ok:false is the single most important "stop
@@ -241,6 +276,8 @@ export async function runDispatch(args, { connect, env = process.env } = {}) {
 // Direct-execution gate so the test suite can import the pure helpers.
 if (isMain(import.meta.url)) {
   const args = parseArgs(process.argv.slice(2));
+  const stale = staleBuildWarning(staleBuild(resolve(dirname(BRIDGE_CLIENT), "..")));
+  if (stale) console.error(`dispatch: warning — ${stale}`);
   const { connectBridge } = await import(BRIDGE_CLIENT);
   try {
     const { ok, summary } = await runDispatch(args, { connect: connectBridge });

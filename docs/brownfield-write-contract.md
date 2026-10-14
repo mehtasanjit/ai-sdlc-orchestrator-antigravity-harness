@@ -42,26 +42,74 @@ the plugin directory as its cwd, replies `{"decision": …}`, fails open on its 
 every refusal to `.sdlc/local/guard-decisions.jsonl` — the only record a denial leaves, since agy's
 stream-json output does not carry it.
 
-Behavior:
+Behavior, in order:
 
 1. On every file-writing tool call, agy invokes the hook.
 2. The hook scans the content the call would write for a credential literal — deny if hit (see
    [Credential literals](#credential-literals)). This step needs no contract.
-3. The hook reads `.sdlc/local/write-contract.json` from an ancestor of the current directory.
-4. If the file is missing or `active:false` → allow (greenfield mode or no active run — the
-   hook silently no-ops so `/mmo:greenfield` in an empty folder is unaffected).
-5. If active:
-   - Check the target path against `off_limits` patterns — deny with reason if hit.
-   - Check against `allowlist` patterns — allow if hit.
-   - Otherwise (not in allowlist, not off-limits) — deny.
-6. `contract.strict = false` (equivalent to `--strict-write=off`) downgrades every path
-   enforcement to a warning; the file is written but a warning is logged. It does not lift step 2.
+3. **Which contract.** Only the contract at the root of the git project that holds the target counts:
+   the nearest folder at or above the target with a `.git`, and `.sdlc/local/write-contract.json` under
+   it. A `write-contract.json` anywhere else binds nothing. While the session's own project has a
+   binding contract, a target outside that project — as written, or once links are followed — is
+   refused as a cross-project write.
+4. **Whether it binds.** A contract binds while its run is live: `active: true`, and no
+   `.sdlc/runs/<run-id>/run-end.json`. With none binding (greenfield, a project that never ran a
+   brownfield job, or a run that has ended), only the always-off-limits list is refused: `.env`,
+   `.env.*`, `.mcp.json`, `.cursor/rules/**`, `.claude/settings.local.json`, `.git/**`, at any depth.
+5. **The freeze record decides first.** `write-contract.mjs --freeze` records the SHA-256 of the
+   contract's bytes in `.sdlc/runs/<run-id>/contract.lock.json`. While that run is live, a contract
+   that no longer matches — widened, switched off, deleted, replaced — refuses every write, with the
+   reason. So do two live freeze records.
+6. **A live run's contract binds:**
+   - The contract file, the run's `contract.lock.json` and its `run-end.json` are refused to file
+     tools, whatever the allowlist says.
+   - The always-off-limits list is refused, under every contract, `strict: false` included.
+   - The run's own folder `.sdlc/runs/<run-id>/` is allowed: its requirements, design, packets and
+     reports.
+   - The contract's `off_limits` — deny with the reason if hit.
+   - The `allowlist` — allow if hit.
+   - Otherwise — deny.
+7. Off-limits patterns (the always list and the contract's) match in any letter case: on macOS's
+   default disk `.ENV` is `.env`. The allowlist matches exactly. A path is judged as written and as it
+   resolves through links: both must pass, and a link that leads out of the project is a write
+   outside it.
+8. `contract.strict = false` (`--strict-write=off`, passed by you at the start) downgrades the
+   contract's off-limits and allowlist refusals to warnings. It never opens the always-off-limits
+   list or the contract's own files, and does not lift step 2.
 
-Fail-safe: any bug in the hook (parse failures, missing fields, resolvable path issues) → allow.
-Better to permit a write than to wedge user work on a plugin bug. Path denials only happen when
-the contract parses cleanly AND is active AND the path fails the check.
+Fail-safe: a bug in the hook itself (an input it cannot parse, a field it cannot read) → allow. A
+contract that does not parse is not such a bug: under a live freeze record it refuses every write
+(step 5); with none, it binds nothing.
 
-### Credential literals
+## The contract's life
+
+All three files are written by [`plugin/scripts/write-contract.mjs`](../plugin/scripts/write-contract.mjs), never by the model:
+
+| When | Command | Writes |
+|---|---|---|
+| Gate 0 approved | `write-contract.mjs --freeze --run-id <id> --allowlist '<JSON>' --off-limits '<JSON>'` | `.sdlc/local/write-contract.json`, `.sdlc/runs/<id>/contract.lock.json` |
+| Close-out, after Gate 4 is accepted | `write-contract.mjs --close --run-id <id>` | `.sdlc/runs/<id>/run-end.json` (`completed`), then `active: false` |
+| A gate answered `abort` after the freeze | `write-contract.mjs --close --run-id <id> --outcome=aborted` | the same, `aborted` |
+| A headless run's driver loop ends | `plugin/agy/run.mjs`, for the run it launched | the same, `completed` or `stopped` |
+| A run that will never end by itself (its chat closed, it crashed) | `write-contract.mjs --abandon --run-id <id> --reason "<why>"` — your decision | the same, `aborted` |
+
+`--freeze` refuses a project root that is not a git project's root, a run that already froze or
+ended, and a project another live run holds. Ending a run never deletes its folder.
+
+## Headless runs
+
+`agy -p` loads no hooks ([check 1](verification/p1-agy-runtime.md)), so nothing refuses a write
+during a headless brownfield run. The run record says so: `driver-manifest.json` and
+`manifest.json` carry `harness.write_guard.state: "off"` with the reason (`"hook"` on an interactive
+run). After the run, `run.mjs` compares a snapshot taken at launch with one taken at the end —
+every file `git status` lists as changed, untracked or ignored, with its mtime and size — and lists
+in `write_guard.after_run_check.outside_contract` every file the run changed that its contract does
+not allow, and warns on stderr. A file already modified before the run and written again shows;
+so does an ignored `.env`. An ignored folder (`dist/`, `node_modules/`) is one entry, and shows
+when an entry directly inside it is added or removed. That check detects; it does not prevent.
+Review the diff before you keep a headless brownfield change.
+
+## Credential literals
 
 The hook runs the secret patterns in
 [`plugin/scripts/dispatch-sanitize.mjs`](../plugin/scripts/dispatch-sanitize.mjs) over every
@@ -120,7 +168,8 @@ This is the concrete answer to the "the plugin doesn't know how you use Gemini /
 | Will this touch my Cursor rules (`.cursor/`)? | No. Default off-limits. | Move `.cursor/` into the allowlist at Gate 0 by editing the proposal. |
 | Will this touch my `package.json`? | Only to add missing dependencies (deep-merge, append-only) and only when a codegen packet explicitly requires it. Never removes, downgrades, or shadows existing scripts. | None needed — the merge rules already enforce safety. |
 | What if I have `commit_strategy: per-gate`? | The plugin refuses to run on a dirty tree so your uncommitted work does not tangle with the plugin's commits. Defaults are safe: `branch_strategy: current`, `commit_strategy: none`, `pr: off`. | `--allow-dirty` bypasses the git-clean check. |
-| Can the AI bypass the hook? | Interactive: no. The hook is an agy `PreToolUse` matcher — refusals happen before the tool executes, and no prompt-level workaround reaches the file system. Headless: `agy -p` loads no hooks ([check 1](verification/p1-agy-runtime.md)), so a headless brownfield run has no guard and its record says so. | `contract.strict = false` in `write-contract.json`, or `--strict-write=off` at run start. Both require explicit user action. |
+| Can the AI bypass the hook? | Interactive: not through a file tool. The hook is an agy `PreToolUse` matcher, refusals happen before the tool executes, and editing the frozen contract refuses every later write. A shell command is checked only for redirects, `tee`, `touch`, `cp` and `mv`; one that rewrites the contract changes its bytes and locks the run. Headless: `agy -p` loads no hooks ([check 1](verification/p1-agy-runtime.md)), so a headless brownfield run has no guard, its record says so, and the after-run check lists what it changed outside the contract. | `--strict-write=off` at run start, passed by you. Mid-run: none; a wider scope is a new run with its own Gate 0. |
+| A run stopped after Gate 0 and the project stays held | `node plugin/scripts/write-contract.mjs --abandon --run-id <run-id> --reason "<why>"` records the run's end (aborted) and switches its contract off. Deleting the contract does not free it: under the live freeze record that refuses every write. | Your decision. |
 | How do I override off-limits for one specific run? | Re-open Gate 0 with `revise:` and move the specific path from `off_limits` to `allowlist`. Ephemeral — applies to this run only. | None. `.sdlc/project.json.off_limits_default` is unchanged by this. |
 | My repo has files with unusual characters — will pattern matching work? | Yes. The hook uses glob-style pattern matching (`*`, `**`, `?`, literal `/`). No shell-out, no eval on paths. Unicode, spaces, and exotic characters all work. | None needed. |
 | What if I run `git checkout` or `git reset --hard` mid-run? | The plugin observes git state between phases via `git status`. If HEAD moved unexpectedly, it halts with a clear message before continuing. | None. The halt is the safety guarantee — better to stop than write against a repo that changed under it. |

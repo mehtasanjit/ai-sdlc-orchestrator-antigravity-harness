@@ -74,7 +74,7 @@ discovery ──► Gate 0 ──► approve ──► freeze write-contract.jso
                  └── abort ──► clean exit (partial record kept, source tree untouched)
 ```
 
-Approve freezes the merged allowlist + off-limits into `.sdlc/local/write-contract.json`. The PreToolUse hook reads that file on every write and refuses anything outside the allowlist. See [brownfield-write-contract.md](brownfield-write-contract.md) for the enforcement details.
+Approve freezes the merged allowlist + off-limits into `.sdlc/local/write-contract.json` by code (`plugin/scripts/write-contract.mjs --freeze`). In an interactive session the PreToolUse hook reads that file on every write, allows the run's own `.sdlc/runs/<run-id>/`, and refuses anything outside the allowlist until the run ends at close-out (`--close`). A headless run (`agy -p`) loads no hooks: it has no write guard, and its record says so. See [brownfield-write-contract.md](brownfield-write-contract.md) for the enforcement details.
 
 ---
 

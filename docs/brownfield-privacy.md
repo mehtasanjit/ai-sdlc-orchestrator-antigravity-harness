@@ -102,7 +102,7 @@ direction." `/mmo:audit` (v1.5) exports these into a single `.sdlc/audit-export.
 ## Data locality guarantees
 
 - All plugin state is local — under your repo (`.sdlc/`) or your home directory
-  (agy's own session store under `~/.gemini/`, and Claude Code's under `~/.claude/projects/` for each `claude -p` worker call). No plugin-owned cloud storage.
+  (agy's own session store under `~/.gemini/`, and Claude Code's under `~/.claude/projects/` for each `claude -p` worker call; the `claude-agent-sdk` worker runs with `persistSession: false` and writes none). No plugin-owned cloud storage.
 - Model calls go to whatever endpoint the active policy names.
 - **No call-home. No usage tracking. No analytics. Ever.**
 

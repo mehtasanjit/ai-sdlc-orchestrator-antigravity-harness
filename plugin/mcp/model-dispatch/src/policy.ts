@@ -207,6 +207,7 @@ function validateModel(m: any) {
     );
   }
   validateReasoning(m);
+  validatePromptCacheTtl(m);
   // pricing_override is the only way a policy block is billed, so it must be
   // unambiguous: a string "yes" or a flag with nothing to bill is refused at
   // load, before any run could be priced on a misread intent.
@@ -236,6 +237,20 @@ function validateModel(m: any) {
     if (m.pricing[k] !== undefined && typeof m.pricing[k] !== "number") {
       throw new Error(`Policy model '${m.id}': pricing.${k} must be number`);
     }
+  }
+}
+
+/** Only the Agent SDK adapter sends the pin; on any other adapter it would be a lifetime nothing applies. */
+function validatePromptCacheTtl(m: any) {
+  if (m.prompt_cache_ttl === undefined) return;
+  if (m.prompt_cache_ttl !== "5m" && m.prompt_cache_ttl !== "1h") {
+    throw new Error(`Policy model '${m.id}': prompt_cache_ttl must be 5m or 1h, got ${JSON.stringify(m.prompt_cache_ttl)}`);
+  }
+  if (m.adapter !== "claude-agent-sdk") {
+    throw new Error(
+      `Policy model '${m.id}': prompt_cache_ttl is applied only by the claude-agent-sdk adapter, not '${m.adapter}'. ` +
+        `Remove the key or change the adapter.`
+    );
   }
 }
 
