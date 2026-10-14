@@ -29,6 +29,7 @@ import {
 import { assessModels, parseAuthMode, type AuthMode } from "./preflight.js";
 import { checkModelPrice, withEffectivePrices } from "./effectivePrice.js";
 import { appendEvent, cacheWriteBuckets, normalizeDirectTierEvent } from "./telemetry.js";
+import { checkRunCostCap, runCostCapRefusal } from "./runCostCap.js";
 import { createAdapter } from "./adapters/index.js";
 import {
   defaultAdcPath,
@@ -432,6 +433,21 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
           select_overridden: decision.selection?.overridden,
         });
 
+        const capCheck = checkRunCostCap(policy.hard_cost_cap_usd, a.telemetry_path);
+        if (capCheck && !capCheck.allowed) {
+          const message = runCostCapRefusal(capCheck, a.telemetry_path);
+          log("error", "dispatch.error", {
+            packet_id: packet.id,
+            model_id: decision.modelId,
+            error_class: "CostCapReached",
+            cap_usd: capCheck.cap_usd,
+            spent_usd: capCheck.spent_usd,
+            unreadable_lines: capCheck.unreadable_lines || undefined,
+            message,
+          });
+          throw new Error(message);
+        }
+
         const adapter = adapterFor(policy, decision.modelId);
         const dispatchStarted = Date.now();
         log("info", "dispatch.start", {
@@ -546,6 +562,8 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
           success: att.success,
           attempt_number: att.attempt_number,
           ceiling_used: att.ceiling_used,
+          budget_enforced: att.budget_enforced,
+          budget_declared: att.budget_declared,
           retry_reason: att.attempt_number > 1 ? "output_cap" : undefined,
           error: att.error,
           // Where the dollars' rates came from ("list" or "custom" under

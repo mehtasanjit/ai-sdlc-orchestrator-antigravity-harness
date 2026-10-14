@@ -131,7 +131,16 @@ Source: [plugin/config/policies/antigravity-flash38-plus-opus5.yaml:89](plugin/c
 Two guardrails ship on:
 
 - **Escalation** — a mechanical-tier packet that fails validation twice auto-routes to Opus 5 on the third attempt. Prevents infinite retries when Flash can't solve a particular puzzle.
-- **Hard cost cap** — `hard_cost_cap_usd: 50` per run ([antigravity-flash38-plus-opus5.yaml:154](plugin/config/policies/antigravity-flash38-plus-opus5.yaml)). The policy declares it, the console shows it on every card and carries it into saved policies, and the pricing preflight reads the policy back to you before any paid run. Raise or lower it in your own policy.
+- **Hard cost cap** — `hard_cost_cap_usd: 50` per run ([antigravity-flash38-plus-opus5.yaml:155](plugin/config/policies/antigravity-flash38-plus-opus5.yaml)). Before each `execute_with_model` call, the bridge sums `cost_usd` over the run's `telemetry.jsonl`, leaving out `tier: "orchestrator"` lines. Once that sum reaches the cap, the bridge refuses the dispatch without calling a model and returns an error naming the cap, the spend and the file. Raise or lower the cap in your own policy, or remove the key to run without one; a value that is not a positive number fails at policy load. The console shows the cap on every card and carries it into saved policies.
+
+  What the cap does not cover:
+
+  | Case | Why |
+  |---|---|
+  | The call that crosses the cap | The check runs before a call, never during it, so that call completes and the run ends above the cap by its cost. Calls already in flight also complete. |
+  | A dispatch with no `telemetry_path` | The bridge has no file to count from, so it neither checks that dispatch nor counts its cost. |
+  | The driver's modeled line | It lives in `driver-cost-modeled.jsonl`, not `telemetry.jsonl`, and modeled dollars are never summed with cash. |
+  | A single judgment call's output | Opus 5 runs uncapped; see [docs/methodology.md](docs/methodology.md#output-ceiling-doubling). |
 
 One policy ships:
 

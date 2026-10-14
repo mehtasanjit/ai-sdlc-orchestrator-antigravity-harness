@@ -414,3 +414,16 @@ test("T10 AntigravityWorkerAdapter: a wrong block is ignored with a warning; an 
   assert.equal(refused38.out.success, false);
   assert.match(refused38.out.error, /no price period for gemini-3\.8-flash on 2026-09-01/);
 });
+
+test("AntigravityWorkerAdapter: an agent session has no output cap, so the attempt claims no ceiling", async () => {
+  const leaf = loadPolicy({ policyName: "opus-plus-flash-v38" }).models.find((m) => m.id === "flash-agsdk-worker");
+  const ran = await workerRun(leaf);
+  assert.equal(ran.out.success, true, ran.out.error);
+  const refused = await workerRun(leaf, { now: BEFORE_V38_GA });
+  assert.equal(refused.ran, false);
+  for (const [attempt] of [ran.out.attempts, refused.out.attempts]) {
+    assert.equal(attempt.ceiling_used, null);
+    assert.equal(attempt.budget_enforced, false);
+    assert.equal(attempt.budget_declared, PACKET.budget.maxOutputTokens);
+  }
+});

@@ -181,7 +181,16 @@ export interface TelemetryEvent {
   retry_count: number;
   /** Output-cap doubling attempts share a task_id. attempt_number is 1-indexed. */
   attempt_number?: number;
-  ceiling_used?: number;
+  /** The output cap the vendor was given; null when the adapter passed none (see budget_enforced). */
+  ceiling_used?: number | null;
+  /**
+   * `false` when the adapter passed neither an output cap nor a spend limit to
+   * the vendor, so `output_tokens` can exceed `budget_declared`. Absent when
+   * `ceiling_used` was applied.
+   */
+  budget_enforced?: boolean;
+  /** The packet's `budget.maxOutputTokens`, kept when `budget_enforced` is false. */
+  budget_declared?: number;
   retry_reason?: "output_cap" | "validation" | "escalation";
   artifact_path?: string;
   error?: string;
@@ -192,7 +201,12 @@ export interface TelemetryEvent {
 /** One attempt from the output-cap doubling loop. */
 export interface AttemptRecord {
   attempt_number: number;
-  ceiling_used: number;
+  /** null when the adapter passed no output cap to the vendor. */
+  ceiling_used: number | null;
+  /** `false` when no output cap or spend limit reached the vendor; absent when `ceiling_used` applied. */
+  budget_enforced?: boolean;
+  /** The packet's `budget.maxOutputTokens`, kept when `budget_enforced` is false. */
+  budget_declared?: number;
   stop_reason?: string;
   hit_output_cap: boolean;
   tokens: {
@@ -422,6 +436,8 @@ export interface Policy {
   rules: Rule[];
   /** Optional; absent from policies written before slots existed. */
   select?: Record<string, SelectSlot>;
+  /** Run-wide spend limit in USD, enforced by runCostCap.ts. Absent = no cap. */
+  hard_cost_cap_usd?: number;
 }
 
 export interface RoutingDecision {
