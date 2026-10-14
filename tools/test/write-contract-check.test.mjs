@@ -200,3 +200,43 @@ test("the heartbeat hook replies {} and appends a line under the workspace", () 
     assert.equal(line.event, "mcp_tool_postuse");
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
+
+const shell = (dir, line, workspacePaths = [dir]) => runHook({ toolCall: { name: "run_command", args: { CommandLine: line } }, workspacePaths }, dir).reply;
+
+test("an inline script's literal write target is judged like a file tool's", () => {
+  const dir = repoWithContract(CONTRACT);
+  try {
+    const outside = shell(dir, `node -e "require('fs').writeFileSync('${join(dir, "README.md")}', 'x')"`);
+    assert.equal(outside.decision, "deny");
+    assert.match(outside.reason, /README\.md is not in the confirmed allowlist for run t1/);
+    assert.deepEqual(shell(dir, `node -e 'const fs = require("fs"); fs.writeFileSync("${join(dir, "src", "a.ts")}", "x")'`), { decision: "allow" });
+    const last = readFileSync(join(dir, ".sdlc", "local", "guard-decisions.jsonl"), "utf8").trim().split("\n").map(JSON.parse).at(-1);
+    assert.deepEqual([last.decision, last.run_id, last.paths], ["allow", "t1", [join(dir, "src", "a.ts")]], "an allow names the paths it judged");
+    assert.equal(shell(dir, `python3 -c "open('${join(dir, ".env")}', 'w').write('K=1')"`).decision, "deny");
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test("a script write with no literal target is refused only while a contract binds", () => {
+  const bound = repoWithContract(CONTRACT);
+  const free = repoWithContract(null);
+  try {
+    const r = shell(bound, `node -e "const p = process.argv[1]; require('fs').writeFileSync(p, 'x')" out.txt`);
+    assert.equal(r.decision, "deny");
+    assert.match(r.reason, /not a literal, so the write contract of run t1 cannot judge it/);
+    assert.equal(shell(free, `node -e "const p = process.argv[1]; require('fs').writeFileSync(p, 'x')" out.txt`).decision, "allow");
+    assert.equal(shell(bound, `node -e "console.log(require('fs').readFileSync('src/a.ts', 'utf8'))"`).decision, "allow", "a read is no write");
+  } finally { rmSync(bound, { recursive: true, force: true }); rmSync(free, { recursive: true, force: true }); }
+});
+
+test("a package install is judged as a write to node_modules and the lockfile of the bound project", () => {
+  const dir = repoWithContract(CONTRACT);
+  const harness = mkdtempSync(join(tmpdir(), "wc-harness-"));
+  try {
+    const r = shell(harness, "npm install", [harness, dir]);
+    assert.equal(r.decision, "deny", "agy names no working folder, so the bound project's contract judges it");
+    assert.match(r.reason, /node_modules\/\.package-lock\.json is not in the confirmed allowlist for run t1/);
+    assert.equal(shell(dir, "npm test").decision, "allow");
+    const open = repoWithContract({ ...CONTRACT, allowlist: ["src/**", "node_modules/**", "package-lock.json"] });
+    try { assert.equal(shell(open, "npm ci").decision, "allow", "a contract that allows the install lets it run"); } finally { rmSync(open, { recursive: true, force: true }); }
+  } finally { rmSync(dir, { recursive: true, force: true }); rmSync(harness, { recursive: true, force: true }); }
+});

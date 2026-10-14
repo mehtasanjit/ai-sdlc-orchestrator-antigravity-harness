@@ -64,7 +64,7 @@ test("with this run's contract, the record lists what the run changed outside it
     const fz = spawnSync(process.execPath, [WRITE_CONTRACT, "--freeze", "--run-id=r1", `--allowlist=${JSON.stringify(CONTRACT.allowlist)}`, `--off-limits=${JSON.stringify(CONTRACT.off_limits)}`, `--project-root=${dir}`], { encoding: "utf8" });
     assert.equal(fz.status, 0, fz.stderr);
     const g = finishWriteGuard({ projectRoot: dir, runId: "r1", statusBefore: new Map(), outcome: "stopped", status: () => new Map([["src/a.ts", "??|1|1"], ["package.json", " M|1|1"], ["secrets/k", "??|1|1"]]) });
-    assert.deepEqual(g.after_run_check, { files_changed: 3, outside_contract: ["package.json", "secrets/k"] });
+    assert.deepEqual(g.after_run_check, { files_changed: 3, outside_contract: ["package.json", "secrets/k"], unjudged_changes: ["package.json", "secrets/k", "src/a.ts"] }, "no hook decision named any of them");
     assert.equal(g.contract_closed, "stopped");
     assert.equal(contractState(dir).binding, false, "the run's contract no longer holds the project");
     assert.equal(JSON.parse(readFileSync(join(dir, ".sdlc", "runs", "r1", "run-end.json"), "utf8")).outcome, "stopped");
@@ -169,5 +169,19 @@ test("the first launch's snapshot survives a resume, so the after-run check cove
     assert.equal(loadLaunchSnapshot(join(dir, "nowhere")), null);
     const g = finishWriteGuard({ projectRoot: dir, runId: "r1", statusBefore: loadLaunchSnapshot(dir), outcome: "completed", status: () => new Map([["src/a.ts", " M|1|1"], ["node_modules/x/index.js", "??|2|1"]]) });
     assert.deepEqual(g.after_run_check.outside_contract, ["node_modules/x/index.js"], "a file the first launch wrote is still in the final record");
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test("the record lists changed files no hook decision named", async () => {
+  const { unjudgedChanges } = await import("../../plugin/agy/writeGuard.mjs");
+  assert.deepEqual(unjudgedChanges(["src/a.ts", "src/b.ts", "node_modules/x/i.js"], ["src/a.ts", "node_modules/.package-lock.json"]), ["src/b.ts"]);
+  const dir = mkdtempSync(join(tmpdir(), "hwg-"));
+  try {
+    frozen(dir);
+    const log = join(dir, ".sdlc", "local", "guard-decisions.jsonl");
+    appendFileSync(log, JSON.stringify({ decision: "allow", run_id: "r1", paths: [join(dir, "src", "a.ts")] }) + "\n");
+    const g = finishWriteGuard({ projectRoot: dir, runId: "r1", statusBefore: new Map(), outcome: "completed", status: () => new Map([["src/a.ts", "??|1|1"], ["src/b.ts", "??|1|1"]]) });
+    assert.deepEqual(g.after_run_check.unjudged_changes, ["src/b.ts"]);
+    assert.match(g.reason, /1 changed file\(s\) reached disk without a hook decision/);
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });

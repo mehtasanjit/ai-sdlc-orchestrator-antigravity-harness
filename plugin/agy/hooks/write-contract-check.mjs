@@ -166,8 +166,53 @@ function extractBashRedirectTargets(command) {
     const dest = args[args.length - 1];
     if (dest && !dest.endsWith("/")) targets.push(dest);
   }
+  targets.push(...scriptWriteTargets(command).targets);
   return targets;
 }
+
+const Q = "['\"`]";
+const LIT = `\\\\?(${Q})([^'"\`$\\\\]+)\\\\?\\1`;
+const FS = "(?:fs|fsp|promises)\\.";
+const SCRIPT_WRITES = [
+  new RegExp(`\\b(?:writeFileSync|appendFileSync|createWriteStream|${FS}(?:writeFile|appendFile))\\(\\s*${LIT}`, "g"),
+  new RegExp(`\\b(?:copyFileSync|renameSync|cpSync|${FS}(?:copyFile|rename|cp))\\(\\s*\\\\?${Q}[^'"\`]*\\\\?${Q}\\s*,\\s*${LIT}`, "g"),
+  new RegExp(`\\bopen\\(\\s*${LIT}\\s*,\\s*['"][rb]*[wax]`, "g"),
+  new RegExp(`\\bPath\\(\\s*${LIT}\\s*\\)\\.write_(?:text|bytes)\\(`, "g"),
+];
+const SCRIPT_WRITE_CALLS = new RegExp(
+  `\\b(?:writeFileSync|appendFileSync|createWriteStream|copyFileSync|renameSync|cpSync|${FS}(?:writeFile|appendFile|copyFile|rename|cp))\\(` +
+    `|\\bopen\\([^)]*,\\s*['"][rb]*[wax]|\\.write_(?:text|bytes)\\(`,
+  "g",
+);
+
+/**
+ * The literal paths an inline script (`node -e`, `python -c`) writes through
+ * node's fs or python's open() and Path. `unresolved` counts the write calls
+ * whose target is not a literal, which no hook can judge.
+ */
+export function scriptWriteTargets(command) {
+  if (typeof command !== "string") return { targets: [], unresolved: 0 };
+  const targets = [];
+  for (const re of SCRIPT_WRITES) for (const m of command.matchAll(re)) targets.push(m[m.length - 1]);
+  const calls = (command.match(SCRIPT_WRITE_CALLS) ?? []).length;
+  return { targets, unresolved: Math.max(0, calls - targets.length) };
+}
+
+const INSTALL_RE = /(?:^|[\s;&|(])(npm|pnpm|yarn|bun)\s+(install|i|ci|add|update|up|upgrade|remove|rm|uninstall|un)\b/g;
+const LOCKFILES = { npm: "package-lock.json", pnpm: "pnpm-lock.yaml", yarn: "yarn.lock", bun: "bun.lockb" };
+
+/** What a package manager's install or dependency change writes, relative to the project it runs in. */
+export function packageInstallTargets(command) {
+  if (typeof command !== "string") return [];
+  const out = new Set();
+  for (const [, tool, sub] of command.matchAll(INSTALL_RE)) {
+    out.add("node_modules/.package-lock.json");
+    out.add(LOCKFILES[tool]);
+    if (/^(?:add|remove|rm|uninstall|un)$/.test(sub)) out.add("package.json");
+  }
+  return [...out];
+}
+
 
 // ── agy-specific: target extraction ─────────────────────────────────────
 
@@ -251,6 +296,12 @@ export function findCredentialLiteral(call) {
   return null;
 }
 
+/** The git projects of the call's workspace whose contract binds, with that state. */
+function bindingRoots(call) {
+  const roots = new Set([callCwd(call), ...(Array.isArray(call?.workspacePaths) ? call.workspacePaths : [])].map((p) => (typeof p === "string" ? gitRoot(p) : null)).filter(Boolean));
+  return [...roots].map((root) => ({ root, state: contractState(root) })).filter(({ state }) => state.binding);
+}
+
 function callCwd(call) {
   const ws = Array.isArray(call?.workspacePaths) ? call.workspacePaths[0] : undefined;
   if (typeof ws === "string" && ws) return ws;
@@ -282,7 +333,7 @@ async function allow(msg, ctx = {}) {
     console.error(`[mmo-brownfield write-contract] ALLOW: ${msg}`);
   }
   log("debug", "write.allow", { run_id: ctx.runId, path: ctx.path, matched_rule: ctx.matchedRule });
-  await recordDecision(ctx.root, { decision: "allow", reason: msg, path: ctx.path, run_id: ctx.runId, matched_rule: ctx.matchedRule });
+  await recordDecision(ctx.root, { decision: "allow", reason: msg, path: ctx.path, ...(ctx.paths ? { paths: ctx.paths } : {}), run_id: ctx.runId, matched_rule: ctx.matchedRule });
   reply("allow");
   process.exit(0);
 }
@@ -312,7 +363,7 @@ async function main() {
   if (!call || typeof call !== "object") return allow("no parseable tool call on stdin");
 
   const toolName = call?.toolCall?.name ?? call?.tool_name;
-  const targets = extractTargets(call);
+  const targets = [...extractTargets(call)];
 
   const credential = findCredentialLiteral(call);
   if (credential) {
@@ -337,6 +388,21 @@ async function main() {
     );
   }
 
+  if (toolName === "run_command") {
+    const line = call?.toolCall?.args?.CommandLine ?? call?.tool_input?.command;
+    const roots = bindingRoots(call);
+    if (roots.length && scriptWriteTargets(line).unresolved) {
+      const { root, state } = roots[0];
+      return deny(
+        `this command's inline script writes a file whose path is not a literal, so the write contract of run ${state.runId} cannot judge it. ` +
+          "Write the file with write_to_file, or name its path as a literal string.",
+        { root, runId: state.runId, matchedRule: "unresolved-script-write", toolName },
+      );
+    }
+    // agy names no working folder for a command: a package manager is judged in every project whose contract binds.
+    for (const rel of packageInstallTargets(line)) for (const { root } of roots) targets.push(join(root, rel));
+  }
+
   if (targets.length === 0) return allow("no write target extracted from this tool call");
 
   let judgedBy = null;
@@ -347,7 +413,8 @@ async function main() {
   }
   // Logged where a refusal under the same contract would be, with its run id: a
   // headless run counts these to show the hook judged its writes (writeGuard.mjs).
-  return allow(`all ${targets.length} target(s) cleared`, judgedBy ? { root: judgedBy.root, runId: judgedBy.runId } : { root: gitRoot(callCwd(call)) });
+  const paths = targets.map((t) => toPosix(isAbsolute(t) ? t : resolve(callCwd(call), t)));
+  return allow(`all ${targets.length} target(s) cleared`, judgedBy ? { root: judgedBy.root, runId: judgedBy.runId, paths } : { root: gitRoot(callCwd(call)), paths });
 }
 
 const NOT_YOURS = "A wider scope is the person's decision, for a new run with its own Gate 0: stop and tell the person which path is needed and why.";

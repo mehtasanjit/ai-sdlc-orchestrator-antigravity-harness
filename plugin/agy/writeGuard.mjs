@@ -7,7 +7,7 @@
  */
 import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync, statSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { isAbsolute, join, relative, sep } from "node:path";
 
 import { matchGlob } from "./hooks/write-contract-check.mjs";
 import { HARDCODED_OFF_LIMITS } from "../scripts/lib/off-limits.mjs";
@@ -21,9 +21,18 @@ export const NO_HOOK_DECISION_REASON =
 /** The hook's decisions that name this run, from the project's `.sdlc/local/guard-decisions.jsonl`. */
 export function hookDecisions(projectRoot, runId) {
   const path = join(projectRoot, ".sdlc", "local", "guard-decisions.jsonl");
-  if (!existsSync(path)) return { judged: 0, refused: 0 };
+  if (!existsSync(path)) return { judged: 0, refused: 0, paths: [] };
   const mine = readFileSync(path, "utf8").split("\n").flatMap((l) => { try { const d = JSON.parse(l); return d?.run_id === runId ? [d] : []; } catch { return []; } });
-  return { judged: mine.length, refused: mine.filter((d) => d.decision === "deny").length };
+  const rel = (p) => (isAbsolute(p) ? relative(projectRoot, p) : p).split(sep).join("/");
+  const paths = [...new Set(mine.flatMap((d) => [...(d.paths ?? []), ...(d.path ? [d.path] : [])]).map(rel))];
+  return { judged: mine.length, refused: mine.filter((d) => d.decision === "deny").length, paths };
+}
+
+/** Changed paths no hook decision for the run named: a file, or anything under a judged `node_modules/`. */
+export function unjudgedChanges(changed, judgedPaths) {
+  const judged = new Set(judgedPaths);
+  const underModules = judgedPaths.some((p) => p.startsWith("node_modules/"));
+  return changed.filter((p) => !judged.has(p) && !(underModules && p.startsWith("node_modules/")));
 }
 
 /**
@@ -81,13 +90,19 @@ export function finishWriteGuard({ projectRoot, runId, statusBefore, outcome, st
   const contract = readContract(projectRoot)?.parsed;
   if (contract?.run_id !== runId) return { state: "off", reason: NO_CONTRACT_REASON };
   const hook = hookDecisions(projectRoot, runId);
-  const guard = hook.judged
-    ? { state: "hook", reason: `the write hook judged ${hook.judged} write(s) of this run and refused ${hook.refused}`, hook_decisions: hook }
-    : { state: "off", reason: NO_HOOK_DECISION_REASON };
   const changed = changedSince(statusBefore, status(projectRoot));
   const outside = outsideContract(changed, contract);
+  const unjudged = unjudgedChanges(changed, hook.paths);
+  const guard = hook.judged
+    ? {
+        state: "hook",
+        reason: `the write hook judged ${hook.judged} write(s) of this run and refused ${hook.refused}` +
+          (unjudged.length ? `; ${unjudged.length} changed file(s) reached disk without a hook decision` : ""),
+        hook_decisions: { judged: hook.judged, refused: hook.refused },
+      }
+    : { state: "off", reason: NO_HOOK_DECISION_REASON };
   guard.contract = { run_id: runId, allowlist: contract.allowlist ?? [], off_limits: contract.off_limits ?? [] };
-  guard.after_run_check = { files_changed: changed.length, outside_contract: outside };
+  guard.after_run_check = { files_changed: changed.length, outside_contract: outside, unjudged_changes: unjudged };
   if (contractState(projectRoot).binding && !runEnded(projectRoot, runId)) {
     endRun(projectRoot, runId, { outcome, reason: LAUNCHER_STOP_REASON });
     guard.contract_closed = outcome;
