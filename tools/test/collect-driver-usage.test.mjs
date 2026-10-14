@@ -103,7 +103,7 @@ test("the collected calls become the interactive run's modeled driver line, pric
   writeFileSync(join(runDir, "telemetry.jsonl"), "");
   const home = agyHomeWith(project, [{ id: "c1", lastModified: "2026-10-13T11:00:00Z", steps: [T("2026-10-13T10:10:00Z")], gens: [{ fresh: 1_000_000, cached: 1_000_000, thinking: 500_000, text: 500_000, step: 0 }] }]);
   try {
-    const { modeled, evidence } = await collectDriverUsage({ runDir, runId: "i1", projectRoot: project, since: "2026-10-13T10:00:00Z", until: "2026-10-13T12:00:00Z", home, version: "1.3.0" });
+    const { modeled, evidence } = await collectDriverUsage({ runDir, runId: "i1", projectRoot: project, since: "2026-10-13T10:00:00Z", until: "2026-10-13T12:00:00Z", home, version: "1.3.5" });
     assert.equal(modeled.length, 1);
     assert.deepEqual([modeled[0].input_tokens, modeled[0].input_tokens_cached, modeled[0].output_tokens, modeled[0].output_tokens_reasoning], [1_000_000, 1_000_000, 1_000_000, 500_000]);
     assert.equal(modeled[0].cost_usd, 0.75 + 0.075 + 3.75, "the Gemini 3.8 Flash card in force on 2026-10-13");

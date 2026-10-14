@@ -286,8 +286,8 @@ On `approved`:
    before every file write and refuses off-limits or not-in-allowlist paths at the tool boundary.
    While the run is live it allows the run's own `.sdlc/runs/<run-id>/`, and refuses every write if
    the contract is edited after this freeze. A refusal names the rule; do not route around it.
-   Headless (`agy -p`) loads no hooks, so a headless run has no write guard: see the run record's
-   `harness.write_guard`.
+   Headless (`agy -p`) on agy 1.3.5 loads the same hook; the run record's `harness.write_guard`
+   says whether it judged this run's writes.
 2. Initialise the run's undo record:
    ```bash
    node "${MMO_PLUGIN_ROOT}/scripts/write-provenance.mjs" --init --run-id=<run-id> --intent=<intent> --project-root="$(pwd)"

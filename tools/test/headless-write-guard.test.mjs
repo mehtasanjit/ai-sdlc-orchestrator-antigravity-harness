@@ -1,11 +1,12 @@
 /**
- * A headless run has no write guard: agy's print mode loads no hooks. The
- * run record says so, lists what the run changed outside its contract, and
- * switches the run's contract off when the driver loop ends.
+ * A headless run's write guard: the record says whether the hook judged the
+ * run's writes (agy 1.3.5 print mode loads it, agy 1.2.5's did not), lists what
+ * the run changed outside its contract, and switches the contract off when the
+ * driver loop ends.
  */
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, mkdirSync, readFileSync, rmSync } from "node:fs";
+import { appendFileSync, mkdtempSync, mkdirSync, readFileSync, rmSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
@@ -51,7 +52,7 @@ test("without a contract for the run, the record says the guard was off and noth
   try {
     const g = finishWriteGuard({ projectRoot: dir, runId: "r1", statusBefore: new Map(), outcome: "completed", status: () => new Map() });
     assert.equal(g.state, "off");
-    assert.match(g.reason, /print mode loads no hooks/);
+    assert.match(g.reason, /no write contract was frozen for this run/);
     assert.equal(g.after_run_check, undefined);
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
@@ -79,5 +80,38 @@ test("an interactive run's manifest records the hook; a headless one records the
     assert.equal(buildHarnessManifest({ runDir: dir, runId: "i1", policyName: "p", env: {} }).harness.write_guard.state, "hook");
     writeFileSync(join(dir, "driver-manifest.json"), JSON.stringify({ run_id: "h1", policy: "p", write_guard: { state: "off", reason: "x" } }));
     assert.equal(buildHarnessManifest({ runDir: dir, runId: "h1", policyName: "p", env: {} }).harness.write_guard.state, "off");
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+function frozen(dir, runId = "r1") {
+  mkdirSync(join(dir, ".git"), { recursive: true });
+  const fz = spawnSync(process.execPath, [WRITE_CONTRACT, "--freeze", `--run-id=${runId}`, `--allowlist=${JSON.stringify(CONTRACT.allowlist)}`, `--off-limits=${JSON.stringify(CONTRACT.off_limits)}`, `--project-root=${dir}`], { encoding: "utf8" });
+  assert.equal(fz.status, 0, fz.stderr);
+}
+
+test("a run the hook judged records the guard as the hook, with its counts", () => {
+  const dir = mkdtempSync(join(tmpdir(), "hwg-"));
+  try {
+    frozen(dir);
+    const log = join(dir, ".sdlc", "local", "guard-decisions.jsonl");
+    mkdirSync(dirname(log), { recursive: true });
+    for (const d of [{ decision: "allow", run_id: "r1" }, { decision: "deny", run_id: "r1" }, { decision: "deny", run_id: "an-earlier-run" }, { decision: "allow" }]) {
+      appendFileSync(log, JSON.stringify(d) + "\n");
+    }
+    appendFileSync(log, "not json\n");
+    const g = finishWriteGuard({ projectRoot: dir, runId: "r1", statusBefore: new Map(), outcome: "completed", status: () => new Map() });
+    assert.equal(g.state, "hook");
+    assert.deepEqual(g.hook_decisions, { judged: 2, refused: 1 }, "only this run's decisions count");
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test("a run with a contract and no hook decision records the guard as off", () => {
+  const dir = mkdtempSync(join(tmpdir(), "hwg-"));
+  try {
+    frozen(dir);
+    const g = finishWriteGuard({ projectRoot: dir, runId: "r1", statusBefore: new Map(), outcome: "completed", status: () => new Map() });
+    assert.equal(g.state, "off");
+    assert.match(g.reason, /recorded no decision for this run/);
+    assert.ok(g.after_run_check, "the after-run check still runs");
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });

@@ -388,7 +388,7 @@ export function buildHarnessManifest({ runDir, policyName, runId, env = process.
     completed: outcome.completed,
     status: outcome.status,
     write_guard: driverManifest
-      ? (driverManifest.write_guard ?? { state: "off", reason: "headless run recorded before write_guard existed; agy print mode loads no hooks" })
+      ? (driverManifest.write_guard ?? { state: "off", reason: "headless run recorded before write_guard existed, so whether the write hook ran is not known" })
       : { state: "hook", reason: "interactive session: plugin/agy/hooks/write-contract-check.mjs runs before every file write (plugin/hooks.json)" },
     gate_mode: driverManifest ? driverManifest.gates ?? null : "prompt",
     gates,

@@ -51,6 +51,7 @@ test("a write inside the allowlist is allowed and recorded", () => {
     assert.deepEqual(reply, { decision: "allow" });
     const decisions = readFileSync(join(dir, ".sdlc", "local", "guard-decisions.jsonl"), "utf8").trim().split("\n").map(JSON.parse);
     assert.equal(decisions.at(-1).decision, "allow");
+    assert.equal(decisions.at(-1).run_id, "t1", "an allow under a contract names its run, as a refusal does");
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 

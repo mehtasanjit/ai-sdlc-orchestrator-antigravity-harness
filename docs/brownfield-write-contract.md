@@ -98,10 +98,12 @@ ended, and a project another live run holds. Ending a run never deletes its fold
 
 ## Headless runs
 
-`agy -p` loads no hooks ([check 1](verification/p1-agy-runtime.md)), so nothing refuses a write
-during a headless brownfield run. The run record says so: `driver-manifest.json` and
-`manifest.json` carry `harness.write_guard.state: "off"` with the reason (`"hook"` on an interactive
-run). After the run, `run.mjs` compares a snapshot taken at launch with one taken at the end —
+On agy 1.3.5, `agy -p` loads the plugin's hooks, and the write-contract hook refuses a write during
+a headless brownfield run as it does interactively. agy 1.2.5 loaded none
+([check 1](verification/p1-agy-runtime.md)). The run record says which held: `driver-manifest.json`
+and `manifest.json` carry `harness.write_guard.state: "hook"` when the hook logged a decision naming
+the run (`hook_decisions` counts the writes it judged and refused), and `"off"` with the reason when
+it logged none. An interactive run records `"hook"`. After the run, `run.mjs` compares a snapshot taken at launch with one taken at the end —
 every file `git status` lists as changed, untracked or ignored, with its mtime and size — and lists
 in `write_guard.after_run_check.outside_contract` every file the run changed that its contract does
 not allow, and warns on stderr. A file already modified before the run and written again shows;
@@ -118,8 +120,8 @@ string argument of a file-writing call and over the whole `run_command` command 
 reason names the pattern and the target file, never the value. Text a replace expects to find on
 disk (`TargetContent`) is not scanned, so an edit that removes a committed key goes through. The
 `KEY=value` assignment pattern is left out because it also matches `process.env.GEMINI_API_KEY`
-and `$GEMINI_API_KEY`, the form you want. Headless runs are not covered: `agy -p` loads no hooks
-([check 1](verification/p1-agy-runtime.md)).
+and `$GEMINI_API_KEY`, the form you want. A headless run is covered when agy loads the hook (agy
+1.3.5, [check 1](verification/p1-agy-runtime.md)); its `harness.write_guard.state` says whether it did.
 
 ## Off-limits, two tiers
 
@@ -168,7 +170,7 @@ This is the concrete answer to the "the plugin doesn't know how you use Gemini /
 | Will this touch my Cursor rules (`.cursor/`)? | No. Default off-limits. | Move `.cursor/` into the allowlist at Gate 0 by editing the proposal. |
 | Will this touch my `package.json`? | Only to add missing dependencies (deep-merge, append-only) and only when a codegen packet explicitly requires it. Never removes, downgrades, or shadows existing scripts. | None needed — the merge rules already enforce safety. |
 | What if I have `commit_strategy: per-gate`? | The plugin refuses to run on a dirty tree so your uncommitted work does not tangle with the plugin's commits. Defaults are safe: `branch_strategy: current`, `commit_strategy: none`, `pr: off`. | `--allow-dirty` bypasses the git-clean check. |
-| Can the AI bypass the hook? | Interactive: not through a file tool. The hook is an agy `PreToolUse` matcher, refusals happen before the tool executes, and editing the frozen contract refuses every later write. A shell command is checked only for redirects, `tee`, `touch`, `cp` and `mv`; one that rewrites the contract changes its bytes and locks the run. Headless: `agy -p` loads no hooks ([check 1](verification/p1-agy-runtime.md)), so a headless brownfield run has no guard, its record says so, and the after-run check lists what it changed outside the contract. | `--strict-write=off` at run start, passed by you. Mid-run: none; a wider scope is a new run with its own Gate 0. |
+| Can the AI bypass the hook? | Interactive: not through a file tool. The hook is an agy `PreToolUse` matcher, refusals happen before the tool executes, and editing the frozen contract refuses every later write. A shell command is checked only for redirects, `tee`, `touch`, `cp` and `mv`; one that rewrites the contract changes its bytes and locks the run. Headless: on agy 1.3.5 `agy -p` loads the hook and refuses the same writes ([check 1](verification/p1-agy-runtime.md)); the record's `write_guard.state` is `hook` when it judged the run's writes and `off` when it judged none, and the after-run check lists what the run changed outside the contract either way. | `--strict-write=off` at run start, passed by you. Mid-run: none; a wider scope is a new run with its own Gate 0. |
 | A run stopped after Gate 0 and the project stays held | `node plugin/scripts/write-contract.mjs --abandon --run-id <run-id> --reason "<why>"` records the run's end (aborted) and switches its contract off. Deleting the contract does not free it: under the live freeze record that refuses every write. | Your decision. |
 | How do I override off-limits for one specific run? | Re-open Gate 0 with `revise:` and move the specific path from `off_limits` to `allowlist`. Ephemeral — applies to this run only. | None. `.sdlc/project.json.off_limits_default` is unchanged by this. |
 | My repo has files with unusual characters — will pattern matching work? | Yes. The hook uses glob-style pattern matching (`*`, `**`, `?`, literal `/`). No shell-out, no eval on paths. Unicode, spaces, and exotic characters all work. | None needed. |

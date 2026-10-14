@@ -50,7 +50,7 @@ node plugin/agy/run.mjs \
 | `--dangerously-skip-permissions` | Print mode soft-denies every tool that would prompt | 6 |
 | no `--sandbox` | The bridge is a piped subprocess | 2 |
 | `--print-timeout 6h` | A pass runs hours | — |
-| cwd = repo root | Where the plugin mount lives; print mode loads it anyway only in name — see below | 10 |
+| cwd = repo root | Where the plugin mount lives; on agy 1.3.5 print mode loads its MCP server and hooks — see below | 1, 10 |
 | `--add-dir <project>` | Mandatory; the workspace is otherwise the harness repo | — |
 
 ### The pin gate
@@ -67,9 +67,9 @@ Passed checks open the gate; they do not prove the run held the pin. `pin.verifi
 
 `pin.observed_models` lists the names read: the stream's (`driver_reported_models`) and, on a headless run, the `.1.19` field of agy's local conversation record (`driver_usage.local_record.models`). An interactive run reads them from `driver-collector.json`; without a collection its pin stays `no_model_observed`.
 
-### Headless is plugin-less
+### What print mode loads
 
-`agy -p` loads no workspace customization: no plugin, MCP server, hook or skill (check 1). A headless run therefore has no `/mmo:*` skills and no bridge tools in the model's toolset; the conductor prompt `run.mjs` renders tells the model to dispatch through `plugin/agy/dispatch.mjs`, which speaks MCP to the bridge itself. The write-contract hook does not fire headless: a headless brownfield run has no guard, `harness.write_guard.state` says `off`, and the after-run check lists what the run changed outside its contract ([brownfield-write-contract.md](brownfield-write-contract.md#headless-runs)).
+On agy 1.3.5, `agy -p` run from the harness repo loads the plugin mount: the bridge's MCP server, reached through `call_mcp_tool` as `mmo_model-dispatch`, and the plugin's hooks (check 1). agy 1.2.5 loaded none of it. The conductor prompt `run.mjs` renders still tells the model to dispatch through `plugin/agy/dispatch.mjs`, which speaks MCP to the bridge itself. The write-contract hook fires headless on 1.3.5: `harness.write_guard.state` is `hook` when it judged the run's writes, and the after-run check lists what the run changed outside its contract either way ([brownfield-write-contract.md](brownfield-write-contract.md#headless-runs)).
 
 ### The resume loop
 
@@ -124,7 +124,7 @@ node plugin/agy/run.mjs --project-root=/tmp/bugfix --mode=brownfield --intent=bu
 node tools/report.mjs /tmp/bugfix/.sdlc/runs/bugfix-1
 ```
 
-A headless brownfield run has no write guard (print mode loads no hooks): read `harness.write_guard.after_run_check.outside_contract` in `manifest.json` and `git -C /tmp/bugfix diff` before you keep anything.
+Read `harness.write_guard` in `manifest.json`: `state` says whether the write hook judged the run's writes (`hook` on agy 1.3.5), and `after_run_check.outside_contract` lists what the run changed outside its contract. Read it and `git -C /tmp/bugfix diff` before you keep anything.
 
 **4. Check the cost.** In each run's `manifest.json`:
 

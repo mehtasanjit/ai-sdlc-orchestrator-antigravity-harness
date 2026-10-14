@@ -15,11 +15,10 @@ export const BILLING_MODES = new Set(["seat", "gemini-api-key"]);
 
 /**
  * Live checks the headless pin depends on (p1-agy-runtime.md, "Pins chosen").
- * Recorded 2026-09-17 on agy 1.2.5. Print mode loads no workspace
- * customization (no plugin, no MCP server, no hooks), so a headless run
- * dispatches through plugin/agy/dispatch.mjs (pattern b) and checks 1 and 5
- * (the MCP route, ${VAR} in mcp_config.json) are interactive-only — they do
- * not gate a headless run. Flip an entry only with the result in the doc.
+ * Recorded 2026-09-17 on agy 1.2.5. A headless run dispatches through
+ * plugin/agy/dispatch.mjs (pattern b), so checks 1 and 5 (the MCP route,
+ * ${VAR} in mcp_config.json) do not gate it, even though agy 1.3.5's print
+ * mode loads the plugin's MCP server and hooks (check 1, re-checked 2026-10-14). Flip an entry only with the result in the doc.
  */
 export const LIVE_PIN_CHECKS = {
   2: "pass", // dispatch.mjs reaches the bridge from a print-mode session, with and without --sandbox

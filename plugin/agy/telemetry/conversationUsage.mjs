@@ -22,7 +22,7 @@ import { decodeRaw } from "./protobufRaw.mjs";
 
 /** The field numbers check 18 read. `verified_on` is the agy version they were read from. */
 export const LOCAL_RECORD_FIELDS = Object.freeze({
-  verified_on: "1.3.0",
+  verified_on: "1.3.5",
   model: ".1.19",
   usage: ".1.17.2",
   fresh_input: 2,

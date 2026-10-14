@@ -65,6 +65,20 @@ hooks, skills, rules, JSON configs); then `strings` over the binary; then `antig
 11. **Interactive MCP tools go through `call_mcp_tool`, on the namespaced server `mmo_model-dispatch`.** There is no per-tool binding; the conductor rules name the server and tool. Whether the main agent or only a subagent holds `call_mcp_tool` is the open half of check 1.
 12. **The sandbox does not kill the bridge.** Codex's finding does not carry over.
 
+## Re-check on agy 1.3.5 (2026-10-14)
+
+agy `1.3.5` at `/opt/homebrew/bin/agy`, signed in on the seat (agy's log: `authMethod=gcp`). Every call `--model gemini-3.8-flash-high --dangerously-skip-permissions`, run from the harness repo, outputs under `.sdlc/p1/` (gitignored). No bridge call reached a vendor.
+
+| # | Result on 1.3.5 |
+|---|---|
+| 1 | **Changed: print mode loads the plugin mount.** agy's own log for the run (`~/.gemini/antigravity-cli/cli.log`, or the file `--log-file` names) reads `loaded 2 named hooks from 1 hooks.json file(s)`, the count `.agents/plugins/mmo/hooks.json` holds (the log does not name them; the probes below show the write hook is one). The model's toolset holds `call_mcp_tool`, and it called `load_policy` on server `mmo_model-dispatch`: the bridge started and answered (conversation `b8b9d30e-81fa-49da-a2bc-ed10a524aecf`). Its first two calls failed with `Policy … not found at /Users/…/AI%20studies%20TL/…`, the clone-path-with-a-space bug that `fileURLToPath` in `policy.ts` fixes. The write hook fires and its refusal holds: a `write_to_file` onto `.sdlc/p1/.env.probe` came back `tool call denied by pre-tool hook: … matches always-off-limits pattern ".env.*"`, the file was not written, and `.sdlc/local/guard-decisions.jsonl` recorded the deny. Under a frozen contract (run `probe1`, allowlist `src/**`, off-limits `secrets/**`) in a separate git project passed with `--add-dir`, `src/ok.txt` was allowed and written and `secrets/no.txt` refused and not written, both logged with `run_id: "probe1"` in that project's decision log. Whether print mode expands `/mmo:*` skills was not re-checked (check 4). |
+| 14 | **PASS.** `agy models` lists `gemini-3.8-flash-high`, `-medium`, `-low`, the same for 3.7 and 3.6 Flash, `gemini-3.1-pro-low` and `-high`, and new on this version `gemini-4-argon-high`, `-medium`, `-low`. The pinned slug is listed; `init.model` names it. |
+| 16 | **PASS, cumulative.** `tools/p1/live-checks.sh 16`, conversation `442b168f-5c80-46d4-bae5-6734e9049d34`: first call `{input 15593, output 2045, thinking 1658, cache_read 0, total 17638}`, resume `{input 18288, output 2070, thinking 1682, cache_read 15147, total 20358}`. The resume's output is the first call's plus 25. |
+| 17 | **PASS, `cache-outside-total+thinking-in-output`.** Check 1's run reported `{input 78818, output 8390, thinking 7171, cache_read 327474, total 87208}`: `total = input + output`, the cache reads exceed `input`, and `readingsThatFit` returns that one reading only. |
+| 18 | **PASS.** The local record matches agy's own `usage` exactly: conversation `b8b9d30e-…` 13 calls, fresh 78,818, cache 327,474, output 8,390, thinking 7,171; conversation `442b168f-…` 2 calls, fresh 18,288, cache 15,147, output 2,070, thinking 1,682; both rows name `gemini-3.8-flash`. `LOCAL_RECORD_FIELDS.verified_on` is now `1.3.5`. |
+
+13. **Print mode on 1.3.5 carries the plugin.** A headless run now has the bridge's MCP tools and the write hook. `run.mjs` still routes dispatch through `dispatch.mjs`; the conductor can also reach `execute_with_model` directly. A headless brownfield run is guarded while it runs, and `harness.write_guard.state` reads `hook` when the hook logged a decision naming the run.
+
 ## Pins chosen
 
 The headless pin is live-verified: checks 2, 4, 6 and 10 pass, and `LIVE_PIN_CHECKS` in

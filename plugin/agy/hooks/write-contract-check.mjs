@@ -339,11 +339,15 @@ async function main() {
 
   if (targets.length === 0) return allow("no write target extracted from this tool call");
 
+  let judgedBy = null;
   for (const target of targets) {
     const verdict = await checkOneTarget(target, call);
     if (verdict.deny) return deny(verdict.msg, { ...verdict.ctx, toolName });
+    judgedBy ??= verdict.judgedBy?.[0] ?? null;
   }
-  return allow(`all ${targets.length} target(s) cleared`, { root: gitRoot(callCwd(call)) });
+  // Logged where a refusal under the same contract would be, with its run id: a
+  // headless run counts these to show the hook judged its writes (writeGuard.mjs).
+  return allow(`all ${targets.length} target(s) cleared`, judgedBy ? { root: judgedBy.root, runId: judgedBy.runId } : { root: gitRoot(callCwd(call)) });
 }
 
 const NOT_YOURS = "A wider scope is the person's decision, for a new run with its own Gate 0: stop and tell the person which path is needed and why.";
@@ -458,7 +462,7 @@ async function checkOneTarget(target, call) {
       if (verdict) return { deny: true, msg: verdict.msg, ctx: { root, path: rel, runId: state.runId, matchedRule: verdict.rule, strict: state.contract?.strict } };
     }
   }
-  return { deny: false };
+  return { deny: false, judgedBy: judges.map(({ root, state }) => ({ root, runId: state.runId })) };
 }
 
 if (isMain(import.meta.url)) {

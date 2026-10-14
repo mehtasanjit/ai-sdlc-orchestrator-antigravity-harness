@@ -1,11 +1,12 @@
 /**
- * The write guard of a headless run. agy's print mode loads no hooks
- * (p1-agy-runtime.md check 1), so nothing refuses a write while the run is
- * live; the record says so, and a check after the run lists every file the
- * run changed that its contract does not allow.
+ * The write guard of a headless run. agy 1.3.5's print mode loads the plugin's
+ * hooks and enforces a refusal; agy 1.2.5's loaded none (p1-agy-runtime.md
+ * check 1). The record says which held, from the hook's own decisions for this
+ * run, and a check after the run lists every file the run changed that its
+ * contract does not allow.
  */
 import { spawnSync } from "node:child_process";
-import { statSync } from "node:fs";
+import { existsSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 
 import { matchGlob } from "./hooks/write-contract-check.mjs";
@@ -13,8 +14,17 @@ import { HARDCODED_OFF_LIMITS } from "../scripts/lib/off-limits.mjs";
 import { contractState, readContract, runEnded } from "../scripts/lib/contract-state.mjs";
 import { endRun } from "../scripts/write-contract.mjs";
 
-export const HEADLESS_GUARD_REASON =
-  "agy print mode loads no hooks (docs/verification/p1-agy-runtime.md check 1), so no write was refused during this run";
+export const NO_CONTRACT_REASON = "no write contract was frozen for this run, so the hook had nothing to judge (a greenfield run takes none)";
+export const NO_HOOK_DECISION_REASON =
+  "the write hook recorded no decision for this run: agy loaded no hooks (print mode before agy 1.3.5 loads none, p1-agy-runtime.md check 1), or the run wrote nothing";
+
+/** The hook's decisions that name this run, from the project's `.sdlc/local/guard-decisions.jsonl`. */
+export function hookDecisions(projectRoot, runId) {
+  const path = join(projectRoot, ".sdlc", "local", "guard-decisions.jsonl");
+  if (!existsSync(path)) return { judged: 0, refused: 0 };
+  const mine = readFileSync(path, "utf8").split("\n").flatMap((l) => { try { const d = JSON.parse(l); return d?.run_id === runId ? [d] : []; } catch { return []; } });
+  return { judged: mine.length, refused: mine.filter((d) => d.decision === "deny").length };
+}
 
 /**
  * A snapshot of the files git sees as changed, untracked or ignored, each
@@ -57,9 +67,12 @@ export function outsideContract(paths, contract) {
  * once the driver loop ends, so it does not go on holding the project.
  */
 export function finishWriteGuard({ projectRoot, runId, statusBefore, outcome, status = gitStatus }) {
-  const guard = { state: "off", reason: HEADLESS_GUARD_REASON };
   const contract = readContract(projectRoot)?.parsed;
-  if (contract?.run_id !== runId) return guard;
+  if (contract?.run_id !== runId) return { state: "off", reason: NO_CONTRACT_REASON };
+  const hook = hookDecisions(projectRoot, runId);
+  const guard = hook.judged
+    ? { state: "hook", reason: `the write hook judged ${hook.judged} write(s) of this run and refused ${hook.refused}`, hook_decisions: hook }
+    : { state: "off", reason: NO_HOOK_DECISION_REASON };
   const changed = changedSince(statusBefore, status(projectRoot));
   const outside = outsideContract(changed, contract);
   guard.contract = { run_id: runId, allowlist: contract.allowlist ?? [], off_limits: contract.off_limits ?? [] };

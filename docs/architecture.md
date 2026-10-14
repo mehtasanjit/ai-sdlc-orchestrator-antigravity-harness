@@ -11,7 +11,7 @@ node plugin/agy/run.mjs
   │  builds the pinned argv, renders the conductor prompt and skills
   ▼
 agy --print <conductor.md> --output-format stream-json --model gemini-3.8-flash-high
-  │  print mode loads no plugin: the rendered conductor prompt tells Gemini to dispatch through dispatch.mjs
+  │  print mode (agy 1.3.5) loads the plugin's MCP server and hooks; the conductor prompt still routes through dispatch.mjs
   │  Gemini conducts: reads the brief, builds TaskPackets, runs dispatch.mjs, writes artifacts
   ▼
 model-dispatch (MCP, stdio)             ← execute_with_model / preflight_dispatch / load_policy / …

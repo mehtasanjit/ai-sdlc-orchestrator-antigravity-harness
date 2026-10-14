@@ -13,8 +13,8 @@
  *   --dangerously-skip-permissions print mode soft-denies every tool otherwise (6)
  *   no --sandbox                   the bridge is a piped subprocess (2)
  *   --print-timeout 6h             the default is 5 minutes; a pass runs hours
- *   cwd = repo root                where the .agents/plugins/mmo mount lives (10); print mode loads it
- *                                  anyway only in name — dispatch goes through dispatch.mjs (1, 2)
+ *   cwd = repo root                where the .agents/plugins/mmo mount lives (10); print mode on agy
+ *                                  1.3.5 loads its MCP server and hooks (1); dispatch.mjs stays the route (2)
  *
  * Usage:
  *   node run.mjs --brief=<path> [--output-dir=<path>] \
@@ -690,7 +690,7 @@ async function main(args) {
     const writeGuard = finishWriteGuard({ projectRoot, runId, statusBefore, outcome: completed ? "completed" : "stopped" });
     if (writeGuard.after_run_check?.outside_contract.length) {
       console.error(
-        `run ${runId}: no write guard ran (headless), and the run changed ${writeGuard.after_run_check.outside_contract.length} file(s) its contract does not allow: ` +
+        `run ${runId}: ${writeGuard.state === "hook" ? "the write hook ran" : "no write guard ran (headless)"}, and the run changed ${writeGuard.after_run_check.outside_contract.length} file(s) its contract does not allow: ` +
           `${writeGuard.after_run_check.outside_contract.slice(0, 5).join(", ")}${writeGuard.after_run_check.outside_contract.length > 5 ? ", …" : ""}. Review them before keeping the change.`,
       );
     }
