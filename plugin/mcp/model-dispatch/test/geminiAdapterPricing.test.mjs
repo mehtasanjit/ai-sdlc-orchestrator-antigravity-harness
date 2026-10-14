@@ -35,7 +35,7 @@ import { WORKER_PYTHON_ENV } from "../dist/delegation/workerProcess.js";
 // The carried Claude-harness policies are bridge test fixtures, not shipped
 // presets of this harness (plugin/config/policies/ holds the two antigravity
 // policies). Point the loader at them for this file's process.
-process.env.MMO_POLICY_DIR = new URL("./fixtures/policies/", import.meta.url).pathname;
+process.env.MMO_POLICY_DIR = fileURLToPath(new URL("./fixtures/policies/", import.meta.url));
 
 // The governance demo's routing policy, an unedited copy of what the store
 // synced into the demo project (see test/governanceDemoPolicy.test.mjs).
