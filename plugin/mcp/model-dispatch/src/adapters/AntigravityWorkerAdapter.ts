@@ -25,6 +25,7 @@ import { computeCostUsd } from "../pricing.js";
 import { unenforcedBudget, type ModelAdapter } from "./ModelAdapter.js";
 import { applyVertexSurcharge, resolveGcpProject, workerVertexLocation } from "./geminiTransports.js";
 import { DispatchPricer, geminiRates, unpricedRefusal, type BilledPrice, type Clock } from "./dispatchPricer.js";
+import { geminiDispatchWallet } from "./dispatchWallet.js";
 import {
   DEFAULT_WORKER_TIMEOUT_SEC,
   WORKER_KILL_GRACE_SEC,
@@ -291,6 +292,7 @@ export class AntigravityWorkerAdapter implements ModelAdapter {
         success: false,
         error: run.error,
         price_basis: price.basis,
+        wallet: geminiDispatchWallet("vertex-adc", this.location),
       };
       return {
         result: null,
@@ -325,6 +327,7 @@ export class AntigravityWorkerAdapter implements ModelAdapter {
       latency_ms: latency,
       success: true,
       price_basis: price.basis,
+      wallet: geminiDispatchWallet("vertex-adc", this.location),
     };
     return {
       result: parsed,
@@ -483,6 +486,7 @@ export class AntigravityWorkerAdapter implements ModelAdapter {
           latency_ms: latency,
           success: false,
           error,
+          wallet: geminiDispatchWallet("vertex-adc", this.location),
         },
       ],
       terminal_reason: "vendor_error",

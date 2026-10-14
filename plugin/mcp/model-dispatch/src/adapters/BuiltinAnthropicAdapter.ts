@@ -252,7 +252,8 @@ export class BuiltinAnthropicAdapter implements ModelAdapter {
       cache_hit: cacheHit,
       success: terminalReason === "success",
       error: finalAttempt?.error,
-      attempts,
+      // Built only with an API key, so it never reaches Vertex or the seat.
+      attempts: attempts.map((a) => ({ ...a, wallet: { name: "anthropic", source: "env", arm: "A" } })),
       terminal_reason: terminalReason,
     };
   }

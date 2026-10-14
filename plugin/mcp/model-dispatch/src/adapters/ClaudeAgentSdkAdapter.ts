@@ -35,12 +35,13 @@
  * warning is logged when the two differ by more than 0.5%.
  */
 
-import type { AttemptRecord, ExecutionResult, ModelConfig, TaskPacket } from "../types.js";
+import type { AttemptRecord, DispatchWallet, ExecutionResult, ModelConfig, TaskPacket } from "../types.js";
 import { estimateTokens } from "../pricing.js";
 import { log } from "../log.js";
 import { unenforcedBudget, type ModelAdapter } from "./ModelAdapter.js";
 import { splitStableFromDynamic } from "./BuiltinAnthropicAdapter.js";
 import { DispatchPricer, systemClock, unpricedRefusal, type Clock } from "./dispatchPricer.js";
+import { claudeDispatchWallet, reportedProviders, type ClaudeDispatchFacts } from "./dispatchWallet.js";
 import {
   ModelWriteAccumulator,
   priceClaudeCliResult,
@@ -79,6 +80,8 @@ interface ClaudeAgentSdkOptions {
   now?: Clock;
   /** Working directory handed to the SDK. Defaults to the bridge's own. */
   cwd?: string;
+  /** Read for the wallet stamp only, never handed to the SDK; tests pin it. Defaults to process.env. */
+  env?: Record<string, string | undefined>;
 }
 
 /**
@@ -142,6 +145,7 @@ export class ClaudeAgentSdkAdapter implements ModelAdapter {
   private readonly queryFn?: AgentSdkQuery;
   private readonly timeoutMs: number;
   private readonly cwd?: string;
+  private readonly env: Record<string, string | undefined>;
   private readonly pricer: DispatchPricer;
 
   constructor(config: ModelConfig, options: ClaudeAgentSdkOptions = {}) {
@@ -150,6 +154,7 @@ export class ClaudeAgentSdkAdapter implements ModelAdapter {
     this.queryFn = options.queryFn;
     this.timeoutMs = (options.timeoutSec ?? DEFAULT_TIMEOUT_SEC) * 1000;
     this.cwd = options.cwd;
+    this.env = options.env ?? process.env;
     this.pricer = new DispatchPricer(config, options.now ?? systemClock);
   }
 
@@ -169,6 +174,7 @@ export class ClaudeAgentSdkAdapter implements ModelAdapter {
         { input: 0, input_cached: 0, output: 0 },
         started,
         unpricedRefusal(this.modelConfig, dispatchDate, primary.reason),
+        claudeDispatchWallet(this.env),
       );
     }
 
@@ -182,6 +188,7 @@ export class ClaudeAgentSdkAdapter implements ModelAdapter {
         { input: estimateTokens(prompt), input_cached: 0, output: 0 },
         started,
         run.error,
+        claudeDispatchWallet(this.env, run.init),
       );
     }
 
@@ -224,6 +231,7 @@ export class ClaudeAgentSdkAdapter implements ModelAdapter {
         : {}),
       ttl_split: ledger.ttl_split,
       per_model: ledger.per_model,
+      wallet: claudeDispatchWallet(this.env, { ...run.init, providers: reportedProviders(result.modelUsage) }),
     };
 
     if (isError) {
@@ -305,6 +313,7 @@ export class ClaudeAgentSdkAdapter implements ModelAdapter {
     tokens: { input: number; input_cached: number; output: number },
     started: number,
     error: string,
+    wallet: DispatchWallet,
   ): ExecutionResult {
     const attempt: AttemptRecord = {
       attempt_number: 1,
@@ -315,6 +324,7 @@ export class ClaudeAgentSdkAdapter implements ModelAdapter {
       latency_ms: Date.now() - started,
       success: false,
       error,
+      wallet,
     };
     return {
       result: null,
@@ -331,7 +341,8 @@ export class ClaudeAgentSdkAdapter implements ModelAdapter {
 
   /**
    * Drive one query() to its result message, accumulating the per-model
-   * cache-write and modifier facts from the assistant frames as they arrive.
+   * cache-write and modifier facts from the assistant frames as they arrive,
+   * and the credential source from the init frame.
    *
    * Every assistant frame is counted, subagent frames included, because the
    * result's `modelUsage` — which the ledger prices — also includes them.
@@ -341,8 +352,8 @@ export class ClaudeAgentSdkAdapter implements ModelAdapter {
   private async runQuery(
     prompt: string,
   ): Promise<
-    | { ok: true; result: ClaudeCliResultLike & { subtype?: string; is_error?: boolean; duration_ms?: number; duration_api_ms?: number; stop_reason?: string | null }; writes: Map<string, TranscriptModelWrites> }
-    | { ok: false; error: string }
+    | { ok: true; result: ClaudeCliResultLike & { subtype?: string; is_error?: boolean; duration_ms?: number; duration_api_ms?: number; stop_reason?: string | null }; writes: Map<string, TranscriptModelWrites>; init: ClaudeDispatchFacts }
+    | { ok: false; error: string; init: ClaudeDispatchFacts }
   > {
     let query: AgentSdkQuery;
     try {
@@ -354,10 +365,12 @@ export class ClaudeAgentSdkAdapter implements ModelAdapter {
           `ClaudeAgentSdkAdapter could not load @anthropic-ai/claude-agent-sdk for model ` +
           `'${this.modelConfig.id}': ${err?.message ?? err}. Run \`npm ci\` in ` +
           `plugin/mcp/model-dispatch.`,
+        init: {},
       };
     }
 
     const acc = new ModelWriteAccumulator();
+    let init: ClaudeDispatchFacts = {};
     const abortController = new AbortController();
     let timedOut = false;
     const timer = setTimeout(() => {
@@ -372,6 +385,13 @@ export class ClaudeAgentSdkAdapter implements ModelAdapter {
         options: agentSdkOptions(this.modelConfig, { cwd: this.cwd, abortController }),
       });
       for await (const message of stream) {
+        if (message.type === "system" && message.subtype === "init") {
+          init = {
+            apiKeySource: typeof message.apiKeySource === "string" ? message.apiKeySource : undefined,
+            claudeCodeVersion: typeof message.claude_code_version === "string" ? message.claude_code_version : undefined,
+          };
+          continue;
+        }
         if (message.type === "assistant") {
           const msg = message.message;
           const usage = msg?.usage;
@@ -385,7 +405,7 @@ export class ClaudeAgentSdkAdapter implements ModelAdapter {
           continue;
         }
         if (message.type === "result") {
-          return { ok: true, result: message as any, writes: acc.finish() };
+          return { ok: true, result: message as any, writes: acc.finish(), init };
         }
       }
       // The stream ended without a result message: a crash or an abort. Either
@@ -396,10 +416,11 @@ export class ClaudeAgentSdkAdapter implements ModelAdapter {
         error: timedOut
           ? `claude-agent-sdk timeout after ${this.timeoutMs / 1000}s`
           : "claude-agent-sdk stream ended with no result message",
+        init,
       };
     } catch (err: any) {
-      if (timedOut) return { ok: false, error: `claude-agent-sdk timeout after ${this.timeoutMs / 1000}s` };
-      return { ok: false, error: `claude-agent-sdk error: ${err?.message ?? err}` };
+      if (timedOut) return { ok: false, error: `claude-agent-sdk timeout after ${this.timeoutMs / 1000}s`, init };
+      return { ok: false, error: `claude-agent-sdk error: ${err?.message ?? err}`, init };
     } finally {
       clearTimeout(timer);
     }

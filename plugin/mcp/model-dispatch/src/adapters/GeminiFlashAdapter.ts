@@ -25,6 +25,7 @@ import {
   type GenerateOutcome,
 } from "./geminiTransports.js";
 import { DispatchPricer, geminiRates, unpricedRefusal, type BilledPrice, type Clock } from "./dispatchPricer.js";
+import { geminiDispatchWallet } from "./dispatchWallet.js";
 
 export interface GeminiFlashOptions {
   /** Clock for the dispatch date the price is looked up on; tests pin it. */
@@ -291,6 +292,7 @@ export class GeminiFlashAdapter implements ModelAdapter {
     const totalCost = attempts.reduce((s, a) => s + a.cost_usd, 0);
     const totalLatency = attempts.reduce((s, a) => s + a.latency_ms, 0);
     const finalAttempt = attempts[attempts.length - 1];
+    const wallet = geminiDispatchWallet(this.transport.backend, this.transport.location);
     return {
       result: parsed,
       tokens: totalTokens,
@@ -299,7 +301,7 @@ export class GeminiFlashAdapter implements ModelAdapter {
       cache_hit: cacheHit,
       success: terminalReason === "success",
       error: finalAttempt?.error,
-      attempts,
+      attempts: attempts.map((a) => ({ ...a, wallet })),
       terminal_reason: terminalReason,
     };
   }
