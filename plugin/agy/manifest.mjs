@@ -204,7 +204,7 @@ export function workerLineOf(event, policy = null) {
 export const UNMEASURED_DRIVER_BASIS =
   "NOT MEASURED: no headless launcher record (driver-manifest.json). An interactive agy session gives the plugin no usage counters (p1 checks 1, 13), so the conductor's own tokens are in no figure — unmeasured, never free";
 
-export function costLines({ dispatched, modeled, policy, pin, env = process.env, login = null, driverUsage = null, driverMeasured = modeled.length > 0 || driverUsage != null }) {
+export function costLines({ dispatched, modeled, policy, pin, env = process.env, login = null, wallet = claudeWallet(env, login), driverUsage = null, driverMeasured = modeled.length > 0 || driverUsage != null }) {
   const sum = (events) => ({
     cost_usd: r6(events.reduce((s, e) => s + (e.cost_usd ?? 0), 0)),
     calls: events.length,
@@ -218,7 +218,7 @@ export function costLines({ dispatched, modeled, policy, pin, env = process.env,
   const gemini = on("gemini_workers");
   const unclassified = on("unclassified");
   const door = geminiDoor(policy, env);
-  const claudeWallets = lineWallet(claude, claudeWallet(env, login), { withArm: true });
+  const claudeWallets = lineWallet(claude, wallet, { withArm: true });
   const seatShare = (claudeWallets.wallets ?? []).filter((w) => w.arm === "seat");
   const claudeKind = claudeWallets.arm === "seat" ? "modeled" : seatShare.length ? "mixed" : "cash";
   const seatUsd = r6(seatShare.reduce((s, w) => s + w.cost_usd, 0));
@@ -248,12 +248,23 @@ export function costLines({ dispatched, modeled, policy, pin, env = process.env,
   ];
 }
 
+/** One line per cost line, workers first, each with its kind and never a total. */
+export function describeCostLines(lines) {
+  const workersFirst = [...lines.filter((l) => l.line !== "driver"), ...lines.filter((l) => l.line === "driver")];
+  return workersFirst.map((l) => {
+    const name = l.line.replace("_", " ");
+    if (l.kind === "unmeasured") return `${name} NOT MEASURED`;
+    const range = l.cost_usd_low !== undefined ? ` (range $${l.cost_usd_low}–$${l.cost_usd})` : "";
+    return `${name} ${l.kind} $${l.cost_usd}${range}`;
+  }).join(" · ");
+}
+
 export function agyVersion(run = spawnSync) {
   const r = run("agy", ["--version"], { encoding: "utf8", timeout: 10_000 });
   return r?.status === 0 ? String(r.stdout).trim() : null;
 }
 
-export function buildHarnessManifest({ runDir, policyName, runId, env = process.env, version = null, login = null, now = () => new Date().toISOString() }) {
+export function buildHarnessManifest({ runDir, policyName, runId, env = process.env, version = null, login = null, wallet = claudeWallet(env, login), now = () => new Date().toISOString() }) {
   const telemetry = readJsonl(join(runDir, "telemetry.jsonl"));
   const modeled = readJsonl(join(runDir, "driver-cost-modeled.jsonl"));
   const driverManifest = readJson(join(runDir, "driver-manifest.json"));
@@ -275,7 +286,7 @@ export function buildHarnessManifest({ runDir, policyName, runId, env = process.
 
   let pin = null;
   try { pin = policy ? readPin(policy) : null; } catch { pin = null; }
-  const lines = costLines({ dispatched, modeled, policy, pin, env, login, driverUsage: driverManifest?.driver_usage ?? null, driverMeasured: driverManifest != null || modeled.length > 0 });
+  const lines = costLines({ dispatched, modeled, policy, pin, env, wallet, driverUsage: driverManifest?.driver_usage ?? null, driverMeasured: driverManifest != null || modeled.length > 0 });
   const driverLine = lines[0];
   const geminiLine = lines[1];
   const claudeLine = lines[2];
@@ -370,7 +381,7 @@ if (isMain(import.meta.url)) {
     const manifest = buildHarnessManifest({ runDir, policyName: args.policy, runId: args["run-id"], version: args["agy-version"] ?? agyVersion(), login: probeClaudeLogin() });
     const out = join(runDir, "manifest.json");
     writeFileSync(out, JSON.stringify(manifest, null, 2) + "\n", "utf8");
-    console.log(`manifest: wrote ${out} — dispatched cash $${manifest.cost.dispatched_cash_usd}, driver modeled $${manifest.cost.driver_modeled_usd}`);
+    console.log(`manifest: wrote ${out} — ${describeCostLines(manifest.cost.lines)}`);
   } catch (err) {
     console.error(`manifest failed: ${err?.message ?? err}`);
     process.exit(1);

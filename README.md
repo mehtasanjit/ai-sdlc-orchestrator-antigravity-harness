@@ -273,7 +273,7 @@ Every artifact lands under `./.sdlc/` (for `/mmo:greenfield` and `run.mjs`'s def
 | `provenance.json` | Every file the run touched, with pre-run hash — the input `/mmo:revert` reads. Brownfield only. |
 | `delegation/` | Only on runs that used the agent path. Three files per delegated packet: task brief, worker usage sidecar, receipt. |
 | `.hook-logs/hook.jsonl` | One line per bridge call, from the `PostToolUse` heartbeat. Backup beside the bridge's own ledger; safe to delete. Interactive runs only. |
-| Cost report | `node tools/report.mjs <run-dir>` — per-phase table, the driver loop in its own **modeled, not measured** section, delegation table if any, provenance key. |
+| Cost report | `node tools/report.mjs <run-dir>` — the manifest's labelled cost lines with a cash figure that excludes modeled dollars, a per-phase table, the driver loop in its own **modeled, not measured** section, delegation table if any, provenance key. |
 
 ![Three cost lines — the driver is modeled from agy's usage counters, the Gemini workers are cash, the Claude worker is cash on an Anthropic key or Vertex and modeled on the claude.ai seat; the two kinds of dollars are never summed](docs/assets/cost-lines.svg)
 

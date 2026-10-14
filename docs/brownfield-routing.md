@@ -123,12 +123,14 @@ above less-specific ones.
 
 Every run's `final_report.md` includes:
 
-- Per-phase cost breakdown
+- The labelled cost lines from `manifest.json` — `cash`, `modeled` or `NOT MEASURED` — never summed
 - Which model each phase ran on
 - Escalations (if any) with reason
-- Total cost vs the policy's default expectation
 
 If a real run cost significantly more than expected, `final_report.md` is the first place to
-look. Usually the cause is either (a) many mechanical retries that escalated, (b) discovery
+look. For each phase's dollars split into cash and modeled, run
+`node tools/report.mjs <project>/.sdlc/runs/<run-id>` from the harness clone, where `<project>`
+is your repo and `<run-id>` the run's folder name. Usually the cause is either (a) many
+mechanical retries that escalated, (b) discovery
 ballooned tokens because the repo was very large, or (c) the policy YAML routed too much to
 premium.
