@@ -5,7 +5,7 @@
  */
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync, readFileSync, existsSync, writeFileSync, mkdirSync, lstatSync, readlinkSync } from "node:fs";
+import { mkdtempSync, rmSync, unlinkSync, readFileSync, existsSync, writeFileSync, mkdirSync, lstatSync, readlinkSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
@@ -40,7 +40,7 @@ test("registerProject creates the mount once, reports no change the second time,
     assert.equal(readlinkSync(skills), join(ROOT, "plugin", "skills"));
     assert.ok(existsSync(join(skills, "greenfield", "SKILL.md")), "the link resolves into the clone");
     assert.equal(registerProject(dir, ROOT).changed, false);
-    rmSync(skills); writeFileSync(skills, "not a link");
+    unlinkSync(skills); writeFileSync(skills, "not a link");
     assert.equal(registerProject(dir, ROOT).changed, true);
     assert.ok(lstatSync(skills).isSymbolicLink());
   } finally { rmSync(dir, { recursive: true, force: true }); }
