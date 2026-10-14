@@ -34,6 +34,7 @@ Look things up. Exact answers, exhaustive.
 | [Understanding output](understanding-output.md) | Reading `telemetry.jsonl`, `driver-cost-modeled.jsonl`, `manifest.json`, `provenance.json`, and the cost report. |
 | [Logging](logging.md) | The `MMO:` log stream — format, levels, taxonomy, enablement, redaction. |
 | [Runtime verification](verification/p1-agy-runtime.md) | The numbered live checks against `agy` that every pin cites. A historical record. |
+| [Headless proof runs](verification/headless-proof-runs-2026-10-14.md) | The 14 Oct greenfield and brownfield runs on the fixed code: cost checked line by line, and the defects they found. A historical record. |
 
 ## Concepts
 
