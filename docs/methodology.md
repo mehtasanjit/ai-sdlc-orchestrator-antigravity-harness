@@ -42,7 +42,16 @@ The bridge records the wallet on every dispatched event, in its `wallet` field. 
 
 ## Vendor mode is the only mode
 
-The Claude Code harness offers `--auth=vendor|estimated`, where estimated mode prices the driver's own in-session judgment work by a character-count heuristic. This harness has no in-session judgment work: every judgment phase is a bridge dispatch with a vendor-reported `usage` block, and the conductor's own loop is priced from agy's counters. `--auth=vendor` is therefore the only value `/mmo:pass` and `run.mjs` accept; `estimated` aborts with the rule-6 text. Every dispatched event carries `provenance: "vendor"`, stamped server-side by the bridge, and a driver line carries `provenance: "modeled"`, stamped by the event reader. A phase the conductor completes without dispatching is logged at zero with `provenance: "none"` (`dispatch.mjs --log-phase`), so a report never shows an unexplained gap in the state machine.
+The Claude Code harness offers `--auth=vendor|estimated`, where estimated mode prices the driver's own in-session judgment work by a character-count heuristic. This harness prices no in-session work. Every judgment phase the policy routes — requirements, design or change plan, packet planning, senior review, security review — is a bridge dispatch with a vendor-reported `usage` block, and so is every refinement packet a review returns. Brownfield discovery is the one judgment step the conductor does itself: a local read of your repo, never dispatched, with no rule in the policy. `--auth=vendor` is therefore the only value `/mmo:pass` and `run.mjs` accept; `estimated` aborts with the rule-6 text. Every dispatched event carries `provenance: "vendor"`, stamped server-side by the bridge, and a driver line carries `provenance: "modeled"`, stamped by the event reader.
+
+Anything the conductor does without dispatching — discovery, a phase it completes in-session — is logged at zero with `provenance: "none"` and `task_type: "in_session"`, and a phase the intent skips with `task_type: "skipped"` (`dispatch.mjs --log-phase`). The tokens in-session work uses are the conductor's own: a headless run counts them on the modeled driver line, and an interactive run, which measures no driver usage, has them in no figure. The row is the record that the phase happened and that the conductor did it.
+
+The manifest checks that record instead of trusting it:
+
+| Field | What it lists | `null` when |
+|---|---|---|
+| `harness.unrecorded_phases` | Judgment phases the run went through — the phase's artifact is in the run folder, a later phase left a row or an artifact, or the run completed — with neither a dispatched event nor a `provenance: "none"` row. A brownfield run expects `discovery` too | never; `[]` when every phase has a row |
+| `harness.conductor_edits` | Per planned `artifact_path`: whether the file's last `sha_after` in `provenance.json` differs from the SHA-256 of the last successful worker result for that path (a final-newline difference is not counted). `unplanned` lists written files no packet targets | the run folder has no `provenance.json`, no packet with an `artifact_path`, or no saved worker result (the MCP route returns results in-session). `null` means unknown, never "no edits" |
 
 ## The `MMO:` log stream is not telemetry
 

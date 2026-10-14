@@ -150,7 +150,21 @@ validation schema, `.env.example`, and `.env.test` — and the brownfield varian
 
 ### Phase 4 — plan_task_packets
 
-From `design.md`, emit `<output_dir>/packets.json` — a list of TaskPackets, one per file-sized unit of work.
+Dispatch a packet (`phase: "plan_task_packets"`, `task_type: "packet_plan"`) whose inputs carry
+`<output_dir>/design.md` (brownfield: `change_plan.md`, `intent_brief.md` and `baseline.json`)
+and `<output_dir>/requirements.md`, and whose `outputSchema` asks for a list of TaskPackets — one
+per file-sized unit of work, each carrying the fields of the TaskPacket schema below. Write the
+returned list to `<output_dir>/packets.json`.
+
+The plan is the worker's, not yours. You may fill in what the worker cannot know — `pass_id`,
+`intent`, and the `content` of each `inputs[]` slice it named by path — but you do not add, drop,
+merge, split or re-scope a packet, and you never generate the plan with a local script or by
+hand. If the returned plan is wrong, re-dispatch the planning packet with the problem stated in
+its `instruction`. A plan you write yourself leaves no `plan_task_packets` row in
+`telemetry.jsonl`, and the code-written manifest lists the phase under
+`harness.unrecorded_phases`.
+
+The tables below are what the planning packet's `instruction` asks the worker for.
 
 Suggested packet types and one packet per:
 
@@ -536,11 +550,16 @@ such stream and nothing records your loop: the manifest carries the driver line 
 (`kind: "unmeasured"`), unmeasured and never free. Never invent token counts or cost for your own
 work: a guessed figure sitting beside measured ones is worse than no figure.
 
-**But a phase that made no model call must still leave a row.** Two cases produce one:
+**But anything that made no model call must still leave a row.** Four cases produce one:
 
-- the intent's phase table says SKIP, or
-- you completed the phase yourself, in-session, without dispatching a packet — a senior review
-  with no changed modules, a security review over an empty diff.
+- the intent's phase table says SKIP (`skipped`);
+- brownfield discovery, which is always yours — log it once, after the read, as
+  `--log-phase=discovery --task-type=in_session` (`brownfield-guide/SKILL.md` step 3);
+- you completed a phase yourself, in-session, without dispatching a packet — a senior review
+  with no changed modules, a security review over an empty diff (`in_session`);
+- you changed a file yourself after a worker wrote it, or wrote a file no packet asked for —
+  log an `in_session` row for the phase the file belongs to (`codegen`, `tests`, `docs`) with a
+  `--reason` that names the file. Do this only when no packet can do the job; see below.
 
 Record each with a zero-cost event (interactive: `log_telemetry` with `task_type: "skipped"` or
 `"in_session"` and a `reason`), so that a phase missing from `telemetry.jsonl` always means a lost
@@ -555,10 +574,25 @@ node "${MMO_PLUGIN_ROOT}/agy/dispatch.mjs" \
 ```
 
 These carry `provenance: "none"` and all-zero tokens. That is not an estimate — it is the fact
-that no model call was made. Where such a phase did consume tokens, they were yours, and they are
-already counted in the driver-loop events; the `--reason` string is what tells a reader so.
+that no model call was made. Where such work did consume tokens, they were yours. A headless run
+counts them on the modeled driver line. An interactive run measures no driver usage at all (its
+manifest marks the driver line `NOT MEASURED`), so there they are in no figure. Either way the
+row and its `--reason` string are the only record that the work happened and that you did it.
 
-A run that writes `review.json` or `security_review.md` without either dispatching a packet or
-logging one of these is under-reporting itself.
+**What is never in-session.** Packet planning (Phase 4) and the senior review's refinement
+packets (Phase 6) are always dispatched. Apply a refinement by turning it into a full TaskPacket
+(`id`, `phase`, `artifact_path`, `intent`, …) and dispatching it through Phase 5 mechanics —
+never by editing the file yourself. The same holds for any other fix to a file a worker wrote:
+dispatch a refined packet for it. Write each worker's returned content to its `artifact_path`
+exactly as returned. An `in_session` row explains a change you made yourself; it does not make
+that change dispatched work.
+
+The code-written manifest checks this. `harness.unrecorded_phases` lists every judgment phase the
+run went through with no row at all, and `harness.conductor_edits` lists every planned file whose
+final content differs from the last worker result for it, plus files no packet planned.
+
+A run that writes `packets.json`, `review.json` or `security_review.md`, or changes a file a
+worker wrote, without either dispatching a packet or logging one of these is under-reporting
+itself.
 
 **Pricing constants come from the loaded policy YAML's `pricing:` block for the current model — never from your trained knowledge, never hardcoded.** If the policy's pricing block is missing, abort the run.

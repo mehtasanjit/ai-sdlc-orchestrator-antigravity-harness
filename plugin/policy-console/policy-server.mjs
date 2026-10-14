@@ -222,7 +222,7 @@ function fallbackRule(policy) {
 
 /**
  * Rules for phases NOT in the visible PHASES list (e.g. brownfield's
- * `discovery`, `change_plan` in `antigravity-flash38-plus-opus5.yaml`). The console UI
+ * `change_plan` in `antigravity-flash38-plus-opus5.yaml`). The console UI
  * only renders 9 phases, but the base policy may name more. Without this,
  * buildCustomPolicy iterates only PHASES and silently drops those rules
  * on save — a data-loss regression from the old TypeScript app. Skip the
@@ -329,7 +329,7 @@ export function buildCustomPolicy(base, input) {
   }
 
   // Carry through rules for phases the console UI doesn't edit — brownfield's
-  // discovery / change_plan in antigravity-flash38-plus-opus5.yaml is the concrete case. Old
+  // change_plan in antigravity-flash38-plus-opus5.yaml is the concrete case. Old
   // code silently dropped these on save; a saved custom policy would then fall
   // through to the default for those phases.
   if (Array.isArray(structural.extraPhaseRules)) {
