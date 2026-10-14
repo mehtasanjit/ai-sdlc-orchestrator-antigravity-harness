@@ -150,10 +150,9 @@ interface MessageRecord {
 }
 
 /**
- * Merges one line's modifiers into its message, by the same rule as the
- * collector's noteModifiers (collect-orchestrator-usage.mjs): an absent value
- * leaves the message's value alone, a value fills an empty slot, and a
- * different value is a conflict.
+ * Merges one line's modifiers into its message: an absent value leaves the
+ * message's value alone, a value fills an empty slot, and a different value
+ * is a conflict.
  */
 function noteModifiers(rec: MessageRecord, usage: Record<string, unknown>): void {
   for (const k of MODIFIER_KEYS) {

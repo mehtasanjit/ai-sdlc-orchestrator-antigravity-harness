@@ -11,16 +11,20 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parse as parseYaml } from "yaml";
 
-import { parseEventStream, parseInvocations, extractTurnUsage, modeledDriverCostEvents, driverUsage, conversationIdFrom, extractToolCalls, RESUME_USAGE } from "../../plugin/agy/telemetry/event-reader.mjs";
-import { driverRange, driverRangeNote } from "../../plugin/agy/telemetry/driverRange.mjs";
-import { readPin, driverSlug, assertPinnedInvocation, findPinRejection, pendingPinChecks, LIVE_PIN_CHECKS } from "../../plugin/agy/telemetry/fairnessPin.mjs";
+import { parseEventStream, parseInvocations, extractTurnUsage, modeledDriverCostEvents, driverUsage, conversationIdFrom, extractToolCalls, reportsUsage, RESUME_USAGE, tokenReading } from "../../plugin/agy/telemetry/event-reader.mjs";
+import { RECORDED_READING, readingsThatFit } from "../../plugin/agy/telemetry/tokenLayouts.mjs";
+import { driverRange, driverRangeNote, driverRangeNotes } from "../../plugin/agy/telemetry/driverRange.mjs";
+import { readPin, driverSlug, assertPinnedInvocation, findPinRejection, pendingPinChecks, pinVerification, LIVE_PIN_CHECKS } from "../../plugin/agy/telemetry/fairnessPin.mjs";
 import { inlineMcpConfig, materialiseRunRoot, removeRunRoot, defaultRunRoot, LINKED_PLUGIN_DIRS } from "../../plugin/agy/runRoot.mjs";
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const PLUGIN = join(ROOT, "plugin");
 const policy = (name) => parseYaml(readFileSync(join(PLUGIN, "config", "policies", `${name}.yaml`), "utf8"));
 
-const usage = (i, o, t, c) => ({ input_tokens: i, output_tokens: o, thinking_tokens: t, cache_read_tokens: c, total_tokens: i + o + t });
+// (prompt incl. cache reads, visible output, thinking, cache reads), laid out
+// as agy 1.3.0 reports them (check 17): cache beside input and outside the
+// total, thinking inside output.
+const usage = (i, o, t, c) => ({ input_tokens: i - c, output_tokens: o + t, thinking_tokens: t, cache_read_tokens: c, total_tokens: i - c + o + t });
 const result = (conv, u, extra = {}) => JSON.stringify({ event: "result", result: { conversation_id: conv, status: "OK", response: "", num_turns: 1, usage: u, ...extra } });
 
 // ── event reader ──────────────────────────────────────────────────────────
@@ -33,12 +37,13 @@ test("parseEventStream keeps every well-formed line, stamps a clock, and skips j
   assert.equal(events[0].event, "init");
 });
 
-test("the observed auth-failure envelope parses and yields one zero-usage turn", () => {
-  const observed = '{"event":"result","result":{"conversation_id":"","status":"ERROR","response":"","error":"authentication failed or timed out","duration_seconds":0,"num_turns":0,"usage":{"input_tokens":0,"output_tokens":0,"thinking_tokens":0,"cache_read_tokens":0,"total_tokens":0}}}';
-  const events = parseEventStream(observed);
-  const turns = extractTurnUsage(events);
-  assert.equal(turns.length, 1);
-  assert.equal(turns[0].usage.total_tokens, 0);
+const OBSERVED_ERROR = '{"event":"result","result":{"conversation_id":"","status":"ERROR","response":"","error":"authentication failed or timed out","duration_seconds":0,"num_turns":0,"usage":{"input_tokens":0,"output_tokens":0,"thinking_tokens":0,"cache_read_tokens":0,"total_tokens":0}}}';
+
+test("the observed auth-failure envelope parses and reports no usage, so it yields no turn", () => {
+  const events = parseEventStream(OBSERVED_ERROR);
+  assert.equal(events.length, 1);
+  assert.equal(reportsUsage(events[0].result), false);
+  assert.deepEqual(extractTurnUsage(events), []);
   assert.equal(conversationIdFrom(events), null, "an empty conversation id is not an id");
 });
 
@@ -46,7 +51,7 @@ test("extractTurnUsage differences cumulative results of the same conversation (
   const text = [result("c1", usage(1000, 100, 10, 200)), result("c1", usage(2500, 300, 30, 900))].join("\n");
   const turns = extractTurnUsage(parseEventStream(text));
   assert.equal(turns.length, 2);
-  assert.deepEqual(turns[1].usage, { input_tokens: 1500, output_tokens: 200, thinking_tokens: 20, cache_read_tokens: 700, total_tokens: 1720 });
+  assert.deepEqual(turns[1].usage, { input_tokens: 800, output_tokens: 220, thinking_tokens: 20, cache_read_tokens: 700, total_tokens: 1020 });
 });
 
 test("a result for a different conversation starts a fresh baseline", () => {
@@ -113,7 +118,7 @@ test("extractTurnUsage refuses a reading that is not one of the two", () => {
 });
 
 test("while check 16 is pending the driver line carries the per-invocation upper bound and both figures", () => {
-  const { modeled, summary } = driverUsage(twoLaunches(), OPTS, { invocations: [{ status: 0, wall_ms: 5 }, { status: 0, wall_ms: 7 }] });
+  const { modeled, summary } = driverUsage(twoLaunches(), OPTS, { invocations: [{ status: 0, wall_ms: 5 }, { status: 0, wall_ms: 7 }], resumeUsage: { check: 16, state: "pending" } });
   assert.equal(summary.reading, "per-invocation");
   assert.ok(summary.cost_usd_low < summary.cost_usd_high);
   assert.equal(summary.cost_usd, summary.cost_usd_high);
@@ -138,14 +143,82 @@ test("a process that ended without a result is named, not silently priced at zer
 });
 
 test("driverRange shows the bounds only while pending and they differ, and always names missing usage", () => {
-  const pending = { resume_check: { check: 16, state: "pending" }, cost_usd_low: 1, cost_usd_high: 2, invocations_without_usage: [] };
-  assert.deepEqual(driverRange(pending), { cost_usd_low: 1, cost_usd_high: 2, resume_check: { check: 16, state: "pending" } });
+  const check = { check: 16, state: "pending" };
+  const pending = { resume_check: check, cost_usd_low: 1, cost_usd_high: 2, tokens_low: { input_tokens: 5 }, invocations_without_usage: [] };
+  assert.deepEqual(driverRange(pending), { cost_usd_low: 1, cost_usd_high: 2, tokens_low: { input_tokens: 5 }, resume_check: check });
   assert.deepEqual(driverRange({ ...pending, cost_usd_high: 1 }), {});
   assert.deepEqual(driverRange({ ...pending, resume_check: { check: 16, state: "cumulative" } }), {});
   assert.deepEqual(driverRange({ ...pending, cost_usd_high: 1, invocations_without_usage: [3] }), { invocations_without_usage: [3] });
+  assert.deepEqual(driverRange({ ...pending, cost_usd_high: 1, resumed_without_earlier_record: true }), { resumed_without_earlier_record: true, resume_check: check });
   assert.deepEqual(driverRange(null), {});
-  assert.match(driverRangeNote(pending), /check 16 pending; lower bound \$1/);
+  assert.match(driverRangeNote(pending), /range \$1–\$2: check 16 .* pending, the figure is the per-invocation reading, the upper bound/);
   assert.equal(driverRangeNote(null), "");
+});
+
+test("with an invocation missing, the notes stop calling the figure an upper bound", () => {
+  const notes = driverRangeNotes({ resume_check: { check: 16, state: "pending" }, cost_usd_low: 1, cost_usd_high: 2, invocations_without_usage: [3] });
+  assert.doesNotMatch(notes.join(" "), /upper bound/);
+  assert.match(notes.join(" "), /invocation\(s\) 3 reported no usage, so the true figure may be higher/);
+});
+
+test("an all-zero error result between two processes neither breaks the baseline nor hides the range (check 8's envelope)", () => {
+  const r1 = result("c1", usage(1000, 200, 50, 400));
+  const r3 = result("c1", usage(2500, 500, 80, 1200));
+  const events = parseInvocations([r1, OBSERVED_ERROR, r3]);
+  const { summary } = driverUsage(events, OPTS, { invocations: [{ status: 0 }, { status: 1 }, { status: 0 }] });
+  assert.equal(summary.cost_usd_low, 0.003241, "r3 is differenced against r1, not against the zeros");
+  assert.equal(summary.cost_usd_high, 0.004658);
+  assert.deepEqual(summary.invocations_without_usage, [2]);
+  assert.equal(summary.invocations[1].results_without_usage, 1);
+  assert.equal(summary.invocations[1].last_status, "ERROR");
+  const withId = parseInvocations([r1, result("c1", usage(0, 0, 0, 0), { status: "ERROR" }), r3]);
+  assert.equal(driverUsage(withId, OPTS, { invocations: [{}, {}, {}] }).summary.cost_usd_low, 0.003241, "an error result that keeps the id fails the same way without the fix");
+});
+
+test("interleaved conversations keep separate baselines under the cumulative reading", () => {
+  const events = parseEventStream([result("a", usage(100, 10, 0, 0)), result("b", usage(50, 5, 0, 0)), result("a", usage(300, 30, 0, 0))].join("\n"));
+  assert.deepEqual(extractTurnUsage(events).map((u) => u.usage.input_tokens), [100, 50, 200]);
+});
+
+test("the token bounds travel with the cost bounds", () => {
+  const { summary } = driverUsage(twoLaunches(), OPTS, { invocations: [{}, {}] });
+  assert.equal(summary.tokens_low.input_tokens, 2500, "cumulative reading: 1000 + 1500");
+  assert.equal(summary.tokens_high.input_tokens, 3500, "per-invocation reading: 1000 + 2500");
+});
+
+// ── check 14: the pin from what agy reports ───────────────────────────────
+
+test("agy 1.3.0's init event and local record name the pin, so a run on it is verified", async () => {
+  const { reportedModels, offPinModels } = await import("../../plugin/agy/telemetry/event-reader.mjs");
+  const stream = '{"event":"init","conversation_id":"57809ecf","init":{"model":"gemini-3.8-flash-high","cwd":"/p","tools":["view_file"]}}';
+  const pin = readPin(parseYaml(readFileSync(join(ROOT, "plugin", "config", "policies", "antigravity-flash38-plus-opus5.yaml"), "utf8")));
+  const observed = [...reportedModels(parseEventStream(stream)), "gemini-3.8-flash"];
+  assert.deepEqual(offPinModels(observed, pin, driverSlug(pin)), []);
+  assert.deepEqual(pinVerification({ pending: [], observed, offPin: [] }), { verified: true });
+  const doc = readFileSync(join(ROOT, "docs", "verification", "p1-agy-runtime.md"), "utf8");
+  const row = doc.split("\n").find((l) => l.startsWith("| 14 |"));
+  assert.ok(row.includes(`\`${driverSlug(pin)}\``) && /\*\*PASS — live list recorded/.test(row), "the pinned slug is on the recorded live list");
+});
+
+// ── check 17: how agy's counters nest ─────────────────────────────────────
+
+// Recorded live on agy 1.3.0 (p1 check 17): five model calls in one process.
+const CACHE_READING_RESULT = { input_tokens: 50394, output_tokens: 2649, thinking_tokens: 2002, cache_read_tokens: 114232, total_tokens: 53043 };
+
+test("a result with cache reads and thinking fits only the recorded reading, and books its tokens once", () => {
+  assert.deepEqual(readingsThatFit(CACHE_READING_RESULT), [RECORDED_READING.name]);
+  const r = tokenReading(CACHE_READING_RESULT, { input: 0.75, input_cached: 0.075, output: 3.75 });
+  assert.equal(r.name, RECORDED_READING.name);
+  assert.equal(r.check, "adds_up");
+  assert.deepEqual(r.tokens, { input: 50394, input_cached: 114232, output: 2649 }, "cache beside input, thinking inside output");
+});
+
+test("check 17's recorded reading matches its row in the verification doc", () => {
+  const doc = readFileSync(join(ROOT, "docs", "verification", "p1-agy-runtime.md"), "utf8");
+  const row = doc.split("\n").find((l) => l.startsWith(`| ${RECORDED_READING.check} |`));
+  assert.ok(row, `check ${RECORDED_READING.check} has a row`);
+  assert.match(row, /\*\*PASS/);
+  assert.ok(row.includes(`\`${RECORDED_READING.name}\``), "the row names the reading the code records");
 });
 
 test("check 16's state in code matches its row in the verification doc", () => {
@@ -226,4 +299,12 @@ test("materialiseRunRoot builds .agents/plugins/mmo with symlinked directories a
     removeRunRoot(runRoot);
     assert.ok(!existsSync(runRoot));
   } finally { rmSync(base, { recursive: true, force: true }); }
+});
+
+test("the pin is verified only when agy named the conducting model and every name is the pin", () => {
+  assert.deepEqual(pinVerification({ pending: [], observed: ["gemini-3.8-flash-high"], offPin: [] }), { verified: true });
+  assert.deepEqual(pinVerification({ pending: [], observed: [], offPin: [] }), { verified: false, unverified_reason: "no_model_observed" }, "passed checks alone prove nothing about the run");
+  assert.deepEqual(pinVerification({ pending: [], observed: ["gemini-3.8-flash", "gemini-3.1-pro"], offPin: ["gemini-3.1-pro"] }), { verified: false, unverified_reason: "model_mismatch" });
+  assert.deepEqual(pinVerification({ pending: [16], observed: ["gemini-3.8-flash"], offPin: [] }), { verified: false, unverified_reason: "pending_checks" });
+  assert.deepEqual(pinVerification({ pending: [16], observed: ["gemini-3.1-pro"], offPin: ["gemini-3.1-pro"] }), { verified: false, unverified_reason: "model_mismatch" }, "a wrong model outranks a pending check");
 });

@@ -11,7 +11,7 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { ClaudeCliAdapter } from "../dist/adapters/ClaudeCliAdapter.js";
+import { ClaudeCliAdapter, claudeCliArgs } from "../dist/adapters/ClaudeCliAdapter.js";
 import { computeCostUsd } from "../dist/pricing.js";
 
 // The card equals Sonnet 5 on the price list (2 / 0.2 / 10), so no test here
@@ -134,6 +134,29 @@ test("returns a successful ExecutionResult priced from its tokens, keeping the C
   assert.equal(out.latency_ms, 2518, "latency comes from duration_api_ms, not duration_ms");
   assert.equal(out.cache_hit, true, "any cache_read_input_tokens > 0 flips cache_hit");
   assert.equal(out.attempts.length, 1, "no doubling loop — always one attempt");
+});
+
+test("`claude -p` gets no output cap, so the attempt claims no ceiling and keeps the declared budget", async () => {
+  assert.ok(!claudeCliArgs(BASE_CONFIG).some((a) => /^--max-(budget|output|tokens)/.test(a)), "a cap flag would need reporting");
+  const adapter = new ClaudeCliAdapter(BASE_CONFIG, {
+    probeBinary: () => {},
+    projectsDir: NO_TRANSCRIPTS,
+    spawnFn: fakeSpawn(() => ({ stdout: JSON.stringify(SUCCESS_RESPONSE), code: 0 })),
+  });
+  const [attempt] = (await adapter.execute(PACKET)).attempts;
+  assert.equal(attempt.ceiling_used, null);
+  assert.equal(attempt.budget_enforced, false);
+  assert.equal(attempt.budget_declared, PACKET.budget.maxOutputTokens);
+
+  const crashed = new ClaudeCliAdapter(BASE_CONFIG, {
+    probeBinary: () => {},
+    projectsDir: NO_TRANSCRIPTS,
+    spawnFn: fakeSpawn(() => ({ stdout: "", stderr: "boom", code: 1 })),
+  });
+  const [failed] = (await crashed.execute(PACKET)).attempts;
+  assert.equal(failed.ceiling_used, null);
+  assert.equal(failed.budget_enforced, false);
+  assert.equal(failed.budget_declared, PACKET.budget.maxOutputTokens);
 });
 
 test("classifies is_error responses as a vendor_error ExecutionResult", async () => {

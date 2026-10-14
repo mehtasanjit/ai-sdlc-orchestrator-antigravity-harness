@@ -27,16 +27,18 @@ if [ "${1:-}" = "16" ]; then
   echo "== check 16a (first call)"
   agy -p 'Write about 300 words on any topic of your choice. Do not run any command, read any file or create any subagent.' \
     --output-format stream-json --model "$SLUG" $T > "$OUT/16a-first.jsonl" 2> "$OUT/16a-first.err"
-  CONV=$(grep -o '"conversation_id":"[^"]*"' "$OUT/16a-first.jsonl" | head -1 | cut -d'"' -f4)
-  if [ -z "$CONV" ]; then echo "   no conversation_id — see $OUT/16a-first.err"; exit 1; fi
+  EXIT_A=$?
+  if ! CONV=$(node tools/p1/check16.mjs --conversation "$OUT/16a-first.jsonl"); then
+    echo "   exit=$EXIT_A, no conversation_id — see $OUT/16a-first.err"; exit 1
+  fi
   echo "== check 16b (resume of $CONV)"
   agy -p 'Reply with the single word ok.' --output-format stream-json --model "$SLUG" --conversation "$CONV" $T \
     > "$OUT/16b-resume.jsonl" 2> "$OUT/16b-resume.err"
-  for f in 16a-first 16b-resume; do
-    echo "   $f usage: $(grep '"event":"result"' "$OUT/$f.jsonl" | grep -o '"usage":{[^}]*}' | tail -1)"
-  done
+  EXIT_B=$?
+  node tools/p1/check16.mjs "$OUT/16a-first.jsonl" "$EXIT_A" "$OUT/16b-resume.jsonl" "$EXIT_B"
+  STATUS=$?
   echo; echo "Done. Tell Claude: 'p1 check 16 outputs are in .sdlc/p1'."
-  exit 0
+  exit $STATUS
 fi
 
 run 1-mcp-route      --dangerously-skip-permissions "$P1"

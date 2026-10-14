@@ -12,6 +12,9 @@
  */
 
 import { computeCostUsd } from "../../mcp/model-dispatch/dist/pricing.js";
+import { DEAREST_READING, RECORDED_READING, TOKEN_READINGS, readingsThatFit, tokensUnder } from "./tokenLayouts.mjs";
+
+export { TOKEN_READINGS };
 
 /**
  * How `usage` behaves across `--print --conversation <id>`, which starts a new
@@ -22,7 +25,7 @@ import { computeCostUsd } from "../../mcp/model-dispatch/dist/pricing.js";
  * true figure lies between them, and the per-invocation reading is the upper
  * bound the driver line carries.
  */
-export const RESUME_USAGE = { check: 16, state: "pending" };
+export const RESUME_USAGE = { check: 16, state: "cumulative" };
 export const RESUME_READINGS = new Set(["cumulative", "per-invocation"]);
 
 export function parseEventStream(jsonlText, now = () => new Date().toISOString(), invocation = null) {
@@ -65,55 +68,93 @@ function usageDelta(current, previous) {
 }
 
 /**
- * One usage block per `result` event, in stream order. Consecutive results
- * of the same conversation in the same process are cumulative and get
- * differenced; a result for a different (or unknown) conversation starts a
- * fresh baseline, and so does a new process under the "per-invocation"
- * reading. Events without an `invocation` tag count as one process.
+ * A result whose counters are all zero reports no usage. That is the shape
+ * check 8 recorded for a failed call (`status: "ERROR"`, empty conversation
+ * id), and it must not become the baseline a later result is differenced
+ * against.
+ */
+export function reportsUsage(result) {
+  return Boolean(result?.usage) && USAGE_KEYS.some((k) => (result.usage[k] ?? 0) > 0);
+}
+
+function maxUsage(a, b) {
+  const out = {};
+  for (const k of USAGE_KEYS) out[k] = Math.max(a?.[k] ?? 0, b?.[k] ?? 0);
+  return out;
+}
+
+/**
+ * One usage block per result that reports usage, in stream order. Each
+ * conversation keeps its own baseline, the running maximum of its cumulative
+ * counters; a result is differenced against its conversation's baseline, and
+ * a result with no conversation id stands alone. Under the "per-invocation"
+ * reading every new process starts with no baselines. Events without an
+ * `invocation` tag count as one process.
  */
 export function extractTurnUsage(events, { resume = "cumulative" } = {}) {
   if (!RESUME_READINGS.has(resume)) throw new Error(`extractTurnUsage: resume reading '${resume}' is not one of ${[...RESUME_READINGS].join(", ")}.`);
   const usages = [];
-  let previous = null;
-  let previousConversation = null;
-  let previousInvocation = null;
+  const baselines = new Map();
+  let lastInvocation;
   let index = 0;
   for (const ev of events) {
-    if (ev.event !== "result" || !ev.result?.usage) continue;
+    if (ev.event !== "result" || !reportsUsage(ev.result)) continue;
     index += 1;
     const conversation = ev.result.conversation_id || null;
     const invocation = ev.invocation ?? null;
-    const sameProcess = invocation === previousInvocation;
-    const sameSession = conversation && conversation === previousConversation && (sameProcess || resume === "cumulative");
+    if (resume === "per-invocation" && invocation !== lastInvocation) baselines.clear();
+    lastInvocation = invocation;
     const cumulative = ev.result.usage;
-    const usage = sameSession ? usageDelta(cumulative, previous) : { ...usageDelta(cumulative, null) };
-    usages.push({ turn_index: index, invocation, conversation_id: conversation, usage, cumulative });
-    previous = cumulative;
-    previousConversation = conversation;
-    previousInvocation = invocation;
+    const previous = conversation ? baselines.get(conversation) ?? null : null;
+    usages.push({ turn_index: index, invocation, conversation_id: conversation, usage: usageDelta(cumulative, previous), cumulative });
+    if (conversation) baselines.set(conversation, maxUsage(previous, cumulative));
   }
   return usages;
 }
 
 /**
- * One `provenance: "modeled"` event per result, priced from the driver
- * block's card. Thinking tokens bill at the output rate; `cache_read_tokens`
- * at `input_cached`; `input_tokens` is taken as inclusive of cache reads and
- * split so nothing is priced twice.
+ * The reading one result's counters support. `total_tokens` cannot tell
+ * cache-in-input from cache-outside-total unless the cache reads exceed the
+ * input, so the reading check 17 recorded is booked whenever it adds up.
+ * Otherwise agy reported a layout other than the recorded one: a single
+ * fitting reading is booked and marked `not_recorded_layout`; several that
+ * price differently book the dearer as `ambiguous`; none, or no total, books
+ * the dearest. An unproven reading can over-state the driver line but never
+ * under-state it.
+ */
+export function tokenReading(usage, pricing, recorded = RECORDED_READING) {
+  const fits = readingsThatFit(usage);
+  if (recorded && fits.includes(recorded.name)) {
+    return { name: recorded.name, check: "adds_up", tokens: tokensUnder(usage, recorded.name).tokens };
+  }
+  const cost = (name) => computeCostUsd(tokensUnder(usage, name).tokens, pricing);
+  if (fits.length === 0) {
+    const check = typeof usage.total_tokens === "number" && usage.total_tokens > 0 ? "does_not_add_up" : "no_total";
+    return { name: DEAREST_READING, check, tokens: tokensUnder(usage, DEAREST_READING).tokens };
+  }
+  const dearest = fits.reduce((a, b) => (cost(b) > cost(a) ? b : a));
+  const alike = fits.every((name) => cost(name) === cost(dearest));
+  const check = !alike ? "ambiguous" : recorded ? "not_recorded_layout" : "adds_up";
+  return { name: dearest, check, tokens: tokensUnder(usage, dearest).tokens };
+}
+
+/**
+ * One `provenance: "modeled"` event per result. Thinking tokens bill at the
+ * output rate and `cache_read_tokens` at `input_cached`; how the counters
+ * nest is decided per result by tokenReading. `priceFor(invocation)` gives
+ * the dated list's price on the day that agy process started; `pricing` is
+ * the flat card used without it.
  *
  * `tier: "orchestrator"` so buildManifest partitions these out of dispatched
  * sums if the file is ever concatenated with telemetry.jsonl.
  */
 export function modeledDriverCostEvents(events, opts) {
-  const { pass, model, pricing, policyName = null, billingMode = "seat", resume = "cumulative", now = () => new Date().toISOString() } = opts;
+  const { pass, model, pricing, priceFor = null, policyName = null, billingMode = "seat", resume = "cumulative", now = () => new Date().toISOString() } = opts;
   return extractTurnUsage(events, { resume }).map(({ turn_index, invocation, usage }) => {
-    const cached = usage.cache_read_tokens ?? 0;
+    const price = priceFor ? priceFor(invocation) : { pricing };
+    const reading = tokenReading(usage, price.pricing);
+    const tokens = reading.tokens;
     const thinking = usage.thinking_tokens ?? 0;
-    const tokens = {
-      input: Math.max(0, (usage.input_tokens ?? 0) - cached),
-      input_cached: cached,
-      output: (usage.output_tokens ?? 0) + thinking,
-    };
     return {
       ts: now(),
       pass,
@@ -137,28 +178,41 @@ export function modeledDriverCostEvents(events, opts) {
       input_tokens_cached: tokens.input_cached,
       output_tokens: tokens.output,
       output_tokens_reasoning: thinking,
-      cost_usd: computeCostUsd(tokens, pricing),
+      cost_usd: computeCostUsd(tokens, price.pricing),
+      ...(price.basis ? { price_basis: price.basis } : {}),
+      ...(price.unpriced ? { unpriced: price.unpriced } : {}),
+      ...(price.period ? { price_period: price.period } : {}),
       latency_ms: null,
       success: true,
       retry_count: 0,
       invocation,
       usage_reading: resume,
+      token_reading: reading.name,
+      token_reading_check: reading.check,
     };
   });
 }
 
 const sumCost = (events) => Math.round(events.reduce((s, e) => s + e.cost_usd, 0) * 1e6) / 1e6;
+const sumTokens = (events) => ({
+  input_tokens: events.reduce((s, e) => s + e.input_tokens, 0),
+  input_tokens_cached: events.reduce((s, e) => s + e.input_tokens_cached, 0),
+  output_tokens: events.reduce((s, e) => s + e.output_tokens, 0),
+});
 
 /**
  * The driver line for a run of one or more agy processes. `modeled` is what
  * driver-cost-modeled.jsonl records, under check 16's reading (the upper
- * bound while it is pending); `cost_usd_low`/`cost_usd_high` price the same
- * results under both readings. `invocations` is the per-process evidence
- * check 16 is decided from. A process that ended without a `result` (a
- * timeout or crash) reported no usage, so its driver tokens are missing from
- * every figure; `invocations_without_usage` names it.
+ * bound while it is pending); the `_low`/`_high` fields price the same
+ * results under both readings. `invocations` is the per-process evidence.
+ *
+ * A process with no result that reports usage (no `result` line, or only
+ * check 8's all-zero error envelope) is named in `invocations_without_usage`:
+ * its tokens are in no per-invocation figure. `resumedFirst` marks a launch
+ * whose first process resumed a conversation without the earlier launch's
+ * record, where check 16 decides whether its counters include that launch.
  */
-export function driverUsage(events, opts, { invocations = [], resumeUsage = RESUME_USAGE } = {}) {
+export function driverUsage(events, opts, { invocations = [], resumeUsage = RESUME_USAGE, resumedFirst = false } = {}) {
   const low = modeledDriverCostEvents(events, { ...opts, resume: "cumulative" });
   const high = modeledDriverCostEvents(events, { ...opts, resume: "per-invocation" });
   const reading = resumeUsage.state === "pending" ? "per-invocation" : resumeUsage.state;
@@ -166,19 +220,30 @@ export function driverUsage(events, opts, { invocations = [], resumeUsage = RESU
   const modeled = reading === "cumulative" ? low : high;
 
   const perInvocation = invocations.map((inv, i) => {
-    const results = events.filter((e) => e.invocation === i + 1 && e.event === "result" && e.result?.usage);
-    const last = results.at(-1)?.result ?? null;
+    const all = events.filter((e) => e.invocation === i + 1 && e.event === "result");
+    const usable = all.filter((e) => reportsUsage(e.result));
+    const lastRaw = all.at(-1)?.result ?? null;
+    const last = usable.at(-1)?.result ?? null;
     return {
       invocation: i + 1,
       exit_status: inv.status ?? null,
       wall_ms: inv.wall_ms ?? null,
-      result_events: results.length,
+      result_events: usable.length,
+      results_without_usage: all.length - usable.length,
+      last_status: lastRaw?.status ?? null,
       conversation_id: last?.conversation_id || null,
       num_turns: last?.num_turns ?? null,
       duration_seconds: last?.duration_seconds ?? null,
       cumulative_usage: last?.usage ?? null,
+      ...(inv.started_at ? { started_at: inv.started_at } : {}),
     };
   });
+  const readings = {};
+  for (const e of modeled) {
+    const key = `${e.token_reading} (${e.token_reading_check})`;
+    readings[key] = (readings[key] ?? 0) + 1;
+  }
+  const unproven = modeled.filter((e) => e.token_reading_check !== "adds_up").length;
   const missing = perInvocation.filter((p) => p.result_events === 0).map((p) => p.invocation);
 
   return {
@@ -189,10 +254,41 @@ export function driverUsage(events, opts, { invocations = [], resumeUsage = RESU
       cost_usd: sumCost(modeled),
       cost_usd_low: sumCost(low),
       cost_usd_high: sumCost(high),
+      tokens_low: sumTokens(low),
+      tokens_high: sumTokens(high),
       invocations: perInvocation,
       invocations_without_usage: missing,
+      token_readings: readings,
+      ...(unproven ? { results_with_unproven_reading: unproven } : {}),
+      ...(resumedFirst ? { resumed_without_earlier_record: true } : {}),
     },
   };
+}
+
+/**
+ * Every model name the stream reports, from any event. No agy stream event is
+ * known to name the answering model, so an empty list is the usual answer;
+ * agy's local conversation record does (run.mjs crossCheckLocalRecord). A
+ * name that is there and is not the pin is a run on the wrong model.
+ */
+export function reportedModels(events) {
+  const seen = new Set();
+  const visit = (v, depth) => {
+    if (!v || typeof v !== "object" || depth > 4) return;
+    for (const [k, x] of Object.entries(v)) {
+      if (/^(model|model_name|modelName|model_id|modelId)$/.test(k) && typeof x === "string" && x) seen.add(x);
+      else if (x && typeof x === "object") visit(x, depth + 1);
+    }
+  };
+  for (const ev of events) visit(ev, 0);
+  return [...seen];
+}
+
+/** Reported names that are neither the pinned model nor its effort slug. */
+export function offPinModels(reported, pin, slug) {
+  const norm = (name) => String(name).toLowerCase().replace(/^models\//, "").trim();
+  const allowed = new Set([norm(pin.model), norm(slug)]);
+  return reported.filter((name) => !allowed.has(norm(name)));
 }
 
 /** Tool calls the conductor made, for the human-readable trajectory. */

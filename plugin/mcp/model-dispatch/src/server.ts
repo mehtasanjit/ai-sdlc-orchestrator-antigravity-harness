@@ -17,6 +17,7 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import { CallToolRequestSchema, ListToolsRequestSchema } from "@modelcontextprotocol/sdk/types.js";
 
 import { existsSync } from "node:fs";
+import { randomUUID } from "node:crypto";
 
 import { loadPolicy, loadPolicyFromPath, getModel, DEFAULT_POLICY_NAME } from "./policy.js";
 import {
@@ -28,7 +29,8 @@ import {
 } from "./routing.js";
 import { assessModels, parseAuthMode, type AuthMode } from "./preflight.js";
 import { checkModelPrice, withEffectivePrices } from "./effectivePrice.js";
-import { appendEvent, cacheWriteBuckets, normalizeDirectTierEvent } from "./telemetry.js";
+import { appendEvent, attemptEventFields, cacheWriteBuckets, normalizeDirectTierEvent } from "./telemetry.js";
+import { checkRunCostCap, runCostCapRefusal } from "./runCostCap.js";
 import { createAdapter } from "./adapters/index.js";
 import {
   defaultAdcPath,
@@ -430,12 +432,39 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
           select_slot: decision.selection?.slot,
           select_chosen: decision.selection?.chosen,
           select_overridden: decision.selection?.overridden,
+          fallback: decision.fallback,
         });
+        if (decision.fallback) {
+          log("warn", "route.fallback", {
+            packet_id: packet.id,
+            phase: packet.phase,
+            task_type: packet.task_type,
+            model_id: decision.modelId,
+            rule_reason: decision.reason,
+          });
+        }
+
+        const capCheck = checkRunCostCap(policy.hard_cost_cap_usd, a.telemetry_path, packet.pass_id);
+        if (capCheck && !capCheck.allowed) {
+          const message = runCostCapRefusal(capCheck, a.telemetry_path);
+          log("error", "dispatch.error", {
+            packet_id: packet.id,
+            model_id: decision.modelId,
+            error_class: "CostCapReached",
+            cap_usd: capCheck.cap_usd,
+            spent_usd: capCheck.spent_usd,
+            unreadable_lines: capCheck.unreadable_lines || undefined,
+            message,
+          });
+          throw new Error(message);
+        }
 
         const adapter = adapterFor(policy, decision.modelId);
         const dispatchStarted = Date.now();
+        const dispatchId = randomUUID();
         log("info", "dispatch.start", {
           packet_id: packet.id,
+          dispatch_id: dispatchId,
           model_id: decision.modelId,
           max_out: packet.budget?.maxOutputTokens,
           max_in: packet.budget?.maxInputTokens,
@@ -493,7 +522,7 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
             error: result.error,
           },
         ];
-        const modelName = getModel(policy, decision.modelId).model_name;
+        const { model_name: modelName, adapter: adapterId } = getModel(policy, decision.modelId);
         const baseEvent = {
           ts: new Date().toISOString(),
           pass: packet.pass_id,
@@ -514,11 +543,13 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
           // Leaf id; the only field that distinguishes two leaves that share
           // a vendor model name (e.g. flash-completion vs flash-agsdk-worker).
           model_id: decision.modelId,
+          adapter: adapterId,
           routing: {
             policy_name: policy.name,
             policy_version: policy.version,
             rule_index: decision.ruleIndex,
             rule_reason: decision.reason,
+            ...(decision.fallback ? { fallback: true as const } : {}),
             // Undefined unless the rule went through a slot; JSON.stringify
             // drops undefined keys, so unslotted policies produce identical
             // events to before slots existed.
@@ -528,6 +559,10 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
         };
         const events: TelemetryEvent[] = attempts.map((att) => ({
           ...baseEvent,
+          ...attemptEventFields(att, {
+            dispatch_id: dispatchId,
+            terminal_reason: att === attempts[attempts.length - 1] ? result.terminal_reason : undefined,
+          }),
           input_tokens: att.tokens.input,
           input_tokens_cached: att.tokens.input_cached,
           // Cache writes, disjoint from input_tokens: the total written, plus
@@ -545,6 +580,8 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
           success: att.success,
           attempt_number: att.attempt_number,
           ceiling_used: att.ceiling_used,
+          budget_enforced: att.budget_enforced,
+          budget_declared: att.budget_declared,
           retry_reason: att.attempt_number > 1 ? "output_cap" : undefined,
           error: att.error,
           // Where the dollars' rates came from ("list" or "custom" under
@@ -556,10 +593,13 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
           cli_reported_cost_usd: att.cli_reported_cost_usd,
           ttl_split: att.ttl_split,
           // claude-cli only: the dollars for the tokens the worker's own
-          // transcript explains. collect-orchestrator-usage.mjs subtracts only
-          // this share of an in-session worker, so its receipt-only side calls
-          // and unlogged tokens stay in the true total (review finding M4).
+          // transcript explains; the rest of cost_usd is what its result
+          // billed that no transcript line logged.
           transcript_logged_cost_usd: att.transcript_logged_cost_usd,
+          thinking_level: att.thinking_level,
+          wallet: att.wallet,
+          claude_session: att.claude_session,
+          prompt_cache_ttl: att.prompt_cache_ttl,
         }));
         if (a.telemetry_path) {
           for (const ev of events) appendEvent(a.telemetry_path, ev);

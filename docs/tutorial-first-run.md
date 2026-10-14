@@ -6,7 +6,7 @@ Twenty minutes end to end. You set up the plugin, prove the whole chain offline 
 
 ## What you'll need
 
-- **Node.js 20+**, the **Antigravity CLI** (`agy` ≥ 1.2.3, signed in to a Google account) and **Claude Code** (`claude`). Verify with `node --version`, `agy models` and `claude --version`.
+- **Node.js 22.19+**, the **Antigravity CLI** (`agy` ≥ 1.2.3, signed in to a Google account) and **Claude Code** (`claude`). Verify with `node --version`, `agy models` and `claude --version`.
 - **A Claude wallet.** Cheapest for a first run: Claude Code signed in to a claude.ai subscription (`claude auth status` shows `authMethod: claude.ai`). The Opus line is then modeled, not billed. An `ANTHROPIC_API_KEY` with a few dollars of budget works too and makes it cash.
 - **A Gemini door.** A `GEMINI_API_KEY` from [aistudio.google.com/app/apikey](https://aistudio.google.com/app/apikey), or Application Default Credentials from `gcloud auth application-default login`. There is no all-Claude preset on this harness — the conductor itself is Gemini, and so is the mechanical tier.
 
@@ -35,11 +35,11 @@ From the harness clone, run the offline smoke run. It drives the whole thing —
 ```bash
 cd ../ai-sdlc-orchestrator-antigravity-harness
 mkdir -p /tmp/smoke && cp examples/quick-demo/brief.md /tmp/smoke/brief.md
-npm run smoke -- --project-root=/tmp/smoke --output-dir=/tmp/smoke/.sdlc --run-id=smoke1
-node tools/report.mjs /tmp/smoke/.sdlc
+npm run smoke -- --project-root=/tmp/smoke --run-id=smoke1
+node tools/report.mjs /tmp/smoke/.sdlc/runs/smoke1
 ```
 
-The report prints a **Dispatched work — vendor-metered** table with one zero-cost row, and a **Driver loop — modeled, not measured** section with two turns and a few tenths of a cent. Every figure is made up by the stub and labeled so; what you have proved is that nothing in the chain is missing. Read [understanding-output.md](understanding-output.md) with `/tmp/smoke/.sdlc/manifest.json` open if you want to see the three-line `cost` block before a real run fills it.
+The report prints the **Cost lines** (both worker lines at $0, the driver line modeled at a few tenths of a cent), a **Dispatched work — by phase** table with one zero-cost row, and a **Driver loop — modeled, not measured** section with two turns. Every figure is made up by the stub and labeled so; what you have proved is that nothing in the chain is missing. Read [understanding-output.md](understanding-output.md) with `/tmp/smoke/.sdlc/runs/smoke1/manifest.json` open if you want to see the three-line `cost` block before a real run fills it.
 
 ## 3. Open a NEW session in the folder
 
@@ -96,11 +96,12 @@ node plugin/agy/manifest.mjs ../first-run/.sdlc --policy=antigravity-flash38-plu
 
 What you are looking at:
 
-- **Dispatched work — vendor-metered** — one row per phase, tokens in / out, cost. The judgment rows ran on Opus 5 through `claude -p`; the mechanical rows on Gemini 3.8 Flash. On the seat the Opus tokens are real and the dollars are modeled — `manifest.json` → `cost.claude_seat_modeled_usd` says so.
-- **Driver loop — modeled, not measured** — on an interactive run this section reads _No driver turns recorded._, because agy exposes no `usage` counters to a plugin. Headless runs through `run.mjs` fill it.
-- **`manifest.json` → `cost.lines`** — the three lines, each with `kind: "cash"` or `"modeled"`, and the note that they are not summed.
+- **Cost lines — never summed** — `gemini workers`, `claude worker` and `driver`, each with its kind, and a **Cash** figure made of the cash lines only. On the seat the Opus tokens are real and the dollars are modeled, so the `claude worker` line reads `modeled` and stays out of **Cash**.
+- **Dispatched work — by phase** — one named row per phase, tokens in / out, and the phase's dollars split into **Cash** and, on the seat, **Modeled**. The judgment rows ran on Opus 5 through the Claude Agent SDK; the mechanical rows on Gemini 3.8 Flash.
+- **Driver loop — modeled, not measured** — on an interactive run this section reads **NOT MEASURED**, because agy exposes no `usage` counters to a plugin. Headless runs through `run.mjs` fill it.
+- **`manifest.json` → `cost.lines`** — the three lines, each with `kind: "cash"`, `"modeled"` or, for an interactive run's driver, `"unmeasured"`, and the note that they are not summed.
 
-Every dispatched call is in `.sdlc/telemetry.jsonl` for audit. Every field is documented in [understanding-output.md](understanding-output.md).
+Every dispatched call is in `.sdlc/runs/<run-id>/telemetry.jsonl` for audit. Every field is documented in [understanding-output.md](understanding-output.md).
 
 ## 7. Try the generated app
 
@@ -119,7 +120,7 @@ Then `curl http://localhost:3000/ping` — `{ "status": "ok", "time": "…" }` i
 An interactive run has no driver line. The run of record goes through the headless launcher, which pins the conductor's model and effort, answers the gates itself, and prices every conductor turn from the stream:
 
 ```bash
-node plugin/agy/run.mjs --brief=examples/quick-demo/brief.md --project-root=/tmp/demo --output-dir=/tmp/demo/.sdlc --gates=auto-approve --run-id=quick-demo-1 --dry-run
+node plugin/agy/run.mjs --brief=examples/quick-demo/brief.md --project-root=/tmp/demo --gates=auto-approve --run-id=quick-demo-1 --dry-run
 ```
 
 `--dry-run` prints the pinned invocation with every credential reported as set/unset. Drop it to run. [running.md](running.md) has every flag, the pin gate and the resume loop.

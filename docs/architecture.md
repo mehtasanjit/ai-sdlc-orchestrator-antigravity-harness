@@ -16,7 +16,7 @@ agy --print <conductor.md> --output-format stream-json --model gemini-3.8-flash-
   ▼
 model-dispatch (MCP, stdio)             ← execute_with_model / preflight_dispatch / load_policy / …
   │  policy rules → adapter → model; appends telemetry.jsonl
-  ├─ claude-cli  → claude -p --model claude-opus-5 --effort high     (judgment phases; arm A key or arm B Vertex)
+  ├─ claude-agent-sdk → Claude Agent SDK, in-process → claude-opus-5, effort high  (judgment phases; arm A key, arm B Vertex, or the claude.ai seat)
   └─ mcp:model-dispatch → Gemini 3.8 Flash (flash-completion)      (mechanical phases)
        or antigravity-worker → Antigravity SDK agent on Vertex ADC
   ▼
@@ -37,15 +37,15 @@ plugin/agy/manifest.mjs builds manifest.json from telemetry.jsonl + the driver f
 
 **(a) MCP route — interactive.** In a trusted workspace agy loads the plugin's `mcp_config.json`, starts the bridge, and exposes its tools under the namespaced server `mmo_model-dispatch` through the generic `call_mcp_tool` (no per-tool binding). The rules name the server and tools.
 
-**(b) Dispatch script — headless.** `agy -p` loads no plugin at all (check 1), so the conductor prompt `run.mjs` renders tells the model to run `node plugin/agy/dispatch.mjs --packet=… --out=…`, which spawns the same server as a stdio subprocess through `plugin/mcp/model-dispatch/src/driverClient.ts` and speaks MCP to it. Same tools, same TaskPacket contract; only who opens the socket differs. agy's sandbox does not kill it (check 2).
+**(b) Dispatch script — headless.** `agy -p` loads no plugin at all (check 1), so the conductor prompt `run.mjs` renders tells the model to run `node plugin/agy/dispatch.mjs --packet=… --out=…`, which spawns the same server as a stdio subprocess through `plugin/mcp/model-dispatch/src/driverClient.ts` and speaks MCP to it. When `--out` already holds a result, the script moves it to `<name>.1.json` (then `.2`, ...) before writing, so a packet dispatched twice keeps both results. Same tools, same TaskPacket contract; only who opens the socket differs. agy's sandbox does not kill it (check 2).
 
 ## Three cost lines
 
 | Line | Source | Kind |
 |---|---|---|
-| Driver (Gemini on agy) | stream-json `usage` × the policy's `driver.pricing` card. Thinking at the output rate, `cache_read_tokens` at the cached rate | modeled |
+| Driver (Gemini on agy) | Headless: stream-json `usage`; interactive: agy's local conversation record (`collect-driver-usage.mjs`). Priced at the dated list; thinking at the output rate, cache reads at the cached rate | modeled |
 | Gemini workers | bridge `telemetry.jsonl` | cash (API key or Vertex) |
-| Opus 5 | bridge `telemetry.jsonl`, from the `claude -p` result | cash (Anthropic on arm A, GCP on arm B) |
+| Opus 5 | bridge `telemetry.jsonl`, from the Claude Agent SDK's result (`claude-agent-sdk` adapter) | cash (Anthropic on arm A, GCP on arm B); modeled on the seat |
 
 The modeled line lives in `driver-cost-modeled.jsonl` with `tier: "orchestrator"` and `provenance: "modeled"`, so `buildManifest` partitions it out of dispatched sums if the two files are ever concatenated. Nothing adds modeled and cash dollars into one figure.
 
@@ -89,7 +89,7 @@ Hook commands run with cwd = the directory containing `hooks.json` (the plugin d
 | `plugin/agy/verify-setup.mjs`, `plugin/agy/env-checks.mjs` | Offline setup check and repair (`npm run verify -- --fix`) |
 | `plugin/agy/manifest.mjs` | Writes `manifest.json` from the run directory: the bridge's rollups plus `harness`, `usage` and `cost` (three labeled lines) |
 | `plugin/agy/runRoot.mjs`, `plugin/agy/mmoSelect.mjs` | The `--inline-env` per-run root, and the `MMO_SELECT` door choice read from `.sdlc/local/mmo-select.json` |
-| `plugin/scripts/` | Scripts the skills call in an interactive session: `setup-policy.mjs` (the console), `write-provenance.mjs`, `write-contract-check.mjs`, `session-hydrate.mjs`, `mmo-log.mjs` and the rest |
+| `plugin/scripts/` | Scripts the skills call in an interactive session: `setup-policy.mjs` (the console), `write-provenance.mjs`, `write-contract.mjs` (freezes and ends a brownfield contract), `session-hydrate.mjs`, `mmo-log.mjs` and the rest |
 | `plugin/policy-console/` | The one UI: a local page (`npm run console`, then http://127.0.0.1:3000) to pick or customize a routing policy. Shows the agy driver pin on every card and carries it into saved policies |
 | `plugin/examples/` | The briefs the skills can offer, including the six brownfield fixtures |
 | `.agents/plugins/mmo/` | The discovery mount: symlinks into `plugin/`, which is how agy finds the plugin in a trusted workspace (check 10). Nothing is written under `~/.gemini/` |

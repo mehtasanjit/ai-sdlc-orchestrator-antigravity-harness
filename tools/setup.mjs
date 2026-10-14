@@ -21,6 +21,7 @@
  *   node tools/setup.mjs --yes                            # every question takes its default
  */
 
+import { MIN_NODE, meetsNodeFloor } from "../plugin/scripts/lib/node-floor.mjs";
 import { spawnSync } from "node:child_process";
 import { existsSync, lstatSync, mkdirSync, readFileSync, readlinkSync, rmSync, symlinkSync } from "node:fs";
 import { homedir } from "node:os";
@@ -34,6 +35,7 @@ import {
   meetsMinVersion, mcpPaths, MIN_AGY_VERSION, AGENT_WORKER_SELECT, observePolicy, claudeArmState, pluginDiscoveryState, probeClaudeLogin,
 } from "../plugin/agy/verify-setup.mjs";
 import { writeMmoSelectFile } from "../plugin/agy/mmoSelect.mjs";
+import { isMain } from "../plugin/scripts/lib/is-main.mjs";
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const PLUGIN_ROOT = join(ROOT, "plugin");
@@ -119,9 +121,8 @@ async function main(args) {
   let blocked = false;
 
   step("Node.js");
-  const nodeMajor = parseInt(process.versions.node.split(".")[0], 10);
-  if (nodeMajor >= 20) ok(`Node ${process.versions.node}`);
-  else { fail(`Node ${process.versions.node} — this repo needs Node 20 or newer.`); rl?.close(); return 1; }
+  if (meetsNodeFloor(process.versions.node)) ok(`Node ${process.versions.node}`);
+  else { fail(`Node ${process.versions.node} — this repo needs Node ${MIN_NODE} or newer.`); rl?.close(); return 1; }
 
   step("Antigravity CLI (agy)");
   const agy = probeAgyCli();
@@ -264,13 +265,13 @@ async function main(args) {
   } else {
     console.log(`${c.bold}Setup complete.${c.reset} Start a NEW agy session in ${projectRoot} — plugins and MCP servers load when a session begins — then:`);
     console.log(`  /mmo:greenfield   (empty folder + brief)      /mmo:brownfield   (existing repo)`);
-    console.log(`\nHeadless instead:\n  node "${join(ROOT, "plugin", "agy", "run.mjs")}" --brief=./brief.md --project-root="${projectRoot}" --output-dir="${projectRoot}/.sdlc" --dry-run`);
+    console.log(`\nHeadless instead:\n  node "${join(ROOT, "plugin", "agy", "run.mjs")}" --brief=./brief.md --project-root="${projectRoot}" --gates=auto-approve --dry-run`);
     console.log(`${c.dim}Re-check any time: npm run verify${c.reset}`);
   }
   rl?.close();
   return blocked ? 1 : 0;
 }
 
-if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
+if (isMain(import.meta.url)) {
   process.exit(await main(parseArgs(process.argv.slice(2))));
 }

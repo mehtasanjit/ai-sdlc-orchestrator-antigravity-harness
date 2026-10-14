@@ -43,7 +43,7 @@ function listFiles() {
 test("no tracked text file under plugin/ or tools/ contains a raw NUL byte, so search tools never skip it as binary", () => {
   const files = listFiles().filter((f) => TEXT.test(f));
   assert.ok(files.length > 100, `expected the repo's source files, found ${files.length}`);
-  assert.ok(files.includes("plugin/scripts/collect-orchestrator-usage.mjs"), "the collector must be among the files checked");
+  assert.ok(files.includes("plugin/mcp/model-dispatch/src/routing.ts"), "routing.ts, whose map key holds an escaped NUL, must be among the files checked");
   const offenders = [];
   for (const f of files) {
     const bytes = readFileSync(join(ROOT, f));

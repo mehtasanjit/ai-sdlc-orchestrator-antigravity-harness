@@ -17,30 +17,40 @@
  *                                  anyway only in name — dispatch goes through dispatch.mjs (1, 2)
  *
  * Usage:
- *   node run.mjs --brief=<path> --output-dir=<path> \
+ *   node run.mjs --brief=<path> [--output-dir=<path>] \
  *                [--project-root=<path>] [--policy=<name>] [--run-id=<id>] \
- *                [--code-dir=<path>] [--gates=prompt|auto-approve|auto-abort] \
+ *                [--code-dir=<path>] --gates=auto-approve|auto-abort \
  *                [--mode=greenfield|brownfield] [--intent=<id>] [--seed=<text>] \
  *                [--resume=<conversation-id>] [--max-turns=<n>] \
  *                [--agy-bin=<path>] [--prompt-file=<path>] [--print-timeout=6h] \
  *                [--inline-env] [--keep-run-root] [--allow-unverified-pin] [--dry-run]
+ *
+ * Defaults: --output-dir is <project-root>/.sdlc/runs/<run-id>/, one folder per
+ * run; --code-dir is <project-root>/src for greenfield and the project root
+ * for brownfield, whose edits land across the existing tree.
  *
  * --seed without --intent on a brownfield run resolves the job type at launch
  * (scripts/infer-intent.mjs) and records it as inferred; an ambiguous seed
  * refuses to launch rather than leave the choice to the model.
  */
 
-import { copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { appendFileSync, copyFileSync, existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { spawn, spawnSync as spawnSyncFn } from "node:child_process";
 import { dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parse as parseYaml } from "yaml";
 
-import { conversationIdFrom, driverUsage, parseEventStream, parseInvocations } from "./telemetry/event-reader.mjs";
-import { assertPinnedInvocation, driverSlug, findPinRejection, pendingPinChecks, readPin } from "./telemetry/fairnessPin.mjs";
+import { conversationIdFrom, driverUsage, offPinModels, parseEventStream, parseInvocations, reportedModels } from "./telemetry/event-reader.mjs";
+import { driverPrice, unpricedDriverRefusal } from "./telemetry/driverPrice.mjs";
+import { assertPinnedInvocation, driverSlug, findPinRejection, pendingPinChecks, pinVerification, readPin } from "./telemetry/fairnessPin.mjs";
 import { defaultRunRoot, materialiseRunRoot, removeRunRoot } from "./runRoot.mjs";
 import { buildHarnessManifest, agyVersion } from "./manifest.mjs";
+import { driverRangeNotes } from "./telemetry/driverRange.mjs";
 import { inferIntent } from "../scripts/infer-intent.mjs";
+import { isMain } from "../scripts/lib/is-main.mjs";
+import { staleBuild, staleBuildWarning } from "../scripts/lib/stale-build.mjs";
+import { finishWriteGuard, gitStatus } from "./writeGuard.mjs";
+import { agyHome, readConversationRecord } from "./telemetry/conversationUsage.mjs";
 
 const AGY_DIR = dirname(fileURLToPath(import.meta.url));
 export const PLUGIN_ROOT = dirname(AGY_DIR);
@@ -101,9 +111,15 @@ export function validIntents(pluginRoot = PLUGIN_ROOT) {
   return (Array.isArray(raw) ? raw : (raw.intents ?? [])).map((i) => i.id);
 }
 
-export function renderHandover({ mode, intent, seed, intentSource } = {}) {
+export function renderHandover({ mode, intent, seed, intentSource, runId, outputDir, codeDir, projectRoot } = {}) {
   const lines = [];
   if (mode) lines.push(`mode: ${mode}`);
+  if (mode === "brownfield") {
+    if (runId) lines.push(`run_id: ${runId}`);
+    if (projectRoot) lines.push(`project_root: ${projectRoot}`);
+    if (outputDir) lines.push(`output_dir: ${outputDir}`);
+    if (codeDir) lines.push(`code_dir: ${codeDir}`);
+  }
   if (intent) lines.push(`intent: ${intent}`);
   if (intent && intentSource === "inferred") lines.push("intent_source: inferred");
   if (seed) lines.push(`seed_description: ${String(seed).replace(/\s+/g, " ").trim()}`);
@@ -166,6 +182,43 @@ export function loadPolicyFile(policyName, pluginRoot = PLUGIN_ROOT) {
   return parseYaml(readFileSync(path, "utf-8"));
 }
 
+/**
+ * The policy this run uses, resolved the way the bridge resolves it, so the
+ * launcher's pin, rates and cap come from the file the bridge routes by:
+ *   1. <project-root>/routing-policy.yaml — the bridge always takes it when present
+ *   2. --policy=<name>
+ *   3. <project-root>/.sdlc/project.json default_policy (setup's console choice)
+ *   4. the shipped default
+ * Returns `{ name, path, source, policy, ignoredFlag }`.
+ */
+export function resolvePolicy({ projectRoot, flag = null, pluginRoot = PLUGIN_ROOT, read = readFileSync, exists = existsSync }) {
+  const override = join(projectRoot, "routing-policy.yaml");
+  if (exists(override)) {
+    const policy = parseYaml(read(override, "utf-8"));
+    if (!policy?.name) throw new Error(`run: ${override} has no name: field.`);
+    return { name: policy.name, path: override, source: "routing-policy.yaml", policy, ignoredFlag: flag && flag !== policy.name ? flag : null };
+  }
+  if (flag) return { name: flag, path: policyPath(flag, pluginRoot), source: "--policy", policy: loadPolicyFile(flag, pluginRoot), ignoredFlag: null };
+  const projectFile = join(projectRoot, ".sdlc", "project.json");
+  if (exists(projectFile)) {
+    let project = null;
+    try { project = JSON.parse(read(projectFile, "utf-8")); } catch { throw new Error(`run: ${projectFile} is not valid JSON.`); }
+    const name = typeof project?.default_policy === "string" ? project.default_policy.replace(/\.ya?ml$/, "") : null;
+    if (name) return { name, path: policyPath(name, pluginRoot), source: ".sdlc/project.json", policy: loadPolicyFile(name, pluginRoot), ignoredFlag: null };
+  }
+  return { name: DEFAULT_POLICY, path: policyPath(DEFAULT_POLICY, pluginRoot), source: "default", policy: loadPolicyFile(DEFAULT_POLICY, pluginRoot), ignoredFlag: null };
+}
+
+/** The bridge's own validation (adapter ids, rules, the cost cap), run at launch instead of at the first dispatch. */
+export async function validatePolicyFile(path) {
+  const { loadPolicyFromPath } = await import("../mcp/model-dispatch/dist/policy.js");
+  try {
+    loadPolicyFromPath(path);
+  } catch (err) {
+    throw new Error(`run: policy ${path} is not valid: ${err?.message ?? err}`);
+  }
+}
+
 function isInside(child, parent) {
   const rel = relative(parent, child);
   return rel === "" || (!rel.startsWith("..") && !resolve(rel).startsWith(".."));
@@ -200,37 +253,109 @@ export function buildAgyArgs({
   ];
 }
 
-export function runIsComplete(outputDir, exists = existsSync) {
-  return exists(join(outputDir, "SUMMARY.md"));
+/** The run's output directory: its own folder under the project's `.sdlc/runs/`. */
+export function defaultOutputDir(projectRoot, runId) {
+  return join(projectRoot, ".sdlc", "runs", runId);
 }
 
-export function spawnAgy(args, { spawnFn = spawn, cwd, agyBin = "agy", env = process.env } = {}) {
+/** Greenfield code goes to `src/`; a brownfield run edits the existing tree, so its code dir is the project root. */
+export function defaultCodeDir(projectRoot, mode) {
+  return mode === "brownfield" ? projectRoot : join(projectRoot, "src");
+}
+
+/**
+ * `SUMMARY.md` written by this run. One left in the directory by an earlier
+ * run (an `--output-dir` reused across runs) is older than this run's start
+ * and does not mark this run complete.
+ */
+export function runIsComplete(outputDir, since = null, { exists = existsSync, stat = statSync } = {}) {
+  const path = join(outputDir, "SUMMARY.md");
+  if (!exists(path)) return false;
+  if (!since) return true;
+  // A second's slack for filesystems that store whole-second mtimes.
+  return stat(path).mtimeMs >= Date.parse(since) - 1000;
+}
+
+/**
+ * `onStdout` / `onStderr` receive each chunk as it arrives, so the launcher
+ * can write the stream to disk before the process ends: a run killed
+ * mid-invocation keeps every event agy had printed. `onChild` receives the
+ * process, so an interrupt can stop it.
+ */
+export function spawnAgy(args, { spawnFn = spawn, cwd, agyBin = "agy", env = process.env, onStdout, onStderr, onChild } = {}) {
   return new Promise((resolvePromise) => {
     const child = spawnFn(agyBin, args, { cwd, env, stdio: ["ignore", "pipe", "pipe"] });
+    onChild?.(child);
     let stdout = "";
     let stderr = "";
-    child.stdout?.on("data", (c) => (stdout += c.toString()));
-    child.stderr?.on("data", (c) => (stderr += c.toString()));
+    child.stdout?.on("data", (c) => { const t = c.toString(); stdout += t; onStdout?.(t); });
+    child.stderr?.on("data", (c) => { const t = c.toString(); stderr += t; onStderr?.(t); });
     child.on("error", (err) => resolvePromise({ status: null, stdout, stderr: String(err?.message ?? err) }));
     child.on("close", (status) => resolvePromise({ status, stdout, stderr }));
   });
 }
 
 /** `invocations`: one `{stdout, status, wall_ms}` per agy process, in launch order. `jsonl` alone is one process. */
-export function buildRunArtifacts({ jsonl, invocations, pin, passId, policyName, now, resumeUsage }) {
+/**
+ * `invocations`: one `{stdout, status, wall_ms}` per agy process, in launch order; `jsonl` alone is one
+ * process. A pin rejection is read from this launch's processes only: a carried one was already
+ * reported by the launch that ran it. `resumedFirst`: this launch's first process resumed a
+ * conversation whose earlier record was not carried.
+ */
+/**
+ * `driver`: the policy's driver block, priced through the dated list on the
+ * day each agy process started (`invocations[i].started_at`, else `runStartedAt`);
+ * without it the pin's flat card prices every turn.
+ */
+export function buildRunArtifacts({ jsonl, invocations, pin, passId, policyName, now, resumeUsage, resumedFirst = false, driver = null, runStartedAt = null }) {
   const runs = invocations ?? [{ stdout: jsonl, status: null, wall_ms: null }];
   const events = parseInvocations(runs.map((r) => r.stdout), now);
-  const rejection = findPinRejection(events);
+  const rejection = findPinRejection(events.filter((e) => !runs[(e.invocation ?? 1) - 1]?.carried));
+  const priceWarnings = new Set();
+  const priceFor = driver
+    ? (invocation) => {
+        const day = runs[(invocation ?? 1) - 1]?.started_at ?? runStartedAt ?? new Date().toISOString();
+        const price = driverPrice(driver, day);
+        for (const w of price.warnings ?? []) priceWarnings.add(w);
+        // The launch refused an unpriced day; a run that crosses into one keeps its record, with the turns flagged.
+        if (price.unpriced) return { pricing: { input: 0, input_cached: 0, output: 0 }, unpriced: unpricedDriverRefusal(driver.model_name, day.slice(0, 10), price.reason) };
+        return price;
+      }
+    : null;
   const { modeled, summary } = driverUsage(
     events,
-    { pass: passId, model: pin.model, pricing: pin.pricing, policyName, billingMode: pin.billing_mode, now },
-    { invocations: runs, ...(resumeUsage ? { resumeUsage } : {}) },
+    { pass: passId, model: pin.model, pricing: pin.pricing, priceFor, policyName, billingMode: pin.billing_mode, now },
+    { invocations: runs, resumedFirst, ...(resumeUsage ? { resumeUsage } : {}) },
   );
   summary.invocations.forEach((s, i) => {
     s.lines = streamLines(runs[i].stdout);
     if (runs[i].carried) s.carried_from_earlier_launch = true;
   });
-  return { events, rejection, modeled, driverUsage: summary };
+  if (priceWarnings.size) summary.price_warnings = [...priceWarnings];
+  const unpriced = modeled.filter((e) => e.unpriced).length;
+  if (unpriced) summary.unpriced_turns = unpriced;
+  const reported = reportedModels(events);
+  const offPin = offPinModels(reported, pin, driverSlug(pin));
+  return { events, rejection, modeled, driverUsage: summary, reportedModels: reported, offPinModels: offPin };
+}
+
+/**
+ * The same conversation's usage as agy's local record holds it (check 18),
+ * beside the stream reading the driver line booked: one record, two readers.
+ * Null when the record is absent or unreadable; never changes the driver line.
+ */
+export async function crossCheckLocalRecord({ conversationId, since, modeled, home = agyHome() }) {
+  if (!conversationId) return null;
+  const path = join(home, "conversations", `${conversationId}.db`);
+  if (!existsSync(path)) return { found: false };
+  let calls;
+  try { calls = await readConversationRecord(path); } catch (err) { return { found: true, unreadable: String(err?.message ?? err) }; }
+  const inRun = calls.filter((c) => c.at && Date.parse(c.at) >= Date.parse(since) - 60_000);
+  const sum = (xs, k) => xs.reduce((s, x) => s + (x[k] ?? 0), 0);
+  const record = { input: sum(inRun, "fresh") + sum(inRun, "cached"), input_cached: sum(inRun, "cached"), output: sum(inRun, "output"), thinking: sum(inRun, "thinking") };
+  const stream = { input: sum(modeled, "input_tokens") + sum(modeled, "input_tokens_cached"), input_cached: sum(modeled, "input_tokens_cached"), output: sum(modeled, "output_tokens"), thinking: sum(modeled, "output_tokens_reasoning") };
+  const close = (a, b) => Math.abs(a - b) <= Math.max(0.01 * Math.max(a, b), 1);
+  return { found: true, calls: inRun.length, models: [...new Set(inRun.map((c) => c.model).filter(Boolean))], record, stream, agrees: Object.keys(record).every((k) => close(record[k], stream[k])) };
 }
 
 /** A stream with a guaranteed trailing newline, so concatenated invocations never share a line. */
@@ -246,33 +371,60 @@ function streamLines(text) {
 /**
  * The earlier invocations of the conversation a `--resume` launch continues,
  * read back from the same output directory before this launch overwrites its
- * driver files. Boundaries come from the earlier driver-manifest.json; a
- * manifest without them yields the whole earlier stream as one invocation.
+ * driver files, with the pin and policy they ran under. Boundaries come from
+ * the earlier driver-manifest.json; a manifest written before it recorded
+ * them is split at each `init` event, which every agy process emits first.
  */
 export function priorInvocations(outputDir, conversationId, { read = readFileSync, exists = existsSync } = {}) {
+  const none = { invocations: [], started_at: null, pin: null, policy: null };
   const manifestPath = join(outputDir, "driver-manifest.json");
   const eventsPath = join(outputDir, "driver-events.jsonl");
-  if (!conversationId || !exists(manifestPath) || !exists(eventsPath)) return { invocations: [], started_at: null };
-  let prior;
-  try {
-    prior = JSON.parse(read(manifestPath, "utf-8"));
-  } catch {
-    return { invocations: [], started_at: null };
+  if (!conversationId || !exists(eventsPath)) return none;
+  const lines = String(read(eventsPath, "utf-8")).split("\n");
+  if (lines.at(-1) === "") lines.pop();
+  const asChunks = (ls) => splitAtInit(ls).filter((c) => c.some((l) => l.trim())).map((chunk) => ({ stdout: chunk.join("\n"), status: null, wall_ms: null, carried: true }));
+  let prior = null;
+  try { prior = exists(manifestPath) ? JSON.parse(read(manifestPath, "utf-8")) : null; } catch { prior = null; }
+  if (!prior) {
+    // A launch that died before writing any record: its streamed events are the
+    // record, carried when they belong to the conversation being resumed.
+    return conversationIdFrom(parseEventStream(lines.join("\n"))) === conversationId ? { ...none, invocations: asChunks(lines) } : none;
   }
-  if (prior?.conversation_id !== conversationId) return { invocations: [], started_at: null };
-  const text = String(read(eventsPath, "utf-8"));
+  if (prior.conversation_id !== conversationId) return none;
   const recorded = prior.driver_usage?.invocations;
-  if (!Array.isArray(recorded) || !recorded.every((i) => Number.isInteger(i.lines))) {
-    return { invocations: [{ stdout: text, status: prior.agy_exit_status ?? null, wall_ms: null, carried: true }], started_at: prior.started_at ?? null };
-  }
-  const lines = text.split("\n");
+  const carried = (chunks) => ({ invocations: chunks, started_at: prior.started_at ?? null, pin: prior.pin ?? null, policy: prior.policy ?? null });
+  if (!Array.isArray(recorded) || !recorded.every((i) => Number.isInteger(i.lines))) return carried(asChunks(lines));
   let at = 0;
-  const invocations = recorded.map((i) => {
+  const known = recorded.map((i) => {
     const stdout = lines.slice(at, at + i.lines).join("\n");
     at += i.lines;
-    return { stdout, status: i.exit_status ?? null, wall_ms: i.wall_ms ?? null, carried: true };
+    return { stdout, status: i.exit_status ?? null, wall_ms: i.wall_ms ?? null, carried: true, ...(i.started_at ? { started_at: i.started_at } : {}) };
   });
-  return { invocations, started_at: prior.started_at ?? null };
+  // Lines past the recorded boundaries were streamed by a launch that ended before its record was written.
+  return carried([...known, ...asChunks(lines.slice(at))]);
+}
+
+function splitAtInit(lines) {
+  const chunks = [];
+  for (const line of lines) {
+    let isInit = false;
+    try { isInit = JSON.parse(line)?.event === "init"; } catch { /* not an event line */ }
+    if (isInit || chunks.length === 0) chunks.push([]);
+    chunks.at(-1).push(line);
+  }
+  if (chunks.length > 1 && chunks[0].every((l) => !l.trim())) chunks.shift();
+  return chunks;
+}
+
+/** A carried record must have run under the pin and policy this launch asserts, or its turns would be re-priced as this pin's. */
+export function assertResumable(prior, { slug, policyName }) {
+  if (!prior.invocations.length) return;
+  if (prior.pin?.slug && prior.pin.slug !== slug) {
+    throw new Error(`run: the conversation being resumed ran on '${prior.pin.slug}', and this launch pins '${slug}'. Resume with the policy it ran under${prior.policy ? ` (--policy=${prior.policy})` : ""}, or start a new run.`);
+  }
+  if (prior.policy && prior.policy !== policyName) {
+    throw new Error(`run: the conversation being resumed ran under policy '${prior.policy}', and this launch uses '${policyName}'. Resume with --policy=${prior.policy}, or start a new run.`);
+  }
 }
 
 /** Which reported variables are set. Never their values. */
@@ -296,24 +448,40 @@ export function pinGateMessage(pending) {
     `run: the driver pin is not live-verified — checks ${pending.join(", ")} in ` +
     `docs/verification/p1-agy-runtime.md are still pending, and nothing may be pinned on a pending check. ` +
     `Run the checks in a signed-in agy session and record them, or pass --allow-unverified-pin to run anyway ` +
-    `with pin_verified: false stamped in the manifest.`
+    `with pin.verified: false stamped in the manifest.`
   );
 }
 
 async function main(args) {
   const projectRoot = args["project-root"] ? resolve(args["project-root"]) : process.cwd();
-  const outputDir = args["output-dir"] ? resolve(args["output-dir"]) : join(projectRoot, ".sdlc");
-  const policyName = args.policy ?? DEFAULT_POLICY;
+  const resolvedPolicy = resolvePolicy({ projectRoot, flag: typeof args.policy === "string" ? args.policy : null });
+  const policyName = resolvedPolicy.name;
+  if (resolvedPolicy.ignoredFlag) {
+    console.error(`run: warning — ${join(projectRoot, "routing-policy.yaml")} (policy '${policyName}') is in force; the bridge routes by it whatever --policy says, so --policy=${resolvedPolicy.ignoredFlag} is not used.`);
+  }
+  await validatePolicyFile(resolvedPolicy.path);
   const runId = args["run-id"] ?? new Date().toISOString().replace(/[:.]/g, "-");
+  if (!/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(runId)) {
+    throw new Error(`run: --run-id=${runId} must be letters, digits, '.', '_' or '-': it names the run's folder.`);
+  }
+  const outputDir = args["output-dir"] ? resolve(args["output-dir"]) : defaultOutputDir(projectRoot, runId);
   const promptPath = args["prompt-file"] ? resolve(args["prompt-file"]) : join(AGY_DIR, "prompts", "conductor.md");
-  const codeDir = args["code-dir"] ? resolve(args["code-dir"]) : join(projectRoot, "src");
+  const codeDir = args["code-dir"] ? resolve(args["code-dir"]) : defaultCodeDir(projectRoot, args.mode);
   const briefPath = args.brief ? resolve(args.brief) : join(projectRoot, "brief.md");
   if (!args["prompt-file"] && !existsSync(briefPath)) {
     throw new Error(`run: no brief at ${briefPath}. Pass --brief=<path>, or put brief.md at the project root.`);
   }
-  const gateMode = args.gates ?? "prompt";
+  // Print mode has no one to answer a gate: a `prompt` conductor stops at Gate 1, the session ends,
+  // and the resume loop carries it past every later gate with nobody having reviewed anything.
+  const gateMode = args.gates ?? (args["dry-run"] ? "auto-approve" : null);
+  if (!gateMode) {
+    throw new Error("run: --gates=auto-approve or --gates=auto-abort is required. A headless run has no one to answer a gate, so it never defaults to one.");
+  }
+  if (gateMode === "prompt") {
+    throw new Error("run: --gates=prompt needs a person at the keyboard, and agy's print mode has none: the run would stop at Gate 1 and the resume loop would carry it past every gate unreviewed. Use --gates=auto-approve (gates recorded as auto-approved in gates.jsonl) or --gates=auto-abort, or run interactively with /mmo:greenfield or /mmo:brownfield.");
+  }
   if (!(gateMode in GATE_MODES)) {
-    throw new Error(`run: --gates=${gateMode} is not one of ${Object.keys(GATE_MODES).join(", ")}.`);
+    throw new Error(`run: --gates=${gateMode} is not one of auto-approve, auto-abort.`);
   }
   const mode = args.mode;
   if (mode && mode !== "greenfield" && mode !== "brownfield") {
@@ -351,17 +519,24 @@ async function main(args) {
     POLICY: policyName,
     RUN_ID: runId,
     GATE_INSTRUCTION: GATE_MODES[gateMode],
-    HANDOVER: renderHandover({ mode, intent: resolvedIntent, seed: args.seed, intentSource }),
+    HANDOVER: renderHandover({ mode, intent: resolvedIntent, seed: args.seed, intentSource, runId, outputDir, codeDir, projectRoot }),
   };
   const promptText = renderPrompt(readFileSync(promptPath, "utf-8"), renderValues);
 
-  const policy = loadPolicyFile(policyName);
+  const policy = resolvedPolicy.policy;
   const pin = readPin(policy);
   const slug = driverSlug(pin);
   assertPinnedInvocation({ model: slug }, policy);
 
+  const build = staleBuild(join(PLUGIN_ROOT, "mcp", "model-dispatch"));
+  const buildWarning = staleBuildWarning(build);
+  if (buildWarning) console.error(`run: warning — ${buildWarning}`);
+
+  const launchPrice = driverPrice(policy.driver, new Date());
+  if (launchPrice.unpriced) throw new Error(unpricedDriverRefusal(pin.model, new Date().toISOString().slice(0, 10), launchPrice.reason));
+  for (const w of launchPrice.warnings) console.error(`run: warning — driver price: ${w}`);
+
   const pending = pendingPinChecks();
-  const pinVerified = pending.length === 0;
   const inlineEnv = Boolean(args["inline-env"]);
   const runRoot = inlineEnv ? defaultRunRoot(runId) : null;
   const cwd = runRoot ?? HARNESS_ROOT;
@@ -372,13 +547,18 @@ async function main(args) {
       JSON.stringify(
         {
           policy: policyName,
-          pin: { ...pin, slug, verified: pinVerified, pending_checks: pending },
+          policy_source: resolvedPolicy.source,
+          policy_path: resolvedPolicy.path,
+          pin: { ...pin, slug, ...pinVerification({ pending }), pending_checks: pending },
+          driver_price: { basis: launchPrice.basis, period: launchPrice.period, pricing: launchPrice.pricing },
           run_id: runId,
           mode: mode ?? null,
           intent: resolvedIntent ? { resolved: resolvedIntent, source: intentSource } : null,
           output_dir: outputDir,
+          code_dir: codeDir,
           cwd,
           inline_env: inlineEnv,
+          bridge_build: { stale: build.stale, files: build.files },
           env_present: envPresence(),
           argv: redactPrompt(agyArgs),
         },
@@ -389,22 +569,64 @@ async function main(args) {
     return 0;
   }
 
-  if (!pinVerified && !args["allow-unverified-pin"]) throw new Error(pinGateMessage(pending));
+  if (pending.length && !args["allow-unverified-pin"]) throw new Error(pinGateMessage(pending));
 
   mkdirSync(outputDir, { recursive: true });
   renderSkills(outputDir, renderValues);
-  copyFileSync(policyPath(policyName), join(outputDir, "policy_snapshot.yaml"));
+  copyFileSync(resolvedPolicy.path, join(outputDir, "policy_snapshot.yaml"));
   if (runRoot) materialiseRunRoot({ runRoot, pluginRoot: PLUGIN_ROOT });
 
   const agyBin = args["agy-bin"] ?? "agy";
   const resumeFrom = args.resume ?? null;
   const prior = priorInvocations(outputDir, resumeFrom);
+  assertResumable(prior, { slug, policyName });
   const started = prior.started_at ?? new Date().toISOString();
   const launches = [...prior.invocations];
+  const statusBefore = gitStatus(projectRoot);
+
+  // The streams go to disk as they arrive: the carried invocations first,
+  // exactly as an end-of-run write would put them, then each process's
+  // chunks. A run killed mid-invocation keeps every event agy printed, and
+  // --resume reads them back.
+  const eventsPath = join(outputDir, "driver-events.jsonl");
+  const stderrPath = join(outputDir, "driver-stderr.log");
+  const priorStderr = prior.invocations.length && existsSync(stderrPath) ? terminated(readFileSync(stderrPath, "utf-8")) : "";
+  writeFileSync(eventsPath, prior.invocations.map((l) => terminated(l.stdout)).join(""), "utf-8");
+  writeFileSync(stderrPath, priorStderr, "utf-8");
+
+  let child = null;
+  let interrupted = null;
+  const onSignal = (sig) => {
+    interrupted = sig;
+    console.error(`run ${runId}: ${sig} — stopping agy and writing the run record`);
+    child?.kill("SIGTERM");
+  };
+  for (const sig of ["SIGINT", "SIGTERM", "SIGHUP"]) process.on(sig, onSignal);
+
+  // A record after every launch, so a launcher that dies before the end still
+  // leaves the invocation boundaries a --resume needs.
+  const provisional = (conversationId) => {
+    writeFileSync(join(outputDir, "driver-manifest.json"), JSON.stringify({
+      harness: "antigravity", run_id: runId, policy: policyName, provisional: true,
+      pin: { model: pin.model, effort: pin.effort, slug, billing_mode: pin.billing_mode },
+      conversation_id: conversationId, started_at: started,
+      driver_usage: { invocations: launches.map((l, i) => ({ invocation: i + 1, exit_status: l.status, wall_ms: l.wall_ms, ...(l.started_at ? { started_at: l.started_at } : {}), lines: streamLines(l.stdout) })) },
+    }, null, 2) + "\n", "utf-8");
+  };
+
   const launch = async (agyArgv) => {
     const t0 = Date.now();
-    const r = await spawnAgy(agyArgv, { cwd, agyBin });
-    launches.push({ stdout: r.stdout, status: r.status, wall_ms: Date.now() - t0 });
+    const startedAt = new Date(t0).toISOString();
+    let tail = "";
+    const r = await spawnAgy(agyArgv, {
+      cwd, agyBin,
+      onChild: (c) => { child = c; },
+      onStdout: (t) => { tail = t; appendFileSync(eventsPath, t); },
+      onStderr: (t) => appendFileSync(stderrPath, t),
+    });
+    child = null;
+    if (tail && !tail.endsWith("\n")) appendFileSync(eventsPath, "\n");
+    launches.push({ stdout: r.stdout, status: r.status, wall_ms: Date.now() - t0, started_at: startedAt });
     return r;
   };
 
@@ -421,43 +643,70 @@ async function main(args) {
       );
     }
 
-    let stderr = result.stderr;
     const conversationId = conversationIdFrom(parseEventStream(result.stdout)) ?? resumeFrom;
     let invocations = 1;
+    provisional(conversationId);
 
-    while (invocations < maxTurns && result.status === 0 && conversationId && !runIsComplete(outputDir)) {
+    while (!interrupted && invocations < maxTurns && result.status === 0 && conversationId && !runIsComplete(outputDir, started)) {
       console.log(`run ${runId}: session incomplete after invocation ${invocations} (no SUMMARY.md yet) — resuming ${conversationId}`);
       result = await launch(
         buildAgyArgs({ slug, promptText: RESUME_PROMPT, projectRoot, outputDir, printTimeout, resumeConversationId: conversationId }),
       );
-      stderr += result.stderr;
       invocations += 1;
+      provisional(conversationId);
     }
-    const stdout = launches.map((l) => terminated(l.stdout)).join("");
-
-    if (!runIsComplete(outputDir)) {
+    const completed = runIsComplete(outputDir, started);
+    if (!completed) {
       console.log(
-        `run ${runId}: stopped after ${invocations} invocation(s) without SUMMARY.md — ` +
-          (invocations >= maxTurns ? `hit --max-turns=${maxTurns}.` : `agy exited ${result.status}.`) +
-          " Artifacts so far are in the output directory; re-run with --resume=<conversation-id> to continue.",
+        `run ${runId}: stopped after ${invocations} invocation(s) without this run's SUMMARY.md — ` +
+          (interrupted ? `interrupted (${interrupted}).` : invocations >= maxTurns ? `hit --max-turns=${maxTurns}.` : `agy exited ${result.status}.`) +
+          ` Artifacts so far are in the output directory; re-run with --resume=${conversationId ?? "<conversation-id>"} --run-id=${runId} to continue.`,
       );
     }
 
-    const stderrPath = join(outputDir, "driver-stderr.log");
-    const priorStderr = prior.invocations.length && existsSync(stderrPath) ? terminated(readFileSync(stderrPath, "utf-8")) : "";
-    writeFileSync(join(outputDir, "driver-events.jsonl"), stdout, "utf-8");
-    writeFileSync(stderrPath, priorStderr + stderr, "utf-8");
+    const writeGuard = finishWriteGuard({ projectRoot, runId, statusBefore, outcome: completed ? "completed" : "stopped" });
+    if (writeGuard.after_run_check?.outside_contract.length) {
+      console.error(
+        `run ${runId}: no write guard ran (headless), and the run changed ${writeGuard.after_run_check.outside_contract.length} file(s) its contract does not allow: ` +
+          `${writeGuard.after_run_check.outside_contract.slice(0, 5).join(", ")}${writeGuard.after_run_check.outside_contract.length > 5 ? ", …" : ""}. Review them before keeping the change.`,
+      );
+    }
 
-    const { events, rejection, modeled, driverUsage: usageSummary } = buildRunArtifacts({ invocations: launches, pin, passId: runId, policyName });
+    const { events, rejection, modeled, driverUsage: usageSummary, reportedModels: driverModels, offPinModels: offPin } = buildRunArtifacts({
+      invocations: launches, pin, passId: runId, policyName, driver: policy.driver, runStartedAt: started,
+      resumedFirst: Boolean(resumeFrom) && prior.invocations.length === 0,
+    });
     writeFileSync(
       join(outputDir, "driver-cost-modeled.jsonl"),
       modeled.map((e) => JSON.stringify(e)).join("\n") + (modeled.length ? "\n" : ""),
       "utf-8",
     );
+    const localRecord = await crossCheckLocalRecord({ conversationId, since: started, modeled });
+    if (localRecord?.found && localRecord.agrees === false) {
+      console.error(
+        `run ${runId}: agy's local conversation record and the stream disagree on the driver's tokens ` +
+          `(record ${JSON.stringify(localRecord.record)}, stream ${JSON.stringify(localRecord.stream)}); see driver_usage.local_record.`,
+      );
+    }
+    if (localRecord) usageSummary.local_record = localRecord;
+    const observedModels = [...new Set([...driverModels, ...(localRecord?.models ?? [])])];
+    const verification = pinVerification({ pending, observed: observedModels, offPin: offPinModels(observedModels, pin, slug) });
+    if (verification.unverified_reason === "no_model_observed") {
+      console.error(`run ${runId}: neither agy's stream nor its local conversation record named the model that conducted — pin.verified is false.`);
+    }
+    if (offPin.length) {
+      console.error(`run ${runId}: agy reported driver model(s) ${offPin.join(", ")}, not the pinned ${slug} — the run is not on the pinned driver.`);
+    }
+    if (usageSummary.results_with_unproven_reading) {
+      console.error(
+        `run ${runId}: ${usageSummary.results_with_unproven_reading} driver result(s) reported counters that no token reading adds up to ` +
+          "unambiguously; they are booked at the dearest reading (driver_usage.token_readings).",
+      );
+    }
     if (usageSummary.invocations_without_usage.length) {
       console.error(
-        `run ${runId}: agy invocation(s) ${usageSummary.invocations_without_usage.join(", ")} ended without a result event — ` +
-          "their driver tokens are missing from the modeled driver line.",
+        `run ${runId}: agy invocation(s) ${usageSummary.invocations_without_usage.join(", ")} reported no usage ` +
+          "(no result event, or only an all-zero error result) — the modeled driver line may be missing their tokens.",
       );
     }
 
@@ -465,22 +714,30 @@ async function main(args) {
       harness: "antigravity",
       run_id: runId,
       policy: policyName,
+      policy_source: resolvedPolicy.source,
       gates: gateMode,
       mode: mode ?? null,
       intent: resolvedIntent ? { resolved: resolvedIntent, source: intentSource } : null,
-      pin: { model: pin.model, effort: pin.effort, slug, billing_mode: pin.billing_mode, verified: pinVerified, pending_checks: pending },
+      pin: { model: pin.model, effort: pin.effort, slug, billing_mode: pin.billing_mode, ...verification, pending_checks: pending, observed_models: observedModels },
       conversation_id: conversationId,
       started_at: started,
       ended_at: new Date().toISOString(),
       agy_exit_status: result.status,
       driver_turns: modeled.length,
       agy_invocations: launches.length,
-      completed: runIsComplete(outputDir),
+      completed,
+      ...(interrupted ? { interrupted } : {}),
+      output_dir: outputDir,
+      code_dir: codeDir,
+      write_guard: writeGuard,
       driver_cost_usd_modeled: usageSummary.cost_usd,
+      driver_reported_models: driverModels,
+      ...(offPin.length ? { driver_model_mismatch: offPin } : {}),
       driver_usage: usageSummary,
       pin_rejection: rejection,
       events_captured: events.length,
       inline_env: inlineEnv,
+      bridge_build: { stale: build.stale, files: build.files },
       agy_version: agyVersion((cmd, a, o) => spawnSyncFn(agyBin, a, o)),
     };
     writeFileSync(join(outputDir, "driver-manifest.json"), JSON.stringify(manifest, null, 2) + "\n", "utf-8");
@@ -503,15 +760,17 @@ async function main(args) {
       `run ${runId} finished: exit=${result.status} turns=${modeled.length} ` +
         `driver_cost_usd(modeled)=${manifest.driver_cost_usd_modeled} artifacts=${outputDir}`,
     );
+    for (const note of driverRangeNotes(usageSummary)) console.log(`  driver: ${note}`);
     console.log(`\n  Manifest:     node plugin/agy/manifest.mjs '${outputDir}'`);
     console.log(`  Cost report:  node tools/report.mjs '${outputDir}'`);
-    return result.status === 0 ? 0 : 1;
+    return result.status === 0 && !interrupted ? 0 : 1;
   } finally {
+    for (const sig of ["SIGINT", "SIGTERM", "SIGHUP"]) process.off(sig, onSignal);
     if (runRoot && !args["keep-run-root"]) removeRunRoot(runRoot);
   }
 }
 
-if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
+if (isMain(import.meta.url)) {
   try {
     process.exit(await main(parseArgs(process.argv.slice(2))));
   } catch (err) {

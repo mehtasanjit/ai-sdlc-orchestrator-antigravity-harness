@@ -23,6 +23,12 @@ setup is one-time per machine and happens separately.
   case) — propose the job type from the wording at step 4a, confirm it with one question, then
   continue as if `intent: <id>` had been supplied. With an empty `seed_description` this line
   is inert.
+- `run_id`, `project_root`, `output_dir` and `code_dir` (headless launches only) — the launcher
+  chose them. Use them everywhere this guide says `<run-id>`, `.sdlc/runs/<run-id>` and the code
+  directory; do not mint a run id of your own. Your shell does not start in the project on a
+  headless launch, so every `--project-root="$(pwd)"` below is `--project-root="<project_root>"`,
+  and every relative `.sdlc/...` path is under `<project_root>`. `output_dir` is
+  `<project_root>/.sdlc/runs/<run_id>` and `code_dir` the project root unless the launch said otherwise.
 - `intent_source: inferred` next to `intent: <id>` (headless launches only) — the launcher
   already ran step 4a's inference on `seed_description`. Treat `intent` as chosen; say on Gate
   0's Intent line that it was proposed from the wording.
@@ -33,7 +39,14 @@ setup is one-time per machine and happens separately.
 
 # 1. Setup-status check — resume or fresh
 
-Before anything else, invoke:
+Before anything else, record when this run started — the collector counts your own model calls
+from this moment (`run_started_at`, used at Phase 9):
+
+```bash
+date -u +%Y-%m-%dT%H:%M:%SZ
+```
+
+Then invoke:
 
 ```bash
 node "${MMO_PLUGIN_ROOT}/scripts/session-hydrate.mjs" --json
@@ -50,7 +63,10 @@ Read the JSON. Three cases:
   &lt;phase&gt;. Print *"A previous &lt;intent&gt; run (`&lt;run_id&gt;`) was interrupted at phase &lt;phase&gt;.
   Would you like to resume it, or start fresh?"* Accept `resume`, `discard`, or `abort`. If
   `resume`, follow the resume path in [plugin/skills/pipeline/SKILL.md](/plugin/skills/pipeline/SKILL.md).
-  If `discard`, clear `.sdlc/local/state.json` and continue to step 2.
+  If `discard`, end the interrupted run so its contract stops holding the project — ask first,
+  since ending a run is the user's decision:
+  `node "${MMO_PLUGIN_ROOT}/scripts/write-contract.mjs" --abandon --run-id=<run_id> --reason="discarded at resume" --project-root="$(pwd)"`
+  — then clear `.sdlc/local/state.json` and continue to step 2.
 
 - **`resume.pending: null`** — normal flow. Print the one-line `marker` from the hydrate
   output (e.g. *"SDLC: 3 prior runs (last: docs, 2d ago); baseline at abc1234; no open resume
@@ -80,19 +96,28 @@ Agent-side steps (1 = discovery smoke, 3 = dispatch smoke) — you run yourself:
    echo '{"note":"Tier 1 completed cleanly"}' | node "${MMO_PLUGIN_ROOT}/scripts/pre-check.mjs" --record discovery pass
    ```
 
-3. **Dispatch smoke.** Construct a trivial `{ id: "smoke-1", phase: "codegen", task_type:
-   "smoke", instruction: "Return the literal string OK", ... }` TaskPacket, write it to a file,
-   and dispatch it to each policy tier the current policy uses (premium + mechanical for
-   `antigravity-flash38-plus-opus5`) —
-   through `call_mcp_tool` → `mmo_model-dispatch` / `execute_with_model` when the bridge is connected
-   to this session, otherwise:
-   ```bash
-   node "${MMO_PLUGIN_ROOT}/agy/dispatch.mjs" --packet=<smoke-packet.json> \
-     --out=<smoke-result.json> --policy=<policy> --project-root="$(pwd)"
+3. **Dispatch smoke.** One Gemini Flash call. The policy routes `task_type: "smoke"` to the
+   mechanical tier; the free `preflight_dispatch` at Rule 0 already proves every model the policy
+   names is reachable, so the smoke never goes to Opus. Write this TaskPacket to
+   `.sdlc/runs/<run-id>/smoke-packet.json`:
+   ```json
+   { "id": "smoke-1", "phase": "pre_check", "task_type": "smoke", "module": "smoke",
+     "instruction": "Return the literal string OK", "inputs": [], "outputSchema": { "type": "object" },
+     "acceptance": ["Returns OK"], "budget": { "maxInputTokens": 500, "maxOutputTokens": 50 },
+     "pass_id": "<run-id>" }
    ```
-   If both return their expected output within the timeout, record pass:
+   Dispatch it through `call_mcp_tool` → `mmo_model-dispatch` / `execute_with_model` (with
+   `telemetry_path` set to the run's telemetry file) when the bridge is connected to this session,
+   otherwise:
    ```bash
-   echo '{"tiers_tested":["opus","gemini-flash"]}' | node "${MMO_PLUGIN_ROOT}/scripts/pre-check.mjs" --record dispatch pass
+   node "${MMO_PLUGIN_ROOT}/agy/dispatch.mjs" --packet=".sdlc/runs/<run-id>/smoke-packet.json" \
+     --out=".sdlc/runs/<run-id>/smoke-result.json" --policy=<policy> --project-root="$(pwd)" \
+     --telemetry=".sdlc/runs/<run-id>/telemetry.jsonl"
+   ```
+   The call costs cents, and its telemetry row puts them on the run's Gemini line. If it returns
+   its expected output within the timeout, record pass:
+   ```bash
+   echo '{"tiers_tested":["gemini-flash"]}' | node "${MMO_PLUGIN_ROOT}/scripts/pre-check.mjs" --record dispatch pass
    ```
 
 If any pre-check step fails, **do not proceed to Gate 0.** Print the reported remediation and
@@ -115,6 +140,23 @@ read order) and writes:
 
 Wait for discovery to finish. If it refuses (non-git repo), stop here — the shepherd already
 printed the git-init guidance.
+
+Then record it. Discovery is your own read — never dispatch it as a packet; the policy has no
+rule for it — so it leaves no telemetry row unless you write one. Log a zero-cost `in_session`
+row in the run's telemetry, once per run, whether the read happened here or in step 2's smoke:
+
+```bash
+node "${MMO_PLUGIN_ROOT}/agy/dispatch.mjs" \
+  --log-phase=discovery --task-type=in_session \
+  --module=repo --reason='conductor-local Tier 1 read of the repo; no dispatch' \
+  --policy=<default_policy from .sdlc/project.json> --run-id=<run-id> \
+  --telemetry=".sdlc/runs/<run-id>/telemetry.jsonl" \
+  --out=".sdlc/runs/<run-id>/discovery-in_session-receipt.json"
+```
+
+In an interactive session with the bridge connected, `log_telemetry` writes the same row (see the
+telemetry contract in `pipeline/SKILL.md`). Without it, the run's manifest lists `discovery`
+under `harness.unrecorded_phases`.
 
 # 4. Intent brief — pick the intent and describe the job
 
@@ -209,6 +251,9 @@ template from [plugin/skills/pipeline/SKILL.md](/plugin/skills/pipeline/SKILL.md
   it is null, setup was not completed for this project — abort Gate 0 and tell the user to
   run setup first (see [SETUP.md](/SETUP.md) §5 — the one setup step that opens a browser
   for the policy console). Do not silently default and do not launch the console from here.
+  On a headless launch the conductor prompt names the policy the launcher resolved (it already
+  read `routing-policy.yaml`, `--policy` and `project.json` in the bridge's order): use that one,
+  and do not abort for a missing `default_policy`.
   Otherwise show the resolved name; accept, or accept an on-disk policy name for this run only
   (one saved from the policy console) — a per-run override does not overwrite the project default.
 - **Existing AI setup** — verbatim list from `baseline.ai_configs_detected`. Default is
@@ -230,25 +275,49 @@ extra confirmation lines with the plugin's default behavior. Example:
 >   into them. Continue? [assumed yes unless you say otherwise]
 
 On `approved`:
-1. Freeze the confirmed allowlist + off-limits into `.sdlc/local/write-contract.json`
-   ({ schema_version:1, active:true, mode:"brownfield", run_id, strict:true, allowlist,
-   off_limits }). The PreToolUse hook (plugin/scripts/write-contract-check.mjs) reads this file
-   before every Write/Edit and refuses off-limits or not-in-allowlist paths at the tool
-   boundary.
-2. Update `.sdlc/runs/<run-id>/intent_brief.md` with the final scope.
-3. Continue to step 6.
+1. Freeze the confirmed allowlist + off-limits by code — never write the contract yourself:
+   ```bash
+   node "${MMO_PLUGIN_ROOT}/scripts/write-contract.mjs" --freeze --run-id=<run-id> \
+     --allowlist='<JSON array of globs>' --off-limits='<JSON array of globs>' --project-root="$(pwd)"
+   ```
+   Add `--strict-write=off` only when the user passed it. It writes `.sdlc/local/write-contract.json`
+   and the run's freeze record `.sdlc/runs/<run-id>/contract.lock.json`. The PreToolUse hook
+   (`plugin/agy/hooks/write-contract-check.mjs`, wired in `plugin/hooks.json`) reads the contract
+   before every file write and refuses off-limits or not-in-allowlist paths at the tool boundary.
+   While the run is live it allows the run's own `.sdlc/runs/<run-id>/`, and refuses every write if
+   the contract is edited after this freeze. A refusal names the rule; do not route around it.
+   Headless (`agy -p`) loads no hooks, so a headless run has no write guard: see the run record's
+   `harness.write_guard`.
+2. Initialise the run's undo record:
+   ```bash
+   node "${MMO_PLUGIN_ROOT}/scripts/write-provenance.mjs" --init --run-id=<run-id> --intent=<intent> --project-root="$(pwd)"
+   ```
+3. Update `.sdlc/runs/<run-id>/intent_brief.md` with the final scope.
+4. Mark the run's start (interactive only; a headless launch records its own window). The manifest
+   and the driver collector read this line; `<run_started_at>` is the time recorded in step 1:
+   ```bash
+   node "${MMO_PLUGIN_ROOT}/scripts/mmo-log.mjs" --event=run.start --run-id=<run-id> --started-at=<run_started_at> --mode=brownfield --intent=<intent> --policy=<policy> --project-root="$(pwd)"
+   ```
+5. Continue to step 6.
 
 On `revise: <comments>` — rewrite the affected parts and re-show Gate 0.
 
-On `abort` — clear `.sdlc/local/write-contract.json` (set active:false), do not delete the
-run directory (leave it as a partial record), and stop.
+On `abort` — nothing was frozen, so there is nothing to switch off. Do not delete the run directory
+(leave it as a partial record), and stop.
+
+If the run stops at any later gate on `abort`, or for any reason after the freeze, end it so the
+contract stops holding the project:
+
+```bash
+node "${MMO_PLUGIN_ROOT}/scripts/write-contract.mjs" --close --run-id=<run-id> --outcome=aborted --project-root="$(pwd)"
+```
 
 # 6. Run the pipeline
 
 Follow [plugin/skills/pipeline/SKILL.md](../pipeline/SKILL.md) with:
 - `mode: brownfield`
 - `intent: <from Gate 0>`
-- `run_id: <YYYYMMDD-HHMMSS-<intent>-<slug>>`
+- `run_id: <YYYYMMDD-HHMMSS-<intent>-<slug>>` — or, on a headless launch, the handover's `run_id`
 - `intent_brief_path: .sdlc/runs/<run-id>/intent_brief.md`
 - `baseline_path: .sdlc/baseline/current.json`
 - `policy: <as configured by setup — see the Policy bullet of Gate 0>`
@@ -268,11 +337,20 @@ not answer on their behalf.
 
 After the final report:
 
-1. Append a row to `.sdlc/ledger.md` (human-readable) and `.sdlc/ledger.json` (machine mirror).
-2. Update the project fingerprint record with a link to the ledger.
-3. Clear the write-contract state: set `.sdlc/local/write-contract.json` active:false.
-4. Print the report to the user with cost breakdown, files touched, and (if applicable) the
-   `git reset` command the report provides as the escape hatch.
+1. End the run, after Gate 4 is accepted and the pipeline's `run.end` line and manifest rebuild
+   ran (the pipeline's "Run start and end markers" section). This records the contract's end and
+   switches it off; until it runs, the contract refuses the ledger writes below:
+   ```bash
+   node "${MMO_PLUGIN_ROOT}/scripts/write-contract.mjs" --close --run-id=<run-id> --project-root="$(pwd)"
+   ```
+2. Append a row to `.sdlc/ledger.md` (human-readable) and `.sdlc/ledger.json` (machine mirror).
+   Any cost in the row is the labelled lines the manifest rebuild after `run.end` printed, copied;
+   never a single total. Those carry the complete driver line; `SUMMARY.md`'s stops before Gate 4.
+3. Update the project fingerprint record with a link to the ledger.
+4. Print the report to the user: the labelled lines the manifest rebuild after `run.end` printed,
+   each with its kind — `cash`, `modeled` or `NOT MEASURED` — never a total, never a modeled
+   figure added to a cash one; files touched; and (if applicable) the `git reset` command the
+   report provides as the escape hatch.
 
 Do not propose a follow-up run.
 

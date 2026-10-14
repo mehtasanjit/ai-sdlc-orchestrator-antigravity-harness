@@ -50,7 +50,7 @@ if (!conversation) {
     appendFileSync(join(outputDir, "gates.jsonl"), JSON.stringify({ gate: 1, artifact: "requirements.md", decision: "auto-approved", note: "stub" }) + "\n");
   }
   emit({ event: "result", result: { conversation_id: conversationId, status: "OK", response: "context ceiling", duration_seconds: 1, num_turns: 2,
-    usage: { input_tokens: 1000, output_tokens: 200, thinking_tokens: 50, cache_read_tokens: 400, total_tokens: 1250 } } });
+    usage: { input_tokens: 600, output_tokens: 250, thinking_tokens: 50, cache_read_tokens: 400, total_tokens: 850 } } });
   process.exit(0);
 }
 
@@ -64,4 +64,4 @@ writeFileSync(join(outputDir, "SUMMARY.md"), "# stub run\n\nDispatch route: fall
 // Cumulative across the resume, one of check 16's two readings: this result
 // includes the first invocation's tokens.
 emit({ event: "result", result: { conversation_id: conversationId, status: "OK", response: "done", duration_seconds: 1, num_turns: 4,
-  usage: { input_tokens: 2500, output_tokens: 500, thinking_tokens: 80, cache_read_tokens: 1200, total_tokens: 3080 } } });
+  usage: { input_tokens: 1300, output_tokens: 580, thinking_tokens: 80, cache_read_tokens: 1200, total_tokens: 1880 } } });

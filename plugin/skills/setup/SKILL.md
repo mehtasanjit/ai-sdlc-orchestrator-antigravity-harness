@@ -53,7 +53,7 @@ The script reports three kinds of finding:
   the credential is either supplied or explicitly skipped.
   - A Claude wallet — arm A `ANTHROPIC_API_KEY`, or arm B `CLAUDE_CODE_USE_VERTEX=1` +
     `ANTHROPIC_VERTEX_PROJECT_ID` + `CLOUD_ML_REGION=global`. Required by every policy that
-    routes judgment work through `claude-cli`.
+    routes judgment work through `claude-agent-sdk`.
   - Gemini access — required by any policy that routes mechanical phases to Gemini. Two doors,
     see step 3 below.
 - `✓` **ok** — no action, continue.

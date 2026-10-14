@@ -86,7 +86,7 @@ test("an event with no provenance stamp defaults to \"estimated\"", () => {
 
 test("an explicit provenance stamp is passed through untouched", () => {
   // The default only fills ABSENCE. A caller that stamped deliberately
-  // (e.g. the orchestrator-overhead collector writing "transcript" events)
+  // (e.g. a transcript reader writing "transcript" events)
   // must not be silently re-labeled as an estimate.
   const out = normalizeDirectTierEvent(
     modelSuppliedEvent({ provenance: "transcript" }),

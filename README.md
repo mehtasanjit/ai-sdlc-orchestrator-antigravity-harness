@@ -2,7 +2,7 @@
 
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![CI](https://github.com/tl-ai-labs/ai-sdlc-orchestrator-antigravity-harness/actions/workflows/test.yml/badge.svg)](https://github.com/tl-ai-labs/ai-sdlc-orchestrator-antigravity-harness/actions/workflows/test.yml)
-[![Version](https://img.shields.io/badge/version-0.1.0-blue)](plugin/plugin.json)
+[![Version](https://img.shields.io/badge/version-0.2.0-blue)](plugin/plugin.json)
 
 ![How the plugin works — you paste two prompts in agy, Gemini 3.8 Flash conducts and dispatches every phase through the bridge, judgment work goes to Claude Opus 5 and mechanical work to Gemini 3.8 Flash, and your project gets both generated code and a full audit trail](docs/assets/hero.svg)
 
@@ -136,7 +136,7 @@ More detail: [docs/brownfield-routing.md](docs/brownfield-routing.md).
 | Thing | What it is | Where it comes from |
 |---|---|---|
 | A Mac, Linux, or Windows with WSL2 | The computer it runs on | — |
-| Node.js 20 or newer | A free program other tools need | [nodejs.org](https://nodejs.org) |
+| Node.js 22.19 or newer | A free program other tools need | [nodejs.org](https://nodejs.org) |
 | The Antigravity app (`agy`, version 1.2.3 or newer), signed in with Google | The app you type into; the conductor lives here | Google Antigravity |
 | Claude Code (`claude`) installed | The bridge uses it to reach Claude | [claude.com/claude-code](https://claude.com/claude-code) |
 | One way to pay for Claude | An Anthropic API key (`ANTHROPIC_API_KEY`, called **arm A**), a Google Cloud project with Claude turned on (**arm B**), or a claude.ai subscription that Claude Code is signed in to (the **seat**) | Anthropic console, Google Cloud console, or claude.ai |
@@ -199,7 +199,7 @@ A longer walkthrough of each stage: [docs/tutorial-first-run.md](docs/tutorial-f
 
 ## What you get after a run
 
-Your new code goes in `src/`. Everything else goes in the hidden `.sdlc/` folder of your project. For an existing project, each run gets its own folder: `.sdlc/runs/` followed by the run's name.
+Your new code goes in `src/` (a new project) or stays where it is (an existing project). Everything else goes in the run's own folder inside your project's hidden `.sdlc/` folder: `.sdlc/runs/` followed by the run's name.
 
 | File | What it is | When you need it |
 |---|---|---|
@@ -210,15 +210,17 @@ Your new code goes in `src/`. Everything else goes in the hidden `.sdlc/` folder
 | `gates.jsonl` | Every gate answer | To see who approved what |
 | `policy_snapshot.yaml`, `preflight.json` | The settings as they were when the run started, and the price check done before it | To repeat or audit a run |
 | `provenance.json` | Every file the run changed, with a fingerprint of how it looked before (existing projects only) | `/mmo:revert` reads it to undo the run |
-| `driver-cost-modeled.jsonl`, `driver-manifest.json`, `driver-events.jsonl`, `driver-stderr.log` | The conductor's own record (headless runs only) | To see the conductor's estimated cost |
+| `driver-cost-modeled.jsonl` with `driver-collector.json` (in the app), or with `driver-manifest.json`, `driver-events.jsonl` and `driver-stderr.log` (headless) | The conductor's own record | To see the conductor's estimated cost |
 | `delegation/` | The fast crew's task notes and receipts, when it worked as an agent | To audit agent work |
 | `.hook-logs/hook.jsonl` | A backup list of every bridge call (runs inside the app only) | Safe to delete |
 
-To print the bill, open a terminal in the copy of this project that setup downloaded (setup tells you where it is) and run the report on your folder's `.sdlc`:
+To print the bill, open a terminal in the copy of this project that setup downloaded (setup tells you where it is) and run the report on the run's folder:
 
 ```bash
-node tools/report.mjs ~/my-first-app/.sdlc
+node tools/report.mjs ~/my-first-app/.sdlc/runs/<run-name>
 ```
+
+`<run-name>` is the folder name under `.sdlc/runs/`; the run prints it when it starts.
 
 To undo a run on an existing project, type `/mmo:revert` followed by the run's name, for example `/mmo:revert 20261006-142025-feature-new-maps-screen`. How to read every file in detail: [docs/understanding-output.md](docs/understanding-output.md).
 
@@ -232,10 +234,10 @@ The bill has separate lines that are **never added together**, because they are 
 |---|---|---|
 | Cash — Claude Opus 5 | The expert's work, metered by Anthropic or Google Cloud | Yes, on your Anthropic key or Google Cloud project |
 | Cash — Gemini | The fast crew's work, metered by Google | Yes, on your Gemini key or Google Cloud project |
-| Modeled — the conductor | An estimate of the site manager's work. Antigravity runs on a flat Google subscription with no per-task bill, so this line is a calculation, not an invoice. When you run inside the Antigravity app (the normal way), the app does not report how much work the conductor did, so this line reads **NOT MEASURED**. Only a headless run fills it in. | No. It shows what that work would cost if it were billed per use. |
+| Modeled — the conductor | An estimate of the site manager's work. Antigravity runs on a flat Google subscription with no per-task bill, so this line is a calculation, not an invoice. Inside the Antigravity app (the normal way), the run reads the conductor's work from the app's own record of the conversation on your computer at the end of the run. A headless run reads it from the app's output instead. | No. It shows what that work would cost if it were billed per use. |
 | Modeled — Claude seat | Only when you use a claude.ai subscription instead of a key: the same kind of estimate for the expert | No, same reason |
 
-How the receipts are written: every task passes through the bridge, and the bridge adds one line per model call to `.sdlc/telemetry.jsonl` with the words sent, the words returned, and the price at the vendor's published rate. The cost report reads those lines. Nothing is guessed except the two "modeled" lines, which are clearly labelled. The full method: [docs/methodology.md](docs/methodology.md).
+How the receipts are written: every task passes through the bridge, and the bridge adds one line per model call to the run folder's `telemetry.jsonl` with the words sent, the words returned, and the price at the vendor's published rate. The cost report reads those lines. Nothing is guessed except the two "modeled" lines, which are clearly labelled. The full method: [docs/methodology.md](docs/methodology.md).
 
 Read the bill with the cost report (`node tools/report.mjs`), not with `manifest.json`. Today the `total_cost_usd` field inside `manifest.json` adds the cash and modeled lines together, which mixes real charges with estimates.
 
@@ -361,8 +363,8 @@ This runs the whole chain with a stand-in for `agy` and made-up numbers: no sign
 
 ```bash
 mkdir -p /tmp/smoke && cp examples/quick-demo/brief.md /tmp/smoke/brief.md
-npm run smoke -- --project-root=/tmp/smoke --output-dir=/tmp/smoke/.sdlc --run-id=smoke1
-node tools/report.mjs /tmp/smoke/.sdlc
+npm run smoke -- --project-root=/tmp/smoke --run-id=smoke1
+node tools/report.mjs /tmp/smoke/.sdlc/runs/smoke1
 ```
 
 The stand-in ([tools/test/fixtures/fake-agy/](tools/test/fixtures/fake-agy/)) answers the way the real app does, runs twice so the resume step is tested, and makes one real $0 call through the bridge. It checks the plumbing, not the quality of real model output: every figure in that report is made up and labelled as such. The same run happens on every `npm test` ([tools/test/smoke-run.test.mjs](tools/test/smoke-run.test.mjs)).
@@ -389,7 +391,7 @@ node tools/setup.mjs --project-root /path/to/your/project
 To start a headless run, try it first with `--dry-run`. That prints exactly what would run, showing each key only as "set" or "unset":
 
 ```bash
-node plugin/agy/run.mjs --brief=examples/quick-demo/brief.md --project-root=/path/to/empty/dir --output-dir=/path/to/empty/dir/.sdlc --gates=auto-approve --dry-run
+node plugin/agy/run.mjs --brief=examples/quick-demo/brief.md --project-root=/path/to/empty/dir --gates=auto-approve --dry-run
 ```
 
 Every headless setting: [docs/running.md](docs/running.md).
@@ -412,7 +414,7 @@ Every capability claim about the Antigravity app is backed by a numbered check i
 |---|---|---|
 | Site manager | Gemini 3.8 Flash in the Antigravity app | Claude in Claude Code |
 | Expert's work | Goes through the bridge, so every expert call has its own receipt | Done in the Claude Code session itself; counted afterwards from the session's log files |
-| Site manager's own cost | Read from the app's counters on a headless run; NOT MEASURED in the app | Counted after every run from Claude Code's log files |
+| Site manager's own cost | Read from the app's own conversation record in the app, or from its output on a headless run | Counted after every run from Claude Code's log files |
 | $50 safety limit | Enforced before each task | Written in the settings, not enforced |
 | Which wallet paid | Written on every receipt | Not written |
 | Published example runs | None yet | Two |
