@@ -36,6 +36,7 @@ import {
   DEFAULT_PRINT_TIMEOUT,
   PLUGIN_ROOT,
   HARNESS_ROOT,
+  driverModelCheck,
   parseArgs as parseRunArgs,
 } from "../../plugin/agy/run.mjs";
 import {
@@ -363,6 +364,15 @@ test("a model the stream names is recorded, and one that is not the pin is flagg
   const other = STREAM.replace(`"model":"${SLUG}"`, '"model":"gemini-3.1-pro-high"');
   assert.deepEqual(buildRunArtifacts({ jsonl: other, pin: PIN, passId: "r", policyName: DEFAULT_POLICY, now: () => "T" }).offPinModels, ["gemini-3.1-pro-high"]);
   assert.deepEqual(buildRunArtifacts({ jsonl: resultWith({ input_tokens: 1, total_tokens: 1 }), pin: PIN, passId: "r", policyName: DEFAULT_POLICY, now: () => "T" }).reportedModels, [], "agy names no model: nothing to check, nothing assumed");
+});
+
+test("a model only agy's local record names is checked against the pin like a streamed one", () => {
+  const onPin = driverModelCheck({ streamModels: [SLUG], localRecord: { found: true, models: [SLUG] }, pin: PIN, pending: [] });
+  assert.deepEqual(onPin, { observed: [SLUG], offPin: [], verification: { verified: true } });
+  const recordOnly = driverModelCheck({ streamModels: [SLUG], localRecord: { found: true, models: ["gemini-3.1-pro-high"] }, pin: PIN, pending: [] });
+  assert.deepEqual(recordOnly.offPin, ["gemini-3.1-pro-high"], "the mismatch is reported, not only folded into verified:false");
+  assert.deepEqual(recordOnly.verification, { verified: false, unverified_reason: "model_mismatch" });
+  assert.deepEqual(driverModelCheck({ streamModels: [], localRecord: null, pin: PIN, pending: [] }).verification, { verified: false, unverified_reason: "no_model_observed" });
 });
 
 test("buildRunArtifacts records each invocation's line count, so a later --resume can split the stream", () => {

@@ -373,6 +373,13 @@ export async function crossCheckLocalRecord({ conversationId, since, modeled, ho
   return { found: true, calls: inRun.length, models: [...new Set(inRun.map((c) => c.model).filter(Boolean))], record, stream, agrees: Object.keys(record).every((k) => close(record[k], stream[k])) };
 }
 
+/** The driver models the stream and agy's local record name, checked against the pin together. */
+export function driverModelCheck({ streamModels, localRecord, pin, pending }) {
+  const observed = [...new Set([...streamModels, ...(localRecord?.models ?? [])])];
+  const offPin = offPinModels(observed, pin, driverSlug(pin));
+  return { observed, offPin, verification: pinVerification({ pending, observed, offPin }) };
+}
+
 /** A stream with a guaranteed trailing newline, so concatenated invocations never share a line. */
 export function terminated(text) {
   const s = String(text ?? "");
@@ -688,7 +695,7 @@ async function main(args) {
       );
     }
 
-    const { events, rejection, modeled, driverUsage: usageSummary, reportedModels: driverModels, offPinModels: offPin } = buildRunArtifacts({
+    const { events, rejection, modeled, driverUsage: usageSummary, reportedModels: driverModels } = buildRunArtifacts({
       invocations: launches, pin, passId: runId, policyName, driver: policy.driver, runStartedAt: started,
       resumedFirst: Boolean(resumeFrom) && prior.invocations.length === 0,
     });
@@ -705,13 +712,12 @@ async function main(args) {
       );
     }
     if (localRecord) usageSummary.local_record = localRecord;
-    const observedModels = [...new Set([...driverModels, ...(localRecord?.models ?? [])])];
-    const verification = pinVerification({ pending, observed: observedModels, offPin: offPinModels(observedModels, pin, slug) });
+    const { observed: observedModels, offPin, verification } = driverModelCheck({ streamModels: driverModels, localRecord, pin, pending });
     if (verification.unverified_reason === "no_model_observed") {
       console.error(`run ${runId}: neither agy's stream nor its local conversation record named the model that conducted — pin.verified is false.`);
     }
     if (offPin.length) {
-      console.error(`run ${runId}: agy reported driver model(s) ${offPin.join(", ")}, not the pinned ${slug} — the run is not on the pinned driver.`);
+      console.error(`run ${runId}: agy's stream or local record named driver model(s) ${offPin.join(", ")}, not the pinned ${slug} — the run is not on the pinned driver.`);
     }
     if (usageSummary.results_with_unproven_reading) {
       console.error(
