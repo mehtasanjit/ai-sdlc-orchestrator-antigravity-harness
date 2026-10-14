@@ -49,7 +49,8 @@ import { driverRangeNotes } from "./telemetry/driverRange.mjs";
 import { inferIntent } from "../scripts/infer-intent.mjs";
 import { isMain } from "../scripts/lib/is-main.mjs";
 import { staleBuild, staleBuildWarning } from "../scripts/lib/stale-build.mjs";
-import { finishWriteGuard, gitStatus } from "./writeGuard.mjs";
+import { finishWriteGuard, gitStatus, loadLaunchSnapshot, saveLaunchSnapshot } from "./writeGuard.mjs";
+import { resumeRun } from "../scripts/write-contract.mjs";
 import { agyHome, readConversationRecord } from "./telemetry/conversationUsage.mjs";
 
 const AGY_DIR = dirname(fileURLToPath(import.meta.url));
@@ -605,7 +606,13 @@ async function main(args) {
   const started = prior.started_at ?? new Date().toISOString();
   const staleSummary = resumeFrom ? null : summaryAtLaunch(outputDir);
   const launches = [...prior.invocations];
-  const statusBefore = gitStatus(projectRoot);
+  const statusBefore = (resumeFrom ? loadLaunchSnapshot(outputDir) : null) ?? gitStatus(projectRoot);
+  if (!resumeFrom) saveLaunchSnapshot(outputDir, statusBefore);
+  if (resumeFrom) {
+    const rebound = resumeRun(projectRoot, runId);
+    if (rebound.resumed) console.error(`run ${runId}: the run's write contract binds again for this resume.`);
+    else if (rebound.ended !== false) console.error(`run ${runId}: warning — the write contract does not bind this resume: ${rebound.reason}.`);
+  }
 
   // The streams go to disk as they arrive: the carried invocations first,
   // exactly as an end-of-run write would put them, then each process's

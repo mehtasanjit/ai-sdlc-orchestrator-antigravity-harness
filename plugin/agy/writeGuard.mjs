@@ -6,13 +6,13 @@
  * contract does not allow.
  */
 import { spawnSync } from "node:child_process";
-import { existsSync, readFileSync, statSync } from "node:fs";
+import { existsSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 import { matchGlob } from "./hooks/write-contract-check.mjs";
 import { HARDCODED_OFF_LIMITS } from "../scripts/lib/off-limits.mjs";
 import { contractState, readContract, runEnded } from "../scripts/lib/contract-state.mjs";
-import { endRun } from "../scripts/write-contract.mjs";
+import { LAUNCHER_STOP_REASON, endRun } from "../scripts/write-contract.mjs";
 
 export const NO_CONTRACT_REASON = "no write contract was frozen for this run, so the hook had nothing to judge (a greenfield run takes none)";
 export const NO_HOOK_DECISION_REASON =
@@ -47,6 +47,17 @@ export function gitStatus(root, run = spawnSync, stat = statSync) {
   return snapshot;
 }
 
+const SNAPSHOT_FILE = "git-status-at-launch.json";
+
+/** Keeps the first launch's snapshot in the run folder, so a --resume checks the whole run, not its last launch. */
+export function saveLaunchSnapshot(outputDir, snapshot) {
+  if (snapshot) writeFileSync(join(outputDir, SNAPSHOT_FILE), JSON.stringify(Object.fromEntries(snapshot)) + "\n");
+}
+
+export function loadLaunchSnapshot(outputDir) {
+  try { return new Map(Object.entries(JSON.parse(readFileSync(join(outputDir, SNAPSHOT_FILE), "utf8")))); } catch { return null; }
+}
+
 /** Paths whose status or content signature differs between the snapshots, the plugin's own `.sdlc/` aside. */
 export function changedSince(before, after) {
   const a = before ?? new Map();
@@ -78,7 +89,7 @@ export function finishWriteGuard({ projectRoot, runId, statusBefore, outcome, st
   guard.contract = { run_id: runId, allowlist: contract.allowlist ?? [], off_limits: contract.off_limits ?? [] };
   guard.after_run_check = { files_changed: changed.length, outside_contract: outside };
   if (contractState(projectRoot).binding && !runEnded(projectRoot, runId)) {
-    endRun(projectRoot, runId, { outcome, reason: "the headless driver loop ended" });
+    endRun(projectRoot, runId, { outcome, reason: LAUNCHER_STOP_REASON });
     guard.contract_closed = outcome;
   }
   return guard;

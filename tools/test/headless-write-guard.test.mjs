@@ -115,3 +115,59 @@ test("a run with a contract and no hook decision records the guard as off", () =
     assert.ok(g.after_run_check, "the after-run check still runs");
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
+
+test("a resume binds the contract the launcher's stop closed, exactly as frozen", async () => {
+  const { resumeRun, endRun, LAUNCHER_STOP_REASON } = await import("../../plugin/scripts/write-contract.mjs");
+  const { readdirSync } = await import("node:fs");
+  const dir = mkdtempSync(join(tmpdir(), "hwg-"));
+  try {
+    frozen(dir);
+    endRun(dir, "r1", { outcome: "stopped", reason: LAUNCHER_STOP_REASON });
+    assert.equal(contractState(dir).binding, false);
+    assert.deepEqual(resumeRun(dir, "r1", { now: () => "2026-10-14T12:00:00.000Z" }), { resumed: true });
+    const state = contractState(dir);
+    assert.equal(state.binding, true);
+    assert.equal(state.tampered, null, "the restored contract matches its freeze fingerprint");
+    assert.ok(readdirSync(join(dir, ".sdlc", "runs", "r1")).includes("run-end.stopped-2026-10-14T12-00-00-000Z.json"), "the stop's record is kept");
+    endRun(dir, "r1", { outcome: "completed", reason: LAUNCHER_STOP_REASON });
+    assert.equal(contractState(dir).binding, false, "the resumed run ends as any run does");
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test("a resume never reopens a run the person ended, or a contract edited since its freeze", async () => {
+  const { resumeRun, endRun, LAUNCHER_STOP_REASON } = await import("../../plugin/scripts/write-contract.mjs");
+  const { writeFileSync } = await import("node:fs");
+  const closed = mkdtempSync(join(tmpdir(), "hwg-"));
+  const edited = mkdtempSync(join(tmpdir(), "hwg-"));
+  try {
+    frozen(closed);
+    endRun(closed, "r1", { outcome: "completed" });
+    assert.equal(resumeRun(closed, "r1").resumed, false);
+    assert.equal(contractState(closed).binding, false);
+
+    frozen(edited);
+    endRun(edited, "r1", { outcome: "stopped", reason: LAUNCHER_STOP_REASON });
+    const path = join(edited, ".sdlc", "local", "write-contract.json");
+    writeFileSync(path, readFileSync(path, "utf8").replace('"src/**"', '"**"'));
+    const r = resumeRun(edited, "r1");
+    assert.equal(r.resumed, false);
+    assert.match(r.reason, /no longer matches its freeze record/);
+    assert.equal(contractState(edited).binding, false);
+
+    assert.deepEqual(resumeRun(mkdtempSync(join(tmpdir(), "hwg-")), "r1"), { resumed: false, ended: false }, "a run with no end record is not a resume case");
+  } finally { rmSync(closed, { recursive: true, force: true }); rmSync(edited, { recursive: true, force: true }); }
+});
+
+test("the first launch's snapshot survives a resume, so the after-run check covers the whole run", async () => {
+  const { saveLaunchSnapshot, loadLaunchSnapshot } = await import("../../plugin/agy/writeGuard.mjs");
+  const dir = mkdtempSync(join(tmpdir(), "hwg-"));
+  try {
+    frozen(dir);
+    const atLaunch = new Map([["src/a.ts", " M|1|1"]]);
+    saveLaunchSnapshot(dir, atLaunch);
+    assert.deepEqual(loadLaunchSnapshot(dir), atLaunch);
+    assert.equal(loadLaunchSnapshot(join(dir, "nowhere")), null);
+    const g = finishWriteGuard({ projectRoot: dir, runId: "r1", statusBefore: loadLaunchSnapshot(dir), outcome: "completed", status: () => new Map([["src/a.ts", " M|1|1"], ["node_modules/x/index.js", "??|2|1"]]) });
+    assert.deepEqual(g.after_run_check.outside_contract, ["node_modules/x/index.js"], "a file the first launch wrote is still in the final record");
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});

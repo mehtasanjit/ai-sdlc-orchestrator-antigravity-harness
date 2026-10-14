@@ -111,6 +111,12 @@ so does an ignored `.env`. An ignored folder (`dist/`, `node_modules/`) is one e
 when an entry directly inside it is added or removed. That check detects; it does not prevent.
 Review the diff before you keep a headless brownfield change.
 
+A run that stops before its `SUMMARY.md` (a quota error, a kill) ends its contract. `--resume`
+binds it again when the launcher's own stop ended it and the contract still matches its freeze
+fingerprint, and keeps the stop's record as `run-end.stopped-<time>.json`; a run you ended with
+`--close` or `--abandon` stays ended. The launch snapshot is kept in the run folder
+(`git-status-at-launch.json`), so the after-run check of a resumed run covers every launch.
+
 ## Credential literals
 
 The hook runs the secret patterns in

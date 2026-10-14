@@ -22,7 +22,7 @@
 import { mkdirSync, renameSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 
-import { CONTRACT_REL_PATH, RUN_ID, contractState, endRelPath, fingerprint, gitRoot, liveLocks, lockRelPath, readContract, readLock, runEnded } from "./lib/contract-state.mjs";
+import { CONTRACT_REL_PATH, RUN_ID, contractState, endRelPath, fingerprint, gitRoot, liveLocks, lockRelPath, readContract, readLock, runEnd, runEnded } from "./lib/contract-state.mjs";
 import { isMain } from "./lib/is-main.mjs";
 
 export const OUTCOMES = new Set(["completed", "aborted", "stopped"]);
@@ -69,6 +69,29 @@ function writeContract(root, contract) {
   const text = JSON.stringify(contract, null, 2) + "\n";
   writeWhole(join(root, CONTRACT_REL_PATH), text);
   return fingerprint(Buffer.from(text, "utf8"));
+}
+
+export const LAUNCHER_STOP_REASON = "the headless driver loop ended";
+
+/**
+ * Binds a run's frozen contract again for a --resume, when the headless
+ * launcher (not the person) ended it. The restored contract must match the
+ * freeze fingerprint byte for byte; the stop's end record is kept beside it.
+ */
+export function resumeRun(root, runId, { now = () => new Date().toISOString() } = {}) {
+  const end = runEnd(root, runId);
+  if (!end) return { resumed: false, ended: false };
+  if (end.outcome !== "stopped" || end.reason !== LAUNCHER_STOP_REASON) {
+    return { resumed: false, reason: `run ${runId} was ended as "${end.outcome}"${end.reason ? ` (${end.reason})` : ""}, not by the launcher; only the person reopens it` };
+  }
+  const lock = readLock(root, runId);
+  const current = readContract(root)?.parsed;
+  if (!lock || current?.run_id !== runId) return { resumed: false, reason: `run ${runId} has no frozen contract to bind again` };
+  const text = JSON.stringify({ ...current, active: true }, null, 2) + "\n";
+  if (fingerprint(Buffer.from(text, "utf8")) !== lock.sha256) return { resumed: false, reason: `run ${runId}'s contract no longer matches its freeze record` };
+  writeWhole(join(root, CONTRACT_REL_PATH), text);
+  renameSync(join(root, endRelPath(runId)), join(root, endRelPath(runId).replace(/\.json$/, `.stopped-${now().replace(/[:.]/g, "-")}.json`)));
+  return { resumed: true };
 }
 
 /** Records the run's end, then switches its contract off if it names the run. */
