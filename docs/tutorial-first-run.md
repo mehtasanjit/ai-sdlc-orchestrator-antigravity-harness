@@ -98,8 +98,8 @@ What you are looking at:
 
 - **Cost lines — never summed** — `gemini workers`, `claude worker` and `driver`, each with its kind, and a **Cash** figure made of the cash lines only. On the seat the Opus tokens are real and the dollars are modeled, so the `claude worker` line reads `modeled` and stays out of **Cash**.
 - **Dispatched work — by phase** — one named row per phase, tokens in / out, and the phase's dollars split into **Cash** and, on the seat, **Modeled**. The judgment rows ran on Opus 5 through the Claude Agent SDK; the mechanical rows on Gemini 3.8 Flash.
-- **Driver loop — modeled, not measured** — on an interactive run this section reads **NOT MEASURED**, because agy exposes no `usage` counters to a plugin. Headless runs through `run.mjs` fill it.
-- **`manifest.json` → `cost.lines`** — the three lines, each with `kind: "cash"`, `"modeled"` or, for an interactive run's driver, `"unmeasured"`, and the note that they are not summed.
+- **Driver loop — modeled, not measured** — headless runs through `run.mjs` fill it from the stream; an interactive run fills it from agy's local conversation record, which the conductor reads with `collect-driver-usage.mjs` at the end of the run. It reads **NOT MEASURED** only when neither record exists.
+- **`manifest.json` → `cost.lines`** — the three lines, each with `kind: "cash"`, `"modeled"` or, for a driver neither the launcher nor the collector recorded, `"unmeasured"`, and the note that they are not summed.
 
 Every dispatched call is in `.sdlc/runs/<run-id>/telemetry.jsonl` for audit. Every field is documented in [understanding-output.md](understanding-output.md).
 

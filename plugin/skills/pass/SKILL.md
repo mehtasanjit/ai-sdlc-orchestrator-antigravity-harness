@@ -11,7 +11,7 @@ Invoke the `orchestrator` subagent to execute one full SDLC run.
 
 **Argument parsing (the orchestrator must do this):**
 - `--auth=vendor` — **required**, and `vendor` is the only value this runtime accepts: every LLM call dispatches via the MCP server so telemetry carries real vendor-reported tokens. `estimated` (a char-count heuristic for direct-tier calls) belongs to the Claude Code harness. If the flag is missing or carries any other value, abort — see rule 6 in the orchestrator's system prompt for the exact abort text.
-- `--policy=<name>` — routing policy name. When absent, resolves to the current project's `default_policy` field from `.sdlc/project.json` (written by the setup-time policy console — see [SETUP.md](../../SETUP.md) §5b), or `opus-plus-flash` if no project default is set.
+- `--policy=<name>` — routing policy name. When absent, resolves to the current project's `default_policy` field from `.sdlc/project.json` (written by the setup-time policy console — see [SETUP.md](../../SETUP.md) §5b), or `antigravity-flash38-plus-opus5` if no project default is set. A `routing-policy.yaml` at the project root outranks both (see Policy resolution below).
 - `--study=<study-id>` — case-study identifier. Defaults to `workforce-ops`. Set this to a project-specific id when running against a brief other than the shipped `examples/workforce-ops/brief.md`, so telemetry and packets stay grouped by project.
 - `--run-id=<run-id>` — run identifier within the study. Defaults to `pass1`.
 - The remaining positional argument is the path to the brief file. Any markdown brief on disk works — see `docs/brief-template.md` for the section layout the requirements phase expects.

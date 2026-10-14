@@ -118,6 +118,7 @@ The plugin's per-project state. Split into committed (team-shared) and gitignore
 │       ├── change_plan.md
 │       ├── packets.jsonl
 │       ├── provenance.json
+│       ├── backups/          — first-snapshot copies for /mmo:revert
 │       ├── telemetry.jsonl
 │       ├── senior-review.md
 │       ├── security-review.md
@@ -131,7 +132,6 @@ The plugin's per-project state. Split into committed (team-shared) and gitignore
     ├── setup-status.json — shepherd resume state
     ├── write-contract.json — active run's allowlist/off-limits
     ├── user-policy.yaml  — personal policy override
-    ├── cache/            — per-run backup copies for /mmo:revert
     └── debug.log
 ```
 

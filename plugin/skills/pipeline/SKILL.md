@@ -620,8 +620,10 @@ Event shape:
 from its `usage` counters, writing those events to `driver-cost-modeled.jsonl` with
 `provenance: "modeled"` — modeled from token counts at the policy's driver card, because a
 Google-seat driver has no per-token invoice (p1-agy-runtime.md check 9). Interactive, there is no
-such stream and nothing records your loop: the manifest carries the driver line as `NOT MEASURED`
-(`kind: "unmeasured"`), unmeasured and never free. Never invent token counts or cost for your own
+such stream: the `collect-driver-usage.mjs` steps above read your calls from agy's local
+conversation record, and the manifest books them as modeled the same way. If those steps never ran,
+the manifest carries the driver line as `NOT MEASURED` (`kind: "unmeasured"`), unmeasured and never
+free. Never invent token counts or cost for your own
 work: a guessed figure sitting beside measured ones is worse than no figure.
 
 **But anything that made no model call must still leave a row.** Four cases produce one:

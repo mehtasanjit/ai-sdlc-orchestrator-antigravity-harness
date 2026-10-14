@@ -41,7 +41,7 @@ One row per line of `manifest.json` → `cost.lines`, workers first:
 | `gemini workers` | `cash` | Bridge dispatches to Gemini, the mechanical phases |
 | `claude worker` | `cash` on arm A or B, `modeled` on the claude.ai seat | Bridge dispatches to Opus 5, the judgment phases |
 | `unclassified` | `cash` | Present only when an event names no known worker adapter and no `claude-` or `gemini-` model |
-| `driver` | `modeled` on a headless run, `NOT MEASURED` on an interactive one | The conductor's own loop |
+| `driver` | `modeled` when the headless launcher or the interactive collector recorded it, otherwise `NOT MEASURED` | The conductor's own loop |
 
 **Cash** under the table is the manifest's `cost.dispatched_cash_usd`: the cash lines and nothing else. A modeled dollar never joins it, and the report prints no figure that adds the kinds together.
 

@@ -20,10 +20,10 @@ export { TOKEN_READINGS };
  * How `usage` behaves across `--print --conversation <id>`, which starts a new
  * agy process on the same conversation: "cumulative" (the new process reports
  * the conversation's running total) or "per-invocation" (counters restart).
- * Check 16; flip `state` only in the commit that records the live result.
- * While pending, a multi-invocation run is priced under both readings: the
- * true figure lies between them, and the per-invocation reading is the upper
- * bound the driver line carries.
+ * Check 16 recorded "cumulative"; flip `state` only in the commit that records
+ * a new live result. While `state` is "pending", a multi-invocation run is
+ * priced under both readings and the driver line carries the per-invocation
+ * upper bound.
  */
 export const RESUME_USAGE = { check: 16, state: "cumulative" };
 export const RESUME_READINGS = new Set(["cumulative", "per-invocation"]);

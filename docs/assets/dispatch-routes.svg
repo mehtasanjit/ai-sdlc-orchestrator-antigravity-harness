@@ -98,8 +98,8 @@
     <text x="790" y="222" text-anchor="middle" class="s">policy rules → adapter → model</text>
 
     <rect x="658" y="236" width="124" height="70" rx="8" fill="#FEF3C7" stroke="#B45309" stroke-width="1.5"/>
-    <text x="720" y="258" text-anchor="middle" class="b" style="fill:#78350F">claude-cli</text>
-    <text x="720" y="275" text-anchor="middle" class="s" style="fill:#78350F">claude -p</text>
+    <text x="720" y="258" text-anchor="middle" class="b" style="fill:#78350F">claude-agent-sdk</text>
+    <text x="720" y="275" text-anchor="middle" class="s" style="fill:#78350F">Claude Agent SDK</text>
     <text x="720" y="291" text-anchor="middle" class="s" style="fill:#78350F">Opus 5 · judgment</text>
 
     <rect x="798" y="236" width="124" height="70" rx="8" fill="#E0F2FE" stroke="#0369A1" stroke-width="1.5"/>
