@@ -1,15 +1,17 @@
 /**
- * GeminiFlashAdapter — Gemini 3.5 Flash with explicit context caching for
- * the stable project header. Auth-agnostic: the two doors live behind
- * `GeminiTransport`, picked from credentials at construction. Falls back to
- * implicit caching if explicit cache creation fails.
+ * GeminiFlashAdapter — one Gemini completion call per packet, with explicit
+ * context caching for the stable project header. Auth-agnostic: the two doors
+ * live behind `GeminiTransport`, picked from credentials at construction.
+ * Falls back to implicit caching if explicit cache creation fails.
  */
 
+import { ThinkingLevel } from "@google/genai";
 import type {
   AttemptRecord,
   ExecutionResult,
   ModelConfig,
   ModelPricing,
+  ReasoningConfig,
   TaskPacket,
 } from "../types.js";
 import { computeCostUsd, estimateTokens } from "../pricing.js";
@@ -23,15 +25,33 @@ import {
   type GenerateOutcome,
 } from "./geminiTransports.js";
 import { DispatchPricer, geminiRates, unpricedRefusal, type BilledPrice, type Clock } from "./dispatchPricer.js";
+import { geminiDispatchWallet } from "./dispatchWallet.js";
 
 export interface GeminiFlashOptions {
   /** Clock for the dispatch date the price is looked up on; tests pin it. */
   now?: Clock;
 }
 
-// Fallback when the policy YAML omits max_output_tokens_absolute. 8192 is
-// the current Gemini 3.5 Flash ceiling.
+// Fallback when the model entry omits max_output_tokens_absolute. A
+// configured cap, not a verified vendor limit.
 const GEMINI_ABSOLUTE_OUTPUT_TOKENS_FALLBACK = 8192;
+
+const THINKING_LEVELS: Record<NonNullable<ReasoningConfig["tier"]>, ThinkingLevel> = {
+  minimal: ThinkingLevel.MINIMAL,
+  low: ThinkingLevel.LOW,
+  medium: ThinkingLevel.MEDIUM,
+  high: ThinkingLevel.HIGH,
+};
+
+/**
+ * The model entry's `reasoning.tier` as the `thinkingLevel` a request
+ * carries. Undefined sends no thinking setting, so the model's default level
+ * applies; Gemini counts thinking against `maxOutputTokens`.
+ */
+export function geminiThinkingLevel(reasoning?: ReasoningConfig): ThinkingLevel | undefined {
+  const tier = reasoning?.tier;
+  return tier !== undefined && Object.hasOwn(THINKING_LEVELS, tier) ? THINKING_LEVELS[tier] : undefined;
+}
 
 const MAX_DOUBLINGS = 3;
 
@@ -122,6 +142,7 @@ export class GeminiFlashAdapter implements ModelAdapter {
     // `__free_text__` marker means the caller wants markdown, not JSON.
     // Skip JSON mode; the marker never reaches the vendor (400 on unknown).
     const wantsJson = packet.outputSchema && !(packet.outputSchema as any).__free_text__;
+    const thinkingLevel = geminiThinkingLevel(this.modelConfig.reasoning);
 
     const attempts: AttemptRecord[] = [];
     let ceiling = Math.min(packet.budget.maxOutputTokens, absoluteCeiling);
@@ -151,6 +172,7 @@ export class GeminiFlashAdapter implements ModelAdapter {
         temperature: 0.2,
         maxOutputTokens: ceiling,
         ...(wantsJson ? { responseMimeType: "application/json" } : {}),
+        ...(thinkingLevel ? { thinkingConfig: { thinkingLevel } } : {}),
       };
       if (wantsJson) generationConfig.responseSchema = packet.outputSchema;
 
@@ -163,7 +185,18 @@ export class GeminiFlashAdapter implements ModelAdapter {
           cachedContentName: cacheName,
         });
       } catch (err: any) {
-        const failTokens = { input: estimateTokens(userPrompt), input_cached: 0, output: 0 };
+        const failure = describeVendorFailure(err);
+        // A call Google answered with an error status bills nothing. Vertex AI:
+        // "You're charged only for requests that return a 200 response code."
+        // (VERTEX_PRICING_URL); the Gemini API: "If your request fails with a
+        // 400 or 500 error, you won't be charged for the tokens used." A
+        // connection that failed with no response keeps the stated bound — the
+        // prompt billed as input — since the request may have been answered.
+        const answeredWithError = failure.error_status !== undefined && failure.error_status !== 200;
+        const neverSent = failure.error_code !== undefined && NEVER_SENT_CODES.has(failure.error_code);
+        const failTokens = answeredWithError || neverSent
+          ? { input: 0, input_cached: 0, output: 0 }
+          : { input: estimateTokens(userPrompt), input_cached: 0, output: 0 };
         attempts.push({
           attempt_number: attemptNumber,
           ceiling_used: ceiling,
@@ -173,7 +206,9 @@ export class GeminiFlashAdapter implements ModelAdapter {
           latency_ms: Date.now() - attemptStart,
           success: false,
           error: err?.message ?? String(err),
+          ...failure,
           price_basis: price.basis,
+          thinking_level: thinkingLevel ?? null,
         });
         return this.finalizeResult(attempts, null, cacheHit, "vendor_error");
       }
@@ -189,14 +224,16 @@ export class GeminiFlashAdapter implements ModelAdapter {
       const promptTokens = usage.promptTokenCount ?? estimateTokens(userPrompt);
       // Output = candidates + thoughts (see billedOutputTokens). Estimate
       // stands in only when the vendor sent no usage block at all.
-      const outputTokens =
-        usage.candidatesTokenCount === undefined && usage.thoughtsTokenCount === undefined
-          ? estimateTokens(text)
-          : billedOutputTokens(usage);
+      const vendorCountedOutput =
+        usage.candidatesTokenCount !== undefined || usage.thoughtsTokenCount !== undefined;
+      const outputTokens = vendorCountedOutput ? billedOutputTokens(usage) : estimateTokens(text);
       const attemptTokens = {
         input: Math.max(0, promptTokens - cachedTokens),
         input_cached: cachedTokens,
         output: outputTokens,
+        // A share of `output`, never priced on its own. An absent
+        // thoughtsTokenCount counts as zero, as in billedOutputTokens.
+        ...(vendorCountedOutput ? { output_reasoning: usage.thoughtsTokenCount ?? 0 } : {}),
       };
 
       // Only MAX_TOKENS triggers doubling. STOP/SAFETY/RECITATION/OTHER are
@@ -214,6 +251,7 @@ export class GeminiFlashAdapter implements ModelAdapter {
         latency_ms: Date.now() - attemptStart,
         success: !hitOutputCap,
         price_basis: price.basis,
+        thinking_level: thinkingLevel ?? null,
       });
 
       if (!hitOutputCap) {
@@ -266,6 +304,7 @@ export class GeminiFlashAdapter implements ModelAdapter {
     const totalCost = attempts.reduce((s, a) => s + a.cost_usd, 0);
     const totalLatency = attempts.reduce((s, a) => s + a.latency_ms, 0);
     const finalAttempt = attempts[attempts.length - 1];
+    const wallet = geminiDispatchWallet(this.transport.backend, this.transport.location);
     return {
       result: parsed,
       tokens: totalTokens,
@@ -274,7 +313,7 @@ export class GeminiFlashAdapter implements ModelAdapter {
       cache_hit: cacheHit,
       success: terminalReason === "success",
       error: finalAttempt?.error,
-      attempts,
+      attempts: attempts.map((a) => ({ ...a, wallet })),
       terminal_reason: terminalReason,
     };
   }
@@ -305,4 +344,21 @@ function buildUserPrompt(packet: TaskPacket, headerInline: string): string {
   ]
     .filter(Boolean)
     .join("\n");
+}
+
+/** Node/undici codes of a request that never left this machine, so nothing reached Google to bill. */
+const NEVER_SENT_CODES = new Set(["ENOTFOUND", "ECONNREFUSED", "ENETUNREACH", "EHOSTUNREACH", "ENETDOWN", "EAI_AGAIN"]);
+
+/**
+ * A failed Gemini call, described by the vendor's own fields: the HTTP status
+ * on @google/genai's ApiError, and the Node/undici code of a connection that
+ * failed in transit (on the error or its `cause`). Nothing is read from the
+ * error's wording.
+ */
+export function describeVendorFailure(err: any): { error_status?: number; error_code?: string } {
+  const out: { error_status?: number; error_code?: string } = {};
+  if (typeof err?.status === "number") out.error_status = err.status;
+  const code = err?.cause?.code ?? err?.code;
+  if (typeof code === "string") out.error_code = code;
+  return out;
 }

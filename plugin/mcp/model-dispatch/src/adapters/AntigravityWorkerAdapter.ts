@@ -22,9 +22,10 @@ import type {
   TaskPacket,
 } from "../types.js";
 import { computeCostUsd } from "../pricing.js";
-import type { ModelAdapter } from "./ModelAdapter.js";
+import { unenforcedBudget, type ModelAdapter } from "./ModelAdapter.js";
 import { applyVertexSurcharge, resolveGcpProject, workerVertexLocation } from "./geminiTransports.js";
 import { DispatchPricer, geminiRates, unpricedRefusal, type BilledPrice, type Clock } from "./dispatchPricer.js";
+import { geminiDispatchWallet } from "./dispatchWallet.js";
 import {
   DEFAULT_WORKER_TIMEOUT_SEC,
   WORKER_KILL_GRACE_SEC,
@@ -33,6 +34,7 @@ import {
   evidenceStem,
   mapSidecarTokens,
   resolveWorkerPython,
+  sidecarUsageSemantics,
   workerTaskMarkdown,
   workerThinkingLevel,
 } from "../delegation/workerProcess.js";
@@ -142,7 +144,7 @@ export class AntigravityWorkerAdapter implements ModelAdapter {
     const dispatchDate = this.pricer.now();
     const price = this.pricingOn(dispatchDate);
     if (price.unpriced) {
-      return this.failure(started, unpricedRefusal(this.modelConfig, dispatchDate, price.reason));
+      return this.failure(packet, started, unpricedRefusal(this.modelConfig, dispatchDate, price.reason));
     }
 
     // Workspace the agent may act in. Refused rather than defaulted to a
@@ -150,6 +152,7 @@ export class AntigravityWorkerAdapter implements ModelAdapter {
     const workdir = runContext?.work_dir ?? runContext?.project_root;
     if (!workdir) {
       return this.failure(
+        packet,
         started,
         `Model '${this.id}' delegates to an agent that edits files, so it needs a working ` +
           `directory. Pass work_dir (or project_root) to execute_with_model.`,
@@ -171,7 +174,7 @@ export class AntigravityWorkerAdapter implements ModelAdapter {
       mkdirSync(outDir, { recursive: true });
       writeFileSync(taskFile, workerTaskMarkdown(packet, { workdir }), "utf8");
     } catch (err: any) {
-      return this.failure(started, `Could not stage the delegation brief: ${err?.message ?? err}`);
+      return this.failure(packet, started, `Could not stage the delegation brief: ${err?.message ?? err}`);
     }
 
     const timeoutSec = this.modelConfig.worker_timeout_sec ?? DEFAULT_WORKER_TIMEOUT_SEC;
@@ -222,6 +225,17 @@ export class AntigravityWorkerAdapter implements ModelAdapter {
     const tokens = mapSidecarTokens(sidecar);
     const cost = computeCostUsd(tokens, price.billed);
     const latency = Date.now() - started;
+
+    // An SDK version whose usage reading has not been checked against Google's
+    // own token counter is billed on the larger reading (never under-reported);
+    // say so, so the version gets checked and added to AGY_USAGE_SEMANTICS.
+    if (sidecar && sidecarUsageSemantics(sidecar) === "unverified") {
+      log("warn", "agsdk.usage_semantics_unverified", {
+        packet_id: packet.id,
+        sdk_version: sidecar.sdk_version ?? null,
+        billed_as: "disjoint (fresh = prompt_token_count, cached on top)",
+      });
+    }
 
     if (sidecar) {
       log("info", "agsdk.sidecar", {
@@ -282,7 +296,7 @@ export class AntigravityWorkerAdapter implements ModelAdapter {
     if (!run.ok) {
       const attempt: AttemptRecord = {
         attempt_number: 1,
-        ceiling_used: packet.budget.maxOutputTokens,
+        ...unenforcedBudget(packet),
         hit_output_cap: false,
         tokens,
         cost_usd: cost,
@@ -290,6 +304,7 @@ export class AntigravityWorkerAdapter implements ModelAdapter {
         success: false,
         error: run.error,
         price_basis: price.basis,
+        wallet: geminiDispatchWallet("vertex-adc", this.location),
       };
       return {
         result: null,
@@ -316,7 +331,7 @@ export class AntigravityWorkerAdapter implements ModelAdapter {
 
     const attempt: AttemptRecord = {
       attempt_number: 1,
-      ceiling_used: packet.budget.maxOutputTokens,
+      ...unenforcedBudget(packet),
       stop_reason: "agent_session_complete",
       hit_output_cap: false,
       tokens,
@@ -324,6 +339,7 @@ export class AntigravityWorkerAdapter implements ModelAdapter {
       latency_ms: latency,
       success: true,
       price_basis: price.basis,
+      wallet: geminiDispatchWallet("vertex-adc", this.location),
     };
     return {
       result: parsed,
@@ -461,7 +477,7 @@ export class AntigravityWorkerAdapter implements ModelAdapter {
   }
 
   /** Pre-subprocess failure. Zeros throughout — no tokens spent. */
-  private failure(started: number, error: string): ExecutionResult {
+  private failure(packet: TaskPacket, started: number, error: string): ExecutionResult {
     const tokens = { input: 0, input_cached: 0, output: 0 };
     const latency = Date.now() - started;
     return {
@@ -475,13 +491,14 @@ export class AntigravityWorkerAdapter implements ModelAdapter {
       attempts: [
         {
           attempt_number: 1,
-          ceiling_used: 0,
+          ...unenforcedBudget(packet),
           hit_output_cap: false,
           tokens,
           cost_usd: 0,
           latency_ms: latency,
           success: false,
           error,
+          wallet: geminiDispatchWallet("vertex-adc", this.location),
         },
       ],
       terminal_reason: "vendor_error",

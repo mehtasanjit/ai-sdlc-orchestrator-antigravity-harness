@@ -24,9 +24,8 @@ export type Phase =
   // default — see plugin/config/policies/*.yaml.
   | "discovery"
   | "change_plan"
-  // Not a routed phase — the label the orchestrator-overhead collector
-  // (plugin/scripts/collect-orchestrator-usage.mjs) stamps on its transcript
-  // event. No policy rule ever matches it and no packet ever carries it; it
+  // Not a routed phase — the label the Claude Code harness's transcript
+  // collector (not shipped here) stamps on its event. No policy rule ever matches it and no packet ever carries it; it
   // exists in this union only so the event type-checks. Readers must key on
   // `tier: "orchestrator"`, not on this phase name.
   | "orchestrator_overhead";
@@ -79,6 +78,13 @@ export interface TelemetryEvent {
    * because events written before this field existed lack it.
    */
   model_id?: string;
+  /**
+   * The policy `adapter:` that ran the call (e.g. `claude-agent-sdk`,
+   * `mcp:model-dispatch`). The manifest books each event to a cost line from
+   * this, so a run directory with no policy snapshot still splits Claude from
+   * Gemini. Optional because events written before this field existed lack it.
+   */
+  adapter?: string;
   routed_by: "orchestrator" | "fallback" | "manual";
   /**
    * Where this event's numbers came from. `"vendor"` = measured by the
@@ -86,7 +92,7 @@ export interface TelemetryEvent {
    * `execute_with_model` event, in both auth modes); `"estimated"` =
    * direct-tier char-count logged by the orchestrator via `log_telemetry`;
    * `"transcript"` = reconstructed post-run from session transcripts
-   * (orchestrator-overhead collector). Optional because events written
+   * (the Claude Code harness's collector). Optional because events written
    * before this field existed lack it — readers treat absence as
    * "unknown" and disown the run's label (tools/report.mjs).
    */
@@ -94,7 +100,8 @@ export interface TelemetryEvent {
   /**
    * `"orchestrator"` marks the run's own overhead (the driver session's
    * reasoning, file reads, growing-conversation re-sends), reconstructed
-   * post-run from transcripts by collect-orchestrator-usage.mjs. Absent on
+   * post-run from transcripts by the Claude Code harness's collector, or
+   * the agy driver's modeled line (driver-cost-modeled.jsonl). Absent on
    * every dispatched-work event. `buildManifest` and tools/report.mjs
    * partition on this field so overhead is never silently blended into
    * dispatched-work totals.
@@ -105,6 +112,8 @@ export interface TelemetryEvent {
     policy_version: number;
     rule_index: number;      // -1 = default
     rule_reason: string;
+    /** Present (true) only when no rule matched and the policy default routed the packet. */
+    fallback?: true;
     /**
      * Present only when the matched rule named a slot. `overridden`
      * distinguishes an explicit run choice from an inherited default.
@@ -145,15 +154,12 @@ export interface TelemetryEvent {
    */
   transcript_logged_cost_usd?: number;
   /*
-   * Orchestrator event only (`tier: "orchestrator"`, written by
-   * collect-orchestrator-usage.mjs): the Fix E fields of the manifest's
+   * Orchestrator event only (`tier: "orchestrator"`, written by the Claude
+   * Code harness's transcript collector): the Fix E fields of the manifest's
    * `orchestrator_overhead` block, with the same meanings (see Manifest in
    * telemetry.ts), so telemetry.jsonl alone says which model each dollar ran
    * on, what a booked receipt billed beyond the transcript, and whether every
-   * helper's transcript was read. The collector wrote most of these from the
-   * per-message and receipt fixes on while this interface did not declare
-   * them; since v0.7.3 orchestratorOverheadFields.test.mjs type-checks its real
-   * output against this interface so the two cannot drift again.
+   * helper's transcript was read.
    */
   transcript_cost_usd?: number | null;
   receipt_cost_usd?: number | null;
@@ -174,16 +180,74 @@ export interface TelemetryEvent {
   retry_count: number;
   /** Output-cap doubling attempts share a task_id. attempt_number is 1-indexed. */
   attempt_number?: number;
-  ceiling_used?: number;
+  /** The output cap the vendor was given; null when the adapter passed none (see budget_enforced). */
+  ceiling_used?: number | null;
+  /**
+   * `false` when the adapter passed neither an output cap nor a spend limit to
+   * the vendor, so `output_tokens` can exceed `budget_declared`. Absent when
+   * `ceiling_used` was applied.
+   */
+  budget_enforced?: boolean;
+  /** The packet's `budget.maxOutputTokens`, kept when `budget_enforced` is false. */
+  budget_declared?: number;
   retry_reason?: "output_cap" | "validation" | "escalation";
   artifact_path?: string;
   error?: string;
+  /** Copied from the attempt (Gemini completion only); see AttemptRecord.thinking_level. */
+  thinking_level?: string | null;
+  /**
+   * Copied from the attempt: the wallet the call billed, as the bridge saw it
+   * at dispatch. The manifest books the event's wallet from this rather than
+   * from the environment of whatever shell rebuilds the manifest. Absent on
+   * events written before it existed and on direct-tier events.
+   */
+  wallet?: DispatchWallet;
+  /** Copied from the attempt (claude-agent-sdk only); see ClaudeSessionFacts. */
+  claude_session?: ClaudeSessionFacts;
+  /** Copied from the attempt (claude-agent-sdk only); see PromptCacheTtlRecord. */
+  prompt_cache_ttl?: PromptCacheTtlRecord;
+}
+
+export type PromptCacheTtl = "5m" | "1h";
+
+/**
+ * The prompt-cache lifetime a claude-agent-sdk attempt asked for and the one
+ * its cache writes used, read from the assistant frames' `cache_creation`.
+ */
+export interface PromptCacheTtlRecord {
+  /** The policy's `prompt_cache_ttl`, sent as the SDK's `settings.promptCacheTtl`; null when the policy sets none. */
+  pinned: PromptCacheTtl | null;
+  /** `none` = no cache writes; `unknown` = some write carried no TTL split; `mixed` = both lifetimes. */
+  observed: PromptCacheTtl | "mixed" | "none" | "unknown";
+  /** True when a pin is set and the writes used a different lifetime. */
+  mismatch: boolean;
+}
+
+/**
+ * The Agent SDK session a claude-agent-sdk attempt ran in. Each field is null
+ * when the stream never reported it: a call stopped before its result message
+ * has no `num_turns`, `result_subtype` or `terminal_reason`.
+ */
+export interface ClaudeSessionFacts {
+  session_id: string | null;
+  num_turns: number | null;
+  /** The result message's `subtype`: `success`, `error_max_turns`, `error_during_execution`, ... */
+  result_subtype: string | null;
+  /** The result message's `terminal_reason` (`completed`, `max_turns`, `api_error`, ...). */
+  terminal_reason: string | null;
+  /** The init frame's `cwd`, else the directory the SDK was started in (the adapter's `cwd` option, or the bridge's own). */
+  cwd: string | null;
 }
 
 /** One attempt from the output-cap doubling loop. */
 export interface AttemptRecord {
   attempt_number: number;
-  ceiling_used: number;
+  /** null when the adapter passed no output cap to the vendor. */
+  ceiling_used: number | null;
+  /** `false` when no output cap or spend limit reached the vendor; absent when `ceiling_used` applied. */
+  budget_enforced?: boolean;
+  /** The packet's `budget.maxOutputTokens`, kept when `budget_enforced` is false. */
+  budget_declared?: number;
   stop_reason?: string;
   hit_output_cap: boolean;
   tokens: {
@@ -224,10 +288,7 @@ export interface AttemptRecord {
    * `cost_usd` for the tokens that transcript explains (each model's logged
    * tokens at that model's price). The rest of cost_usd is what the result
    * billed that no transcript line logged: receipt-only side calls (a Haiku
-   * call) and unlogged tokens. collect-orchestrator-usage.mjs subtracts only
-   * this share of a worker its scan swept in, because the scan counts only the
-   * logged tokens; subtracting the whole cost took the unlogged dollars out of
-   * the true total (review finding M4).
+   * call) and unlogged tokens.
    */
   transcript_logged_cost_usd?: number;
   /**
@@ -242,6 +303,28 @@ export interface AttemptRecord {
   ttl_split?: TtlSplit;
   /** claude-cli only: the per-model ledger behind `cost_usd`. */
   per_model?: WorkerModelCost[];
+  /**
+   * Gemini completion only: the `thinkingConfig.thinkingLevel` the request
+   * carried, or `null` when it carried none and the model's default level
+   * applied. Absent on an attempt refused before any request, and on other
+   * adapters.
+   */
+  thinking_level?: string | null;
+  /** The wallet this attempt billed; see DispatchWallet. */
+  wallet?: DispatchWallet;
+  /**
+   * claude-agent-sdk only: the call stopped before its result message, and
+   * `tokens` / `cost_usd` are the usage its assistant frames reported until then.
+   */
+  usage_from_frames?: boolean;
+  /** claude-agent-sdk only: the SDK session the call ran in. */
+  claude_session?: ClaudeSessionFacts;
+  /** claude-agent-sdk only: the cache lifetime pinned and the one the writes used. */
+  prompt_cache_ttl?: PromptCacheTtlRecord;
+  /** Gemini only, on a failed call: the HTTP status the vendor answered with. */
+  error_status?: number;
+  /** Gemini only, on a failed call: the Node/undici code of a connection that failed in transit. */
+  error_code?: string;
 }
 
 export type PriceBasis = "list" | "custom";
@@ -339,7 +422,10 @@ export interface ModelConfig {
   auth?: { env: string };
   endpoint?: string;
   reasoning?: ReasoningConfig;
-  /** Vendor's absolute output-tokens limit; doubling loop clamps here. */
+  /**
+   * The policy's output ceiling for this model; the doubling loop clamps here.
+   * A configured cap, not checked against the vendor's own limit.
+   */
   max_output_tokens_absolute?: number;
   /**
    * Vertex region for this leaf. Unset → follows GOOGLE_CLOUD_LOCATION, else
@@ -352,6 +438,13 @@ export interface ModelConfig {
    * a worker; ignored by completion adapters.
    */
   worker_timeout_sec?: number;
+  /**
+   * claude-agent-sdk only: the prompt-cache lifetime, sent as the SDK's
+   * `settings.promptCacheTtl`. Unset, Claude Code picks 1h on a claude.ai seat
+   * and 5m on an API key or Vertex, so the wallet would decide the cache-write
+   * rate. The CLAUDE_CODE_PROMPT_CACHE_TTL variable overrides it.
+   */
+  prompt_cache_ttl?: PromptCacheTtl;
 }
 
 /**
@@ -403,12 +496,16 @@ export interface Policy {
   rules: Rule[];
   /** Optional; absent from policies written before slots existed. */
   select?: Record<string, SelectSlot>;
+  /** Run-wide spend limit in USD, enforced by runCostCap.ts. Absent = no cap. */
+  hard_cost_cap_usd?: number;
 }
 
 export interface RoutingDecision {
   modelId: string;
   reason: string;
   ruleIndex: number;   // -1 if default
+  /** Set when no rule matched and the policy's `default` chose the model. */
+  fallback?: true;
   /** Present only when the matched rule named a slot. */
   selection?: { slot: string; chosen: string; overridden: boolean };
 }
@@ -434,12 +531,41 @@ export interface ExecutionResult {
   attempts?: AttemptRecord[];
   /**
    * Why the doubling loop stopped. `_budget_exhausted` means "retries used but
-   * model still had headroom" (raise the cap); `_at_model_absolute` means "hit
-   * the vendor's ceiling" (packet too big).
+   * model still had headroom" (raise the cap); `_at_model_absolute` means the
+   * ceiling reached the model entry's `max_output_tokens_absolute`, the
+   * policy's configured cap, and the model still stopped at `MAX_TOKENS`.
    */
   terminal_reason?:
     | "success"
     | "output_cap_doubling_budget_exhausted"
     | "output_cap_at_model_absolute"
     | "vendor_error";
+}
+
+/**
+ * The wallet one dispatch billed, recorded by the adapter that ran it.
+ * `source` says how it was known: `reported` = Claude Code said so itself
+ * (the Agent SDK init frame's `apiKeySource`, or the result's
+ * `modelUsage[*].provider`); `env` = the bridge's environment at dispatch;
+ * `transport` = the Gemini door the adapter built.
+ */
+export interface DispatchWallet {
+  /** The manifest's wallet label; null when nothing the adapter saw settled it. */
+  name: "anthropic" | "gcp" | "claude-seat" | "gemini-api-key" | null;
+  source: "reported" | "env" | "transport";
+  /** Claude only: `A` Anthropic API key, `B` Vertex, `seat` claude.ai login. */
+  arm?: "A" | "B" | "seat" | "unknown";
+  /** Claude Agent SDK only: the init frame's `apiKeySource` (`ANTHROPIC_API_KEY`, `none`, ...). */
+  api_key_source?: string;
+  /** Claude only: the provider(s) the result's `modelUsage` names (`firstParty`, `vertex`, ...). */
+  api_provider?: string;
+  /** Claude Agent SDK only: the init frame's `claude_code_version`. */
+  claude_code_version?: string;
+  /** Arm B only: ANTHROPIC_VERTEX_PROJECT_ID and CLOUD_ML_REGION in the bridge's environment. */
+  project?: string;
+  region?: string;
+  /** Gemini only: the door the call went through. */
+  backend?: "api-key" | "vertex-adc";
+  /** Gemini only: the Vertex location; empty on the AI Studio key. */
+  location?: string;
 }

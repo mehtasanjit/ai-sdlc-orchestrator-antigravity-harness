@@ -108,6 +108,34 @@ test("the legacy Gemini adapter alias still validates (compat shim preserved)", 
   }
 });
 
+test("hard_cost_cap_usd loads when it is a positive number, and is optional", () => {
+  const root = mkdtempSync(join(tmpdir(), "mmo-policy-"));
+  try {
+    const capped = join(root, "capped.yaml");
+    writeFileSync(capped, policyYaml("capped") + "hard_cost_cap_usd: 12.5\n");
+    assert.equal(loadPolicyFromPath(capped).hard_cost_cap_usd, 12.5);
+
+    const uncapped = join(root, "uncapped.yaml");
+    writeFileSync(uncapped, policyYaml("uncapped"));
+    assert.equal(loadPolicyFromPath(uncapped).hard_cost_cap_usd, undefined);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("a hard_cost_cap_usd that is not a positive number fails at policy load", () => {
+  const root = mkdtempSync(join(tmpdir(), "mmo-policy-"));
+  try {
+    for (const value of ["-5", "0", '"50"', "fifty", "", ".inf"]) {
+      const path = join(root, "bad-cap.yaml");
+      writeFileSync(path, policyYaml("bad-cap") + `hard_cost_cap_usd: ${value}\n`);
+      assert.throws(() => loadPolicyFromPath(path), /hard_cost_cap_usd' must be a positive number/, `value ${value}`);
+    }
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("KNOWN_ADAPTER_IDS carries every registered id including the legacy alias", () => {
   for (const id of [
     "builtin-anthropic",

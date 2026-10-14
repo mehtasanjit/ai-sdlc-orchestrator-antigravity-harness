@@ -8,6 +8,7 @@ import { existsSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parse as parseYaml, stringify as stringifyYaml } from "yaml";
+import { isMain } from "../scripts/lib/is-main.mjs";
 
 const SCRIPT_DIR = dirname(fileURLToPath(import.meta.url));
 const POLICIES_DIR = resolve(SCRIPT_DIR, "..", "config", "policies");
@@ -221,7 +222,7 @@ function fallbackRule(policy) {
 
 /**
  * Rules for phases NOT in the visible PHASES list (e.g. brownfield's
- * `discovery`, `change_plan` in `antigravity-flash38-plus-opus5.yaml`). The console UI
+ * `change_plan` in `antigravity-flash38-plus-opus5.yaml`). The console UI
  * only renders 9 phases, but the base policy may name more. Without this,
  * buildCustomPolicy iterates only PHASES and silently drops those rules
  * on save — a data-loss regression from the old TypeScript app. Skip the
@@ -328,7 +329,7 @@ export function buildCustomPolicy(base, input) {
   }
 
   // Carry through rules for phases the console UI doesn't edit — brownfield's
-  // discovery / change_plan in antigravity-flash38-plus-opus5.yaml is the concrete case. Old
+  // change_plan in antigravity-flash38-plus-opus5.yaml is the concrete case. Old
   // code silently dropped these on save; a saved custom policy would then fall
   // through to the default for those phases.
   if (Array.isArray(structural.extraPhaseRules)) {
@@ -606,7 +607,7 @@ const server = createServer(async (req, res) => {
 
 export { summarizePolicy, renderPolicyYaml, SHIPPED_PRESETS, ADAPTER_LABEL };
 
-if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
+if (isMain(import.meta.url)) {
   const args = parseArgs(process.argv.slice(2));
   server.listen(args.port, args.host, () => {
     process.stderr.write(`policy-server: listening on http://${args.host}:${args.port}\n`);

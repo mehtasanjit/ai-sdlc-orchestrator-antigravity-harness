@@ -3,10 +3,9 @@
  *   - plugin/scripts/setup-policy.mjs writes OFF_LIMITS_DEFAULT to
  *     `.sdlc/project.json` so Gate 0 can name them once and skip repeating
  *     the constants each ticket.
- *   - plugin/scripts/write-contract-check.mjs uses HARDCODED_OFF_LIMITS as
- *     the pre-contract safety net: even without an active brownfield contract,
- *     always-sensitive paths (credentials, MCP config, other-AI-tool state)
- *     are refused.
+ *   - plugin/agy/hooks/write-contract-check.mjs refuses HARDCODED_OFF_LIMITS
+ *     with or without a brownfield contract, in any letter case: credentials,
+ *     MCP config, other-AI-tool state and git's store.
  *
  * HARDCODED_OFF_LIMITS is a strict subset of OFF_LIMITS_DEFAULT, and
  * off-limits.test.mjs asserts that containment so the two cannot drift apart.

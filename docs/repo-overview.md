@@ -19,7 +19,7 @@ Four things ship out of this repo:
 
 ## How a run works, in one paragraph
 
-You type `/mmo:greenfield` (new app) or `/mmo:brownfield` (existing repo). **Gemini 3.8 Flash, conducting on agy**, reads your brief, breaks the work into phases and TaskPackets, and sends every one through the bridge: judgment packets (requirements, design, planning, reviews) to Claude Opus 5 via `claude -p`, mechanical packets (codegen, tests, docs) to Gemini 3.8 Flash as a completion call or, if you chose it, as an Antigravity SDK agent. The conductor authors no shipped content, so every phase has a vendor-metered line in `telemetry.jsonl`. The conductor's own turns are priced from agy's token counters and labeled **modeled** — a Google seat has no invoice — and the two kinds of dollars are never summed. At a few points the run stops and asks you to confirm before continuing (a **HITL gate**).
+You type `/mmo:greenfield` (new app) or `/mmo:brownfield` (existing repo). **Gemini 3.8 Flash, conducting on agy**, reads your brief, breaks the work into phases and TaskPackets, and sends every one through the bridge: judgment packets (requirements, design, planning, reviews) to Claude Opus 5 through the Claude Agent SDK, mechanical packets (codegen, tests, docs) to Gemini 3.8 Flash as a completion call or, if you chose it, as an Antigravity SDK agent. The conductor authors no shipped content, so every phase has a vendor-metered line in `telemetry.jsonl`. The conductor's own turns are priced from agy's token counters and labeled **modeled** — a Google seat has no invoice — and the two kinds of dollars are never summed. At a few points the run stops and asks you to confirm before continuing (a **HITL gate**).
 
 ## Repo layout
 
@@ -30,7 +30,7 @@ You type `/mmo:greenfield` (new app) or `/mmo:brownfield` (existing repo). **Gem
 | [plugin/rules/AGENTS.md](../plugin/rules/AGENTS.md) | The conductor rules agy loads with the plugin. |
 | [plugin/agy/](../plugin/agy/) | The headless driver (`run.mjs`), the dispatch fallback (`dispatch.mjs`), the manifest writer, the setup check, the pin reader and stream-json event reader under `telemetry/`, and the two hooks under `hooks/`. |
 | [plugin/agy/prompts/conductor.md](../plugin/agy/prompts/conductor.md) | The conductor prompt `run.mjs` renders for print mode. |
-| [plugin/mcp/model-dispatch/](../plugin/mcp/model-dispatch/) | The bridge: routes a phase to a model per the active policy, calls the adapters (`claude-cli`, Gemini as a model, Gemini as an agent), prices every call from the dated list in `src/prices.ts`, logs telemetry. |
+| [plugin/mcp/model-dispatch/](../plugin/mcp/model-dispatch/) | The bridge: routes a phase to a model per the active policy, calls the adapters (`claude-agent-sdk`, Gemini as a model, Gemini as an agent), prices every call from the dated list in `src/prices.ts`, logs telemetry. |
 | [plugin/config/policies/](../plugin/config/policies/) | YAML policy files — the `driver:` pin, which model runs which phase, escalation, the cost cap. `antigravity-flash38-plus-opus5.yaml` is the default. |
 | [plugin/policy-console/](../plugin/policy-console/) | The local page `/mmo:policy change` and `npm run console` open to pick or author a policy. |
 | [plugin/scripts/](../plugin/scripts/) | Node scripts the skills shell out to in an interactive session: the policy console launcher, the brownfield write-contract check, provenance writer, session hydration, discovery refresh, the `MMO:` log CLI. |

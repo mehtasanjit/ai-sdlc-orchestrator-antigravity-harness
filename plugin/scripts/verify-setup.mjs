@@ -16,11 +16,13 @@
  *   ...--user                              machine-wide instead of this folder
  */
 
+import { MIN_NODE, meetsNodeFloor } from "./lib/node-floor.mjs";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { isMain } from "./lib/is-main.mjs";
 
 // ─── pure helpers ─────────────────────────────────────────────────────
 
@@ -311,6 +313,7 @@ export function hasVertexCredentials(vertex = null) {
  */
 export function evaluate({
   nodeMajor,
+  nodeVersion = null,
   hasClaudeCli,
   hasNodeModules,
   hasDist,
@@ -325,11 +328,11 @@ export function evaluate({
 }) {
   const problems = [];
 
-  if (nodeMajor < 20) {
+  if (nodeVersion ? !meetsNodeFloor(nodeVersion) : nodeMajor < 22) {
     problems.push({
       id: "node-version",
       severity: "blocking",
-      message: `Node ${nodeMajor || "unknown"} detected; this plugin needs Node 20 or newer.`,
+      message: `Node ${nodeVersion ?? (nodeMajor || "unknown")} detected; this plugin needs Node ${MIN_NODE} or newer.`,
       fix: "Install the current LTS from https://nodejs.org (or `nvm install --lts`).",
     });
   }
@@ -577,6 +580,7 @@ function observe(pluginRoot, env = process.env) {
   const adcFile = adcPath();
   return {
     nodeMajor: nodeMajorFrom(process.versions.node),
+    nodeVersion: process.versions.node,
     hasClaudeCli: onPath("claude"),
     hasGcloud: onPath("gcloud"),
     hasNodeModules: existsSync(nodeModules),
@@ -935,7 +939,7 @@ export function runBrownfieldChecks(pluginRoot, { spawn = spawnSync } = {}) {
 }
 
 // Direct-execution gate so the test suite can import the pure helpers.
-if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
+if (isMain(import.meta.url)) {
   const pluginRoot = dirname(dirname(fileURLToPath(import.meta.url)));
   const log = (m) => console.log(m);
   const shouldFix = process.argv.includes("--fix");

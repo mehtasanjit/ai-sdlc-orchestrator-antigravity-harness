@@ -1,0 +1,84 @@
+/**
+ * tools/p1/check16.mjs: the reader behind `tools/p1/live-checks.sh 16`. A
+ * failed call must read as no answer, never as one of the two readings.
+ */
+import { test } from "node:test";
+import assert from "node:assert/strict";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import { tmpdir } from "node:os";
+import { dirname, join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
+
+import { conversationId, lastResult, layoutVerdict, verdict } from "../p1/check16.mjs";
+
+const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
+const usage = (o) => ({ input_tokens: 1000, output_tokens: o, thinking_tokens: 0, cache_read_tokens: 0, total_tokens: 1000 + o });
+const ok = (conv, o) => ({ conversation_id: conv, status: "OK", usage: usage(o) });
+const ERROR = { conversation_id: "", status: "ERROR", error: "authentication failed or timed out", usage: usage(0) };
+
+test("carried-over counters read as cumulative, restarted ones as per-invocation", () => {
+  assert.equal(verdict({ exit: 0, result: ok("c1", 420) }, { exit: 0, result: ok("c1", 423) }).verdict, "cumulative");
+  assert.equal(verdict({ exit: 0, result: ok("c1", 420) }, { exit: 0, result: ok("c1", 3) }).verdict, "per-invocation");
+  assert.equal(verdict({ exit: 0, result: ok("c1", 420) }, { exit: 0, result: ok("c1", 300) }).verdict, "inconclusive");
+});
+
+test("the recorded agy 1.3.0 results, status SUCCESS, read as cumulative and settle only the thinking half of check 17", () => {
+  const first = { conversation_id: "e3a29ee2", status: "SUCCESS", usage: { input_tokens: 15686, output_tokens: 1128, thinking_tokens: 793, cache_read_tokens: 0, total_tokens: 16814 } };
+  const resume = { conversation_id: "e3a29ee2", status: "SUCCESS", usage: { input_tokens: 32734, output_tokens: 1153, thinking_tokens: 817, cache_read_tokens: 0, total_tokens: 33887 } };
+  assert.equal(verdict({ exit: 0, result: first }, { exit: 0, result: resume }).verdict, "cumulative");
+  const layout = layoutVerdict([first, resume]);
+  assert.equal(layout.verdict, "inconclusive");
+  assert.match(layout.reason, /thinking-in-output and .*thinking-in-output alike/);
+});
+
+test("with the cache-reading result beside them, the recorded results settle check 17", () => {
+  const zeroCache = (i, o, t) => ({ usage: { input_tokens: i, output_tokens: o, thinking_tokens: t, cache_read_tokens: 0, total_tokens: i + o } });
+  const cacheRead = { usage: { input_tokens: 50394, output_tokens: 2649, thinking_tokens: 2002, cache_read_tokens: 114232, total_tokens: 53043 } };
+  const v = layoutVerdict([zeroCache(15686, 1128, 793), zeroCache(32734, 1153, 817), cacheRead]);
+  assert.equal(v.verdict, "cache-outside-total+thinking-in-output");
+});
+
+test("a failed call, a missing result or a zero first call is no answer", () => {
+  assert.match(verdict({ exit: 0, result: ok("c1", 420) }, { exit: 1, result: ERROR }).reason, /resume exited 1; resume status ERROR \(authentication/);
+  assert.equal(verdict({ exit: 0, result: ok("c1", 420) }, { exit: 0, result: null }).verdict, "invalid");
+  assert.equal(verdict({ exit: 0, result: ok("c1", 0) }, { exit: 0, result: ok("c1", 0) }).verdict, "invalid");
+  assert.match(verdict({ exit: 0, result: ok("c1", 420) }, { exit: 0, result: ok("c2", 3) }).reason, /conversation c2, not c1/);
+});
+
+test("conversationId skips an empty id and lastResult takes the final result line", () => {
+  const text = [JSON.stringify({ event: "result", result: ERROR }), '{"event":"init","conversation_id":"c9"}', "noise", JSON.stringify({ event: "result", result: ok("c9", 5) })].join("\n");
+  assert.equal(conversationId(text), "c9");
+  assert.equal(lastResult(text).status, "OK");
+  assert.equal(conversationId("{}"), null);
+});
+
+test("the CLI prints a verdict and exits non-zero when the check gave no answer", () => {
+  const dir = mkdtempSync(join(tmpdir(), "p1-check16-"));
+  try {
+    const a = join(dir, "a.jsonl");
+    const b = join(dir, "b.jsonl");
+    writeFileSync(a, `{"event":"init","conversation_id":"c1"}\n${JSON.stringify({ event: "result", result: ok("c1", 420) })}\n`);
+    writeFileSync(b, `${JSON.stringify({ event: "result", result: ok("c1", 2) })}\n`);
+    const cli = (...args) => spawnSync(process.execPath, [join(ROOT, "tools", "p1", "check16.mjs"), ...args], { encoding: "utf8" });
+    assert.equal(cli("--conversation", a).stdout.trim(), "c1");
+    const good = cli(a, "0", b, "0");
+    assert.equal(good.status, 0);
+    assert.match(good.stdout, /check 16: PER-INVOCATION/);
+    writeFileSync(b, `${JSON.stringify({ event: "result", result: ERROR })}\n`);
+    const bad = cli(a, "0", b, "1");
+    assert.equal(bad.status, 1);
+    assert.match(bad.stdout, /check 16: INVALID/);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test("check 17 names the one counter layout every result adds up to, and nothing less", async () => {
+  const { layoutVerdict } = await import("../p1/check16.mjs");
+  const r = (u) => ({ status: "OK", usage: u });
+  assert.equal(layoutVerdict([r({ input_tokens: 1000, output_tokens: 200, thinking_tokens: 50, cache_read_tokens: 4000, total_tokens: 1200 })]).verdict, "cache-outside-total+thinking-in-output", "cache reads above the input cannot sit inside it");
+  assert.equal(layoutVerdict([r({ input_tokens: 1000, output_tokens: 200, thinking_tokens: 50, cache_read_tokens: 400, total_tokens: 1250 })]).verdict, "inconclusive", "cache below the input: inside it and outside the total add up alike");
+  assert.equal(layoutVerdict([r({ input_tokens: 1000, output_tokens: 200, thinking_tokens: 50, cache_read_tokens: 400, total_tokens: 1650 })]).verdict, "cache-apart+thinking-apart");
+  assert.equal(layoutVerdict([r({ input_tokens: 1000, output_tokens: 200, thinking_tokens: 0, cache_read_tokens: 0, total_tokens: 1200 })]).verdict, "inconclusive", "no cache, no thinking: every layout fits");
+  assert.equal(layoutVerdict([r({ input_tokens: 1, output_tokens: 1, total_tokens: 99 })]).verdict, "inconclusive");
+  assert.equal(layoutVerdict([{ status: "ERROR", usage: { total_tokens: 0 } }]).verdict, "invalid");
+});

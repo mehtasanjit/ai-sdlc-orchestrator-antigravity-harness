@@ -27,6 +27,9 @@ import { fileURLToPath } from "node:url";
 
 import { readMmoSelectFile, writeMmoSelectFile } from "./mmoSelect.mjs";
 import { runChecks as runEnvChecks, renderText as renderEnvChecks } from "./env-checks.mjs";
+import { isMain } from "../scripts/lib/is-main.mjs";
+import { staleBuild } from "../scripts/lib/stale-build.mjs";
+import { MIN_NODE, meetsNodeFloor } from "../scripts/lib/node-floor.mjs";
 
 // ─── pure helpers ─────────────────────────────────────────────────────
 
@@ -414,11 +417,13 @@ export function pluginDiscoveryState(pluginRoot, read = readFileSync, exists = e
 /** Facts → ordered problem list. Pure. `blocking` fails the exit code. */
 export function evaluate({
   nodeMajor,
+  nodeVersion = null,
   agyCli = { present: false, version: null },
   claudeCli = { present: false, version: null },
   claudeLogin = null,
   hasNodeModules,
   hasDist,
+  staleBuild = null,
   discovery = { ok: true, problems: [] },
   env = {},
   vertex = null,
@@ -428,12 +433,12 @@ export function evaluate({
 }) {
   const problems = [];
 
-  if (nodeMajor < 20) {
+  if (nodeVersion ? !meetsNodeFloor(nodeVersion) : nodeMajor < 22) {
     problems.push({
       id: "node-version",
       severity: "blocking",
-      message: `Node ${nodeMajor} is too old — the bridge and the driver scripts need Node 20 or newer.`,
-      fix: "Install Node 20+ (https://nodejs.org) and re-run this script.",
+      message: `Node ${nodeVersion ?? nodeMajor} is too old — the bridge needs Node ${MIN_NODE} or newer (its undici dependency requires it).`,
+      fix: `Install Node ${MIN_NODE} or newer (https://nodejs.org) and re-run this script.`,
     });
   }
 
@@ -474,6 +479,14 @@ export function evaluate({
       id: "mcp-dependencies",
       severity: "blocking",
       message: "The bundled MCP server's dependencies are not installed — the bridge cannot start.",
+      fix: "Run this script with --fix (or: npm run build at the repo root).",
+    });
+  }
+  if (hasDist && staleBuild?.stale) {
+    problems.push({
+      id: "mcp-build-stale",
+      severity: "warning",
+      message: `The bundled MCP server's dist/ is older than its src/ (${staleBuild.files.slice(0, 3).join(", ")}): runs use the old build until it is rebuilt.`,
       fix: "Run this script with --fix (or: npm run build at the repo root).",
     });
   }
@@ -627,12 +640,14 @@ function observe(pluginRoot, env = process.env, projectRoot = process.cwd()) {
   const adcFile = adcPath();
   return {
     nodeMajor: nodeMajorFrom(process.versions.node),
+    nodeVersion: process.versions.node,
     agyCli: probeAgyCli(),
     claudeCli: probeClaudeCli(),
     claudeLogin: probeClaudeLogin(),
     hasGcloud: onPath("gcloud"),
     hasNodeModules: existsSync(nodeModules),
     hasDist: existsSync(distEntry),
+    staleBuild: staleBuild(mcpPaths(pluginRoot).serverDir),
     discovery: pluginDiscoveryState(pluginRoot),
     vertex: vertexCredentialState({
       env: realEnv,
@@ -770,7 +785,7 @@ function report({ ok, problems }, log) {
   return ok;
 }
 
-if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
+if (isMain(import.meta.url)) {
   const pluginRoot = dirname(dirname(fileURLToPath(import.meta.url)));
   const log = (m) => console.log(m);
   const shouldFix = process.argv.includes("--fix");

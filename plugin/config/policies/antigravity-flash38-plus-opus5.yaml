@@ -51,6 +51,11 @@ models:
     pricing_source: https://platform.claude.com/docs/en/about-claude/pricing
     pricing_last_verified: 2026-09-14
     max_output_tokens_absolute: 32000
+    # Sent as the SDK's settings.promptCacheTtl. Unset, Claude Code caches for
+    # 1h on the seat and 5m on arms A and B, so the wallet would set the
+    # cache-write rate. 1h because cross-packet reads land 13-17 min apart.
+    # Each event records the lifetime its writes used (prompt_cache_ttl).
+    prompt_cache_ttl: 1h
 
   # Gemini 3.8 Flash as a MODEL. One completion call per packet. Works on
   # GEMINI_API_KEY (AI Studio) or, unset, Vertex ADC at the same rates.
@@ -65,6 +70,10 @@ models:
     pricing_source: https://ai.google.dev/gemini-api/docs/pricing (AI Studio + Vertex global); https://cloud.google.com/vertex-ai/generative-ai/pricing (regional +10%)
     pricing_last_verified: 2026-09-14
     auth: { env: GEMINI_API_KEY }
+    # Sent as thinkingConfig.thinkingLevel LOW. Thinking counts against the
+    # output ceiling below and bills at the output rate; each attempt records
+    # the level and its thinking tokens.
+    reasoning: { tier: low }
     max_output_tokens_absolute: 8192
 
   # The SAME model reached as an AGENT (Antigravity SDK session). Vertex ADC
@@ -88,6 +97,12 @@ select:
     reason: "How the mechanical tier reaches Gemini 3.8: one completion call (cheap, predictable) or an agent session with tools and a workspace (costlier per packet, does its own reading and editing). Pick one per study and pin it."
 
 rules:
+  # The brownfield pre-check's dispatch smoke (brownfield-guide step 2). It
+  # proves the mechanical tier answers; preflight_dispatch already proves every
+  # model is reachable for free, so the smoke never needs Opus.
+  - when: { task_type: smoke }
+    use: gemini-flash
+    reason: "Pre-check dispatch smoke: proves the mechanical tier answers"
   - when: { phase: requirements_analysis }
     use: opus
     reason: "Judgment-heavy, low volume"
@@ -104,14 +119,27 @@ rules:
     use: opus
     reason: "Risk-bearing, low volume"
 
-  # Brownfield-mode phases — both premium.
-  - when: { phase: discovery }
-    use: opus
-    reason: "Judgment: understanding an unknown repo is high-stakes"
+  # Brownfield. No discovery rule: discovery is the conductor's own local
+  # read (brownfield-guide/discovery.md), logged as an in_session row.
   - when: { phase: change_plan }
     use: opus
     reason: "Judgment: delta design for feature-extend / refactor / deps"
 
+  # Root-cause analysis emits a note, not code; whichever phase the planner
+  # files it under, it is judgment.
+  - when: { task_type: bug_diagnose }
+    use: opus
+    reason: "Judgment: root-cause analysis"
+
+  # Above the codegen and tests rules, which would otherwise keep a failing
+  # packet on the mechanical tier forever.
+  - when: { phase: [codegen, tests], retry_count: { gte: 2 } }
+    use: opus
+    reason: "Escalation: 2 mechanical-tier attempts failed"
+
+  # The task types pipeline/SKILL.md and stacks/*.md tell the planner to
+  # use. An unlisted type falls to the default below and is stamped
+  # routing.fallback.
   - when:
       phase: codegen
       task_type:
@@ -131,6 +159,24 @@ rules:
         - frontend_util
         - frontend_config
         - frontend_html
+        - prisma_schema
+        - env_docs
+        - env_test_fixture
+        - test_unit
+        - test_integration
+        - docstring
+        - readme_section
+        - new_file_add
+        - existing_file_edit
+        - patch_apply
+        - bug_reproduce
+        - bug_fix_apply
+        - refactor_extract
+        - dependency_add
+        - test_add
+        - test_backfill
+        - doc_addition
+        - doc_update
     use: gemini-flash
     reason: "Schema-driven boilerplate"
   - when: { phase: tests }

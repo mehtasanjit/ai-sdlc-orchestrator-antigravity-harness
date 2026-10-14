@@ -14,7 +14,7 @@
 import { readFileSync, existsSync, readdirSync } from "node:fs";
 import { join, dirname, resolve } from "node:path";
 import { parse as parseYaml } from "yaml";
-import type { Policy, ModelConfig } from "./types.js";
+import type { Policy, ModelConfig, ReasoningConfig } from "./types.js";
 import { KNOWN_ADAPTER_IDS } from "./adapters/index.js";
 
 const SHIPPED_POLICY_DIR = resolve(
@@ -105,6 +105,7 @@ function validatePolicy(raw: any): Policy {
   if (!Array.isArray(raw.rules) || raw.rules.length === 0) {
     throw new Error("Policy: 'rules' (non-empty array) required");
   }
+  validateCostCap(raw.hard_cost_cap_usd);
   for (const m of raw.models) validateModel(m);
   const modelIds = new Set<string>(raw.models.map((m: ModelConfig) => m.id));
   const slotNames = validateSelect(raw, modelIds);
@@ -121,6 +122,22 @@ function validatePolicy(raw: any): Policy {
     }
   });
   return raw as Policy;
+}
+
+/**
+ * An empty `hard_cost_cap_usd:` key parses as null; it is refused rather than
+ * read as "no cap", because a cap that silently switches off is worse than a
+ * load error.
+ */
+function validateCostCap(cap: unknown) {
+  if (cap === undefined) return;
+  if (typeof cap !== "number" || !Number.isFinite(cap) || cap <= 0) {
+    throw new Error(
+      `Policy: 'hard_cost_cap_usd' must be a positive number of USD, got ` +
+        `${typeof cap === "number" ? String(cap) : JSON.stringify(cap)}. ` +
+        `Remove the key to run without a cap.`
+    );
+  }
 }
 
 /**
@@ -189,6 +206,8 @@ function validateModel(m: any) {
         `Register new adapters in adapters/index.ts.`
     );
   }
+  validateReasoning(m);
+  validatePromptCacheTtl(m);
   // pricing_override is the only way a policy block is billed, so it must be
   // unambiguous: a string "yes" or a flag with nothing to bill is refused at
   // load, before any run could be priced on a misread intent.
@@ -218,6 +237,41 @@ function validateModel(m: any) {
     if (m.pricing[k] !== undefined && typeof m.pricing[k] !== "number") {
       throw new Error(`Policy model '${m.id}': pricing.${k} must be number`);
     }
+  }
+}
+
+/** Only the Agent SDK adapter sends the pin; on any other adapter it would be a lifetime nothing applies. */
+function validatePromptCacheTtl(m: any) {
+  if (m.prompt_cache_ttl === undefined) return;
+  if (m.prompt_cache_ttl !== "5m" && m.prompt_cache_ttl !== "1h") {
+    throw new Error(`Policy model '${m.id}': prompt_cache_ttl must be 5m or 1h, got ${JSON.stringify(m.prompt_cache_ttl)}`);
+  }
+  if (m.adapter !== "claude-agent-sdk") {
+    throw new Error(
+      `Policy model '${m.id}': prompt_cache_ttl is applied only by the claude-agent-sdk adapter, not '${m.adapter}'. ` +
+        `Remove the key or change the adapter.`
+    );
+  }
+}
+
+const REASONING_TIERS: ReadonlyArray<NonNullable<ReasoningConfig["tier"]>> = ["minimal", "low", "medium", "high"];
+
+/**
+ * Both Gemini doors send `reasoning.tier` to the vendor, so an unknown tier is
+ * refused at load: the completion door would silently send none, and the
+ * agent worker exits on a level it does not know.
+ */
+function validateReasoning(m: any) {
+  if (m.reasoning === undefined) return;
+  if (!m.reasoning || typeof m.reasoning !== "object" || Array.isArray(m.reasoning)) {
+    throw new Error(`Policy model '${m.id}': reasoning must be a map, e.g. { tier: low } or { effort: high }`);
+  }
+  const tier = m.reasoning.tier;
+  if (tier !== undefined && !REASONING_TIERS.includes(tier)) {
+    throw new Error(
+      `Policy model '${m.id}': reasoning.tier must be one of ${REASONING_TIERS.join(", ")}, got ${JSON.stringify(tier)}. ` +
+        `Leave tier out to send no thinking level and keep the model's default.`
+    );
   }
 }
 
