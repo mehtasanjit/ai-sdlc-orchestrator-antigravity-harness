@@ -561,6 +561,7 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
           // this share of an in-session worker, so its receipt-only side calls
           // and unlogged tokens stay in the true total (review finding M4).
           transcript_logged_cost_usd: att.transcript_logged_cost_usd,
+          thinking_level: att.thinking_level,
         }));
         if (a.telemetry_path) {
           for (const ev of events) appendEvent(a.telemetry_path, ev);

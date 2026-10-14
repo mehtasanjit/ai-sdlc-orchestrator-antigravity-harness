@@ -1,15 +1,17 @@
 /**
- * GeminiFlashAdapter — Gemini 3.5 Flash with explicit context caching for
- * the stable project header. Auth-agnostic: the two doors live behind
- * `GeminiTransport`, picked from credentials at construction. Falls back to
- * implicit caching if explicit cache creation fails.
+ * GeminiFlashAdapter — one Gemini completion call per packet, with explicit
+ * context caching for the stable project header. Auth-agnostic: the two doors
+ * live behind `GeminiTransport`, picked from credentials at construction.
+ * Falls back to implicit caching if explicit cache creation fails.
  */
 
+import { ThinkingLevel } from "@google/genai";
 import type {
   AttemptRecord,
   ExecutionResult,
   ModelConfig,
   ModelPricing,
+  ReasoningConfig,
   TaskPacket,
 } from "../types.js";
 import { computeCostUsd, estimateTokens } from "../pricing.js";
@@ -29,9 +31,26 @@ export interface GeminiFlashOptions {
   now?: Clock;
 }
 
-// Fallback when the policy YAML omits max_output_tokens_absolute. 8192 is
-// the current Gemini 3.5 Flash ceiling.
+// Fallback when the model entry omits max_output_tokens_absolute. A
+// configured cap, not a verified vendor limit.
 const GEMINI_ABSOLUTE_OUTPUT_TOKENS_FALLBACK = 8192;
+
+const THINKING_LEVELS: Record<NonNullable<ReasoningConfig["tier"]>, ThinkingLevel> = {
+  minimal: ThinkingLevel.MINIMAL,
+  low: ThinkingLevel.LOW,
+  medium: ThinkingLevel.MEDIUM,
+  high: ThinkingLevel.HIGH,
+};
+
+/**
+ * The model entry's `reasoning.tier` as the `thinkingLevel` a request
+ * carries. Undefined sends no thinking setting, so the model's default level
+ * applies; Gemini counts thinking against `maxOutputTokens`.
+ */
+export function geminiThinkingLevel(reasoning?: ReasoningConfig): ThinkingLevel | undefined {
+  const tier = reasoning?.tier;
+  return tier !== undefined && Object.hasOwn(THINKING_LEVELS, tier) ? THINKING_LEVELS[tier] : undefined;
+}
 
 const MAX_DOUBLINGS = 3;
 
@@ -122,6 +141,7 @@ export class GeminiFlashAdapter implements ModelAdapter {
     // `__free_text__` marker means the caller wants markdown, not JSON.
     // Skip JSON mode; the marker never reaches the vendor (400 on unknown).
     const wantsJson = packet.outputSchema && !(packet.outputSchema as any).__free_text__;
+    const thinkingLevel = geminiThinkingLevel(this.modelConfig.reasoning);
 
     const attempts: AttemptRecord[] = [];
     let ceiling = Math.min(packet.budget.maxOutputTokens, absoluteCeiling);
@@ -151,6 +171,7 @@ export class GeminiFlashAdapter implements ModelAdapter {
         temperature: 0.2,
         maxOutputTokens: ceiling,
         ...(wantsJson ? { responseMimeType: "application/json" } : {}),
+        ...(thinkingLevel ? { thinkingConfig: { thinkingLevel } } : {}),
       };
       if (wantsJson) generationConfig.responseSchema = packet.outputSchema;
 
@@ -174,6 +195,7 @@ export class GeminiFlashAdapter implements ModelAdapter {
           success: false,
           error: err?.message ?? String(err),
           price_basis: price.basis,
+          thinking_level: thinkingLevel ?? null,
         });
         return this.finalizeResult(attempts, null, cacheHit, "vendor_error");
       }
@@ -189,14 +211,16 @@ export class GeminiFlashAdapter implements ModelAdapter {
       const promptTokens = usage.promptTokenCount ?? estimateTokens(userPrompt);
       // Output = candidates + thoughts (see billedOutputTokens). Estimate
       // stands in only when the vendor sent no usage block at all.
-      const outputTokens =
-        usage.candidatesTokenCount === undefined && usage.thoughtsTokenCount === undefined
-          ? estimateTokens(text)
-          : billedOutputTokens(usage);
+      const vendorCountedOutput =
+        usage.candidatesTokenCount !== undefined || usage.thoughtsTokenCount !== undefined;
+      const outputTokens = vendorCountedOutput ? billedOutputTokens(usage) : estimateTokens(text);
       const attemptTokens = {
         input: Math.max(0, promptTokens - cachedTokens),
         input_cached: cachedTokens,
         output: outputTokens,
+        // A share of `output`, never priced on its own. An absent
+        // thoughtsTokenCount counts as zero, as in billedOutputTokens.
+        ...(vendorCountedOutput ? { output_reasoning: usage.thoughtsTokenCount ?? 0 } : {}),
       };
 
       // Only MAX_TOKENS triggers doubling. STOP/SAFETY/RECITATION/OTHER are
@@ -214,6 +238,7 @@ export class GeminiFlashAdapter implements ModelAdapter {
         latency_ms: Date.now() - attemptStart,
         success: !hitOutputCap,
         price_basis: price.basis,
+        thinking_level: thinkingLevel ?? null,
       });
 
       if (!hitOutputCap) {
