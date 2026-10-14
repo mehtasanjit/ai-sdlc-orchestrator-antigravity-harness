@@ -169,3 +169,28 @@ setInterval(() => {}, 1000);
     assert.ok(existsSync(join(out, "manifest.json")));
   } finally { rmSync(proj, { recursive: true, force: true }); }
 });
+
+test("a quota stop from agy's own model waits and resumes the same conversation", { skip: built ? false : "bridge not built (npm run build)" }, () => {
+  const proj = mkdtempSync(join(tmpdir(), "agy-smoke-quota-"));
+  try {
+    copyFileSync(join(ROOT, "examples", "quick-demo", "brief.md"), join(proj, "brief.md"));
+    const out = join(proj, ".sdlc");
+    const run = (extra) => spawnSync(process.execPath, [
+      join(ROOT, "plugin", "agy", "run.mjs"),
+      `--project-root=${proj}`, `--output-dir=${out}`, "--policy=antigravity-flash38-plus-opus5", "--gates=auto-approve",
+      "--run-id=quota", "--allow-unverified-pin", `--agy-bin=${FAKE_AGY}`, ...extra,
+    ], { encoding: "utf8", timeout: 120_000, env: { ...process.env, FAKE_AGY_QUOTA_FIRST: "1" } });
+    const r = run(["--quota-waits=0"]);
+    assert.equal(r.status, 0, r.stderr + r.stdout);
+    assert.match(r.stdout, /hit its quota \(429\) in invocation 1 — resuming .* in 0s \(quota retry 1 of 1\)/);
+    const driver = JSON.parse(readFileSync(join(out, "driver-manifest.json"), "utf8"));
+    assert.equal(driver.completed, true);
+    assert.equal(driver.agy_invocations, 2);
+    assert.deepEqual(driver.driver_usage.invocations.map((i) => i.exit_status), [3, 0], "the quota stop is on the record");
+
+    rmSync(out, { recursive: true, force: true });
+    const none = run(["--quota-waits="]);
+    assert.notEqual(none.status, 0);
+    assert.match(none.stdout, /still over its quota after 0 wait\(s\)/, "with no waits configured the run stops and says why");
+  } finally { rmSync(proj, { recursive: true, force: true }); }
+});

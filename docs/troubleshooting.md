@@ -5,6 +5,7 @@
 | Symptom | Cause | Fix |
 |---|---|---|
 | `run failed: run: the driver pin is not live-verified — checks 1, 2, 4, 5, 6 … are still pending` | The pin gate. The listed checks have not been run in a signed-in `agy` session | Run the checks and record them in `docs/verification/p1-agy-runtime.md`, flip them to `pass` in `plugin/agy/telemetry/fairnessPin.mjs` in the same commit — or pass `--allow-unverified-pin` and accept `pin.verified: false` (`unverified_reason: "pending_checks"`) in the manifest |
+| `run …: agy's model hit its quota (429) … resuming … in 60s`, or `… still over its quota after 3 wait(s)` | agy's own model call was refused on Vertex quota (`driver-stderr.log`: `RESOURCE_EXHAUSTED (code 429)`) | Nothing, while it retries. If it gives up, wait for the quota to recover and re-run with the `--resume=` command it printed; `--quota-waits` sets longer waits |
 | `run: could not launch 'agy'` | Not on PATH in the shell that ran node | `export PATH="$HOME/.local/bin:$PATH"`, or `--agy-bin=$HOME/.local/bin/agy` |
 | `driver-stderr.log`: `Waiting for authentication (timeout 60s)…` then `authentication failed or timed out` | agy is not signed in; print mode cannot complete the browser flow | Run `agy` interactively once and finish Google Sign-In. `agy models` must list models before a run |
 | `driver-stderr.log` names an allow-rule and a soft-denied tool | `--dangerously-skip-permissions` missing (check 6) | `run.mjs` passes it; if you built the argv by hand, add it |

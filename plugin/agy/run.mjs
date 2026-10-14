@@ -21,7 +21,7 @@
  *                [--project-root=<path>] [--policy=<name>] [--run-id=<id>] \
  *                [--code-dir=<path>] --gates=auto-approve|auto-abort \
  *                [--mode=greenfield|brownfield] [--intent=<id>] [--seed=<text>] \
- *                [--resume=<conversation-id>] [--max-turns=<n>] \
+ *                [--resume=<conversation-id>] [--max-turns=<n>] [--quota-waits=60,180,600] \
  *                [--agy-bin=<path>] [--prompt-file=<path>] [--print-timeout=6h] \
  *                [--inline-env] [--keep-run-root] [--allow-unverified-pin] [--dry-run]
  *
@@ -58,6 +58,20 @@ export const PLUGIN_ROOT = dirname(AGY_DIR);
 export const HARNESS_ROOT = dirname(PLUGIN_ROOT);
 export const DEFAULT_POLICY = "antigravity-flash38-plus-opus5";
 export const DEFAULT_PRINT_TIMEOUT = "6h";
+/** Seconds to wait before each resume after agy's own model hit a quota (Vertex 429). */
+export const DEFAULT_QUOTA_WAITS_SEC = [60, 180, 600];
+
+/** agy stopped because its model refused on quota: agy marks it not retryable, but the conversation resumes after a wait. */
+export function quotaStop(result) {
+  return result?.status !== 0 && /RESOURCE_EXHAUSTED|\bcode 429\b/.test(String(result?.stderr ?? ""));
+}
+
+export function parseQuotaWaits(value) {
+  if (value === undefined) return DEFAULT_QUOTA_WAITS_SEC;
+  const waits = String(value).split(",").filter((w) => w !== "").map(Number);
+  if (waits.some((w) => !Number.isFinite(w) || w < 0)) throw new Error(`run: --quota-waits=${value} must be comma-separated seconds, e.g. 60,180,600.`);
+  return waits;
+}
 export const DEFAULT_MAX_TURNS = 12;
 
 /** Variables the launcher reports as set/unset in a dry run. Values are never printed. */
@@ -531,6 +545,7 @@ async function main(args) {
   if (!Number.isInteger(maxTurns) || maxTurns < 1) {
     throw new Error(`run: --max-turns=${args["max-turns"]} must be a positive integer.`);
   }
+  const quotaWaits = parseQuotaWaits(args["quota-waits"]);
   const printTimeout = args["print-timeout"] ?? DEFAULT_PRINT_TIMEOUT;
 
   const renderValues = {
@@ -677,8 +692,17 @@ async function main(args) {
     let invocations = 1;
     provisional(conversationId);
 
-    while (!interrupted && invocations < maxTurns && result.status === 0 && conversationId && !runIsComplete(outputDir, started, { before: staleSummary })) {
-      console.log(`run ${runId}: session incomplete after invocation ${invocations} (no SUMMARY.md yet) — resuming ${conversationId}`);
+    let quotaRetries = 0;
+    const resumable = () => result.status === 0 || (quotaStop(result) && quotaRetries < quotaWaits.length);
+    while (!interrupted && invocations < maxTurns && resumable() && conversationId && !runIsComplete(outputDir, started, { before: staleSummary })) {
+      if (result.status !== 0) {
+        const wait = quotaWaits[quotaRetries++];
+        console.log(`run ${runId}: agy's model hit its quota (429) in invocation ${invocations} — resuming ${conversationId} in ${wait}s (quota retry ${quotaRetries} of ${quotaWaits.length})`);
+        for (let left = wait * 1000; left > 0 && !interrupted; left -= 1000) await new Promise((r) => setTimeout(r, Math.min(1000, left)));
+        if (interrupted) break;
+      } else {
+        console.log(`run ${runId}: session incomplete after invocation ${invocations} (no SUMMARY.md yet) — resuming ${conversationId}`);
+      }
       result = await launch(
         buildAgyArgs({ slug, promptText: RESUME_PROMPT, projectRoot, outputDir, printTimeout, resumeConversationId: conversationId }),
       );
@@ -689,7 +713,7 @@ async function main(args) {
     if (!completed) {
       console.log(
         `run ${runId}: stopped after ${invocations} invocation(s) without this run's SUMMARY.md — ` +
-          (interrupted ? `interrupted (${interrupted}).` : invocations >= maxTurns ? `hit --max-turns=${maxTurns}.` : `agy exited ${result.status}.`) +
+          (interrupted ? `interrupted (${interrupted}).` : invocations >= maxTurns ? `hit --max-turns=${maxTurns}.` : quotaStop(result) ? `agy's model was still over its quota after ${quotaRetries} wait(s).` : `agy exited ${result.status}.`) +
           ` Artifacts so far are in the output directory; re-run with --resume=${conversationId ?? "<conversation-id>"} --run-id=${runId} to continue.`,
       );
     }
