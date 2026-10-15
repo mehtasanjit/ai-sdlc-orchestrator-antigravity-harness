@@ -75,7 +75,8 @@ Use the `AskUserQuestion` tool with:
   ```
 
   This starts the local policy console, opens the browser, and detects the save via `fs.watch`.
-  When it returns, print the one-liner it emitted and STOP.
+  When it returns, print the one-liner it emitted, hand over the start command (see "After a set"
+  below) and STOP.
 
 ## 2e — Credential check
 
@@ -91,7 +92,8 @@ Parse the JSON.
   node "${MMO_PLUGIN_ROOT}/scripts/setup-policy.mjs" --policy=<chosen> --project-root "$(pwd)"
   ```
 
-  Print `Policy set: <chosen>` and STOP.
+  Print `Policy set: <chosen>`, then hand over the start command (see "After a set" below) and
+  STOP.
 
 - If `ok: false` → print each entry in `missing` with its `fix` string, e.g.:
 
@@ -118,10 +120,27 @@ node "${MMO_PLUGIN_ROOT}/scripts/setup-policy.mjs" --policy=<name> --project-roo
 ```
 
 No browser. The script validates `<name>` against files in `plugin/config/policies/`, writes it to
-`.sdlc/project.json.default_policy`, and exits. Fails if `<name>` doesn't exist on disk — offer
+`.sdlc/project.json.default_policy`, and exits. On success, hand over the start command (see "After
+a set" below). Fails if `<name>` doesn't exist on disk — offer
 ``/mmo:policy` change` to author it, or list the shipped presets (the `.yaml` filenames under
 `plugin/config/policies/` — read the directory rather than reciting names, so the list can
 never go stale).
+
+# After a set — the start command
+
+A chat keeps the model it was started on, and the next run is priced and checked against the new
+policy's driver pin. Print the command that starts a chat on that pin:
+
+```bash
+node "${MMO_PLUGIN_ROOT}/agy/start-command.mjs" --project-root "$(pwd)"
+```
+
+Tell the user: `Start a NEW agy session in this folder with: <the printed command>` if it differs
+from the command this session was started with, before the next `/mmo:greenfield` or
+`/mmo:brownfield`. Say why: this chat stays on the slug it started with. The run's pin check
+(`check-driver-pin.mjs`) refuses a chat on another model at the run's start, and one at another
+effort passes it unnoticed, because agy's record does not show the effort. If the script exits non-zero, print its error: the new policy has no
+usable driver pin, and no run can start on it until it is fixed.
 
 # Notes
 

@@ -43,11 +43,13 @@ The report prints the **Cost lines** (both worker lines at $0, the driver line m
 
 ## 3. Open a NEW session in the folder
 
-Skills, rules, hooks and the bridge load when a session starts, in a trusted workspace. The session that set up the plugin does not see `/mmo:greenfield`. Open a fresh one:
+Skills, rules, hooks and the bridge load when a session starts, in a trusted workspace. The session that set up the plugin does not see `/mmo:greenfield`. Open a fresh one on the policy's driver pin, with the `agy --model …` command setup prints after "Setup complete":
 
 ```bash
-cd ../first-run && agy
+cd ../first-run && agy --model gemini-3.8-flash-high
 ```
+
+Without `--model` the chat runs on agy's default model, and the run refuses to start on it: it checks the model the chat ran on against `gemini-3.8-flash`, the model of the policy's `driver:` block. That check sees the model, not the effort, so type the slug exactly as printed.
 
 Answer **yes** when agy asks whether you trust the folder. `/skills` now lists the `mmo:` entries.
 
@@ -76,7 +78,7 @@ The pipeline pauses at four points:
 - **Gate 3** — after `security_review.md` is written.
 - **Gate 4** — after the final report.
 
-At each gate, the artifact prints on screen. Read it, then approve to continue or type feedback to redirect the phase. For the quick-demo brief you can approve every gate as-is. Each decision is appended to `.sdlc/gates.jsonl`.
+At each gate, the artifact prints on screen. Read it, then approve to continue or type feedback to redirect the phase. For the quick-demo brief you can approve every gate as-is. Each decision is recorded, with your reply word for word, in the run folder's `gates.jsonl`.
 
 **Wall-clock for the whole run:** minutes for quick-demo. Longer briefs (`workforce-ops`, `travel-ops`) take an hour or more.
 
@@ -115,9 +117,9 @@ npm start
 
 Then `curl http://localhost:3000/ping` — `{ "status": "ok", "time": "…" }` is what the brief asked for.
 
-## 8. The measured version
+## 8. The headless cost check
 
-An interactive run has no driver line. The run of record goes through the headless launcher, which pins the conductor's model and effort, answers the gates itself, and prices every conductor turn from the stream:
+The run you just made is how you use the harness. The headless launcher is the cost check: it runs the same pipeline unattended, answers the gates itself, passes the driver pin as `--model` on every invocation, and records the conductor's usage from agy's own stream:
 
 ```bash
 node plugin/agy/run.mjs --brief=examples/quick-demo/brief.md --project-root=/tmp/demo --gates=auto-approve --run-id=quick-demo-1 --dry-run

@@ -31,9 +31,13 @@ import { buildManifest, dispatchKeys, modelShares } from "../mcp/model-dispatch/
 export { dispatchKeys };
 import { resolveGeminiBackend } from "../mcp/model-dispatch/dist/adapters/geminiEndpoint.js";
 import { readPin, driverSlug, pendingPinChecks, pinVerification } from "./telemetry/fairnessPin.mjs";
+import { unpricedCalls } from "./telemetry/driverPrice.mjs";
+import { offPinModels } from "./telemetry/event-reader.mjs";
 import { driverRange, driverRangeNote, driverRangeNotes } from "./telemetry/driverRange.mjs";
 import { isMain } from "../scripts/lib/is-main.mjs";
-import { conductorWork } from "./telemetry/conductorWork.mjs";
+import { conductorWork, runMode } from "./telemetry/conductorWork.mjs";
+import { testVerdict } from "../scripts/lib/test-record.mjs";
+import { approvalVerdict } from "../scripts/lib/gate-record.mjs";
 import { inferRunId, readGates, readRunMarkers, runOutcome, sessionWindow } from "./telemetry/runWindow.mjs";
 import { studiesConsoleFields } from "./telemetry/consoleFields.mjs";
 
@@ -183,9 +187,9 @@ export const GEMINI_WORKER_ADAPTERS = new Set(["mcp:model-dispatch", "antigravit
 /**
  * The cost line one bridge event belongs to, from what the event itself
  * recorded: its adapter, else its leaf or model in the policy, else the
- * vendor prefix of its model name. Interactive runs leave no policy
- * snapshot and events older than the adapter stamp carry none, so the name
- * is the last word for them.
+ * vendor prefix of its model name. A run folder without a policy snapshot
+ * and events older than the adapter stamp carry none, so the name is the
+ * last word for them.
  */
 export function workerLineOf(event, policy = null) {
   const models = policy?.models ?? [];
@@ -247,18 +251,22 @@ export function costLines({ dispatched, modeled, policy, pin, env = process.env,
   const driver = driverMeasured
     ? null
     : { line: "driver", kind: "unmeasured", measured: false, model: pin?.model ?? null, billing_mode: pin?.billing_mode ?? null, basis: UNMEASURED_DRIVER_BASIS, ...sum([]), thinking_tokens: 0 };
+  const unpriced = unpricedCalls(modeled);
   return [
     driver ?? {
       line: "driver",
       kind: "modeled",
       model: pin?.model ?? null,
+      models: [...new Set(modeled.map((e) => e.model).filter(Boolean))],
       billing_mode: pin?.billing_mode ?? null,
-      basis: modeled.some((e) => e.usage_source === "agy-local-record")
+      basis: (modeled.some((e) => e.usage_source === "agy-local-record")
         ? `MODELED from agy's local conversation record (${modeled.length} model call(s), read by plugin/agy/collect-driver-usage.mjs) at ${driverPriceText(modeled, pin)} (${pin?.billing_mode ?? "seat"}); thinking at the output rate, cache reads at the cached rate`
-        : `MODELED from agy stream-json usage at ${driverPriceText(modeled, pin)} (${pin?.billing_mode ?? "seat"}); thinking at the output rate, cache reads at the cached rate${driverRangeNote(driverUsage)}`,
+        : `MODELED from agy stream-json usage at ${driverPriceText(modeled, pin)} (${pin?.billing_mode ?? "seat"}); thinking at the output rate, cache reads at the cached rate${driverRangeNote(driverUsage)}`)
+        + floorNote(unpriced, modeled.length),
       ...sum(modeled),
       thinking_tokens: modeled.reduce((s, e) => s + (e.output_tokens_reasoning ?? 0), 0),
       ...driverRange(driverUsage),
+      ...(unpriced.length ? { incomplete: true, unpriced_calls: unpriced } : {}),
     },
     { line: "gemini_workers", kind: "cash", ...lineWallet(gemini, { wallet: door.wallet }), leaf: door.leaf, models: [...new Set(gemini.map((e) => e.model))], ...sum(gemini), ...attempts(gemini) },
     { line: "claude_worker", kind: claudeKind, ...claudeWallets, models: [...new Set(claude.flatMap((e) => modelShares(e).map((s) => s.model)))], ...sum(claude), ...attempts(claude),
@@ -274,10 +282,21 @@ export function costLines({ dispatched, modeled, policy, pin, env = process.env,
 
 /** Which price the modeled driver turns were billed at, from what each event recorded. */
 export function driverPriceText(modeled, pin) {
-  const periods = [...new Set(modeled.filter((e) => e.price_period).map((e) => `${e.price_period.from}..${e.price_period.to ?? "open"}`))];
+  const priced = modeled.filter((e) => !e.unpriced);
+  if (modeled.length && !priced.length) return "no card: the price list prices none of the models agy recorded";
+  const periods = [...new Set(priced.filter((e) => e.price_period).map((e) => `${e.price_period.from}..${e.price_period.to ?? "open"}`))];
   if (!periods.length) return `the ${pin?.model ?? "driver"} card in the policy's driver block`;
-  const custom = modeled.some((e) => e.price_basis === "custom");
-  return `the dated price list for ${pin?.model ?? "the driver"} (period ${periods.join(", ")}${custom ? "; custom-priced" : ""})`;
+  const custom = priced.some((e) => e.price_basis === "custom");
+  const onPin = (model) => !pin || !model || offPinModels([model], pin, driverSlug(pin)).length === 0;
+  const models = [...new Set(priced.map((e) => (onPin(e.model) ? pin?.model ?? "the driver" : e.model)))];
+  return `the dated price list for ${models.join(" and ")} (period ${periods.join(", ")}${custom ? "; custom-priced" : ""})`;
+}
+
+/** The basis's last clause when some calls have no price: the figure is a floor. */
+export function floorNote(unpriced, calls) {
+  if (!unpriced.length) return "";
+  const n = unpriced.reduce((s, u) => s + u.calls, 0);
+  return `. AT LEAST this figure: ${n} of ${calls} call(s) ran on a model the price list cannot price (${unpriced.map((u) => `${u.model}, ${u.calls} call(s)`).join("; ")}), so their tokens are counted and their dollars are in no figure`;
 }
 
 /** One line per cost line, workers first, each with its kind and never a total. */
@@ -287,6 +306,10 @@ export function describeCostLines(lines) {
     const name = l.line.replace("_", " ");
     if (l.kind === "unmeasured") return `${name} NOT MEASURED`;
     const range = l.cost_usd_low !== undefined ? ` (range $${l.cost_usd_low}–$${l.cost_usd})` : "";
+    if (l.incomplete) {
+      const n = l.unpriced_calls.reduce((s, u) => s + u.calls, 0);
+      return `${name} ${l.kind} at least $${l.cost_usd}${range} (${n} of ${l.calls} call(s) unpriced: ${l.unpriced_calls.map((u) => u.model).join(", ")})`;
+    }
     return `${name} ${l.kind} $${l.cost_usd}${range}`;
   }).join(" · ");
 }
@@ -335,7 +358,12 @@ export function buildHarnessManifest({ runDir, policyName, runId, env = process.
     base.duration_sec = Math.max(1, base.session_window.duration_sec);
   }
   const gates = readGates(runDir);
-  const outcome = runOutcome({ runDir, gates, launcher: driverManifest, markers, since: markers.start ?? driverManifest?.started_at ?? null });
+  const mode = runMode(runDir, driverManifest?.mode ?? markers.mode);
+  const tests = mode === "brownfield" ? testVerdict(runDir, pass) : null;
+  const endRecord = readJson(join(runDir, "run-end.json"));
+  const end = endRecord?.run_id === pass ? endRecord : null;
+  const approvals = approvalVerdict(runDir, pass);
+  const outcome = runOutcome({ runDir, gates, launcher: driverManifest, markers, since: markers.start ?? driverManifest?.started_at ?? null, tests, end, approvals });
 
   let pin = null;
   try { pin = policy ? readPin(policy) : null; } catch { pin = null; }
@@ -370,6 +398,7 @@ export function buildHarnessManifest({ runDir, policyName, runId, env = process.
     driver_cost_usd: driverLine.cost_usd,
     driver_cost_basis: driverLine.basis,
     driver_turns: modeled.length,
+    ...(driverLine.incomplete ? { driver_cost_is_floor: true, driver_unpriced_calls: driverLine.unpriced_calls } : {}),
     ...(driverLine.cost_usd_low !== undefined ? { driver_cost_usd_low: driverLine.cost_usd_low } : {}),
     ...(driverLine.resume_check ? { driver_cost_resume_check: driverLine.resume_check } : {}),
     ...(driverLine.resumed_without_earlier_record ? { driver_resumed_without_earlier_record: true } : {}),
@@ -387,11 +416,19 @@ export function buildHarnessManifest({ runDir, policyName, runId, env = process.
     agy_invocations: driverManifest?.agy_invocations ?? null,
     completed: outcome.completed,
     status: outcome.status,
+    ...(outcome.incomplete_reason ? { incomplete_reason: outcome.incomplete_reason } : {}),
+    ...(outcome.stop ? { stop: outcome.stop } : {}),
+    ...(tests ? { tests } : {}),
+    ...(approvals.changed.length ? { approved_artifact_changed: approvals.changed } : {}),
+    ...(approvals.unchecked ? { approved_artifacts_unchecked: approvals.unchecked } : {}),
+    ...(approvals.record_problem ? { gate_record_untrusted: approvals.record_problem } : {}),
     write_guard: driverManifest
       ? (driverManifest.write_guard ?? { state: "off", reason: "headless run recorded before write_guard existed, so whether the write hook ran is not known" })
       : { state: "hook", reason: "interactive session: plugin/agy/hooks/write-contract-check.mjs runs before every file write (plugin/hooks.json)" },
     gate_mode: driverManifest ? driverManifest.gates ?? null : "prompt",
     gates,
+    ...(outcome.gate_lines_ignored ? { gate_lines_ignored: outcome.gate_lines_ignored } : {}),
+    ...(outcome.auto_decisions_in_prompt_run ? { auto_decisions_in_prompt_run: outcome.auto_decisions_in_prompt_run } : {}),
     pin_rejection: driverManifest?.pin_rejection ?? null,
     ...conductorWork({ runDir, telemetry: dispatched, mode: driverManifest?.mode, completed: outcome.completed }),
     ...(otherRuns.length ? { other_runs_in_directory: otherRuns } : {}),
@@ -426,6 +463,7 @@ export function buildHarnessManifest({ runDir, policyName, runId, env = process.
   const cost = {
     dispatched_cash_usd: seat ? r6(base.total_cost_usd - seatUsd) : base.total_cost_usd,
     driver_modeled_usd: driverLine.cost_usd,
+    ...(driverLine.incomplete ? { driver_modeled_usd_is_floor: true } : {}),
     ...(driverLine.kind === "unmeasured" ? { driver_measured: false } : {}),
     ...(driverLine.cost_usd_low !== undefined ? { driver_modeled_usd_low: driverLine.cost_usd_low } : {}),
     ...(seat ? { claude_seat_modeled_usd: seatUsd } : {}),
@@ -437,12 +475,6 @@ export function buildHarnessManifest({ runDir, policyName, runId, env = process.
 }
 
 /**
- * The driver pin and whether a model agy recorded proves it held. A launcher
- * record written before `observed_models` existed stamped `verified` from the
- * checks alone, so it is re-derived from the models that record names. An
- * interactive run's models are the collector's, from agy's conversation record.
- */
-/**
  * An interactive run collects its driver before SUMMARY.md and again after
  * run.end. When only the first ran, the conductor's calls from then to the
  * end of the run (Gate 4, the run.end step) are in no figure.
@@ -453,6 +485,14 @@ export function driverCollectionGap(collector, markers) {
   return { collected_until: until, run_ended_at: markers.end, uncollected_sec: Math.round((Date.parse(markers.end) - Date.parse(until)) / 1000) };
 }
 
+/**
+ * The driver pin and whether a model agy recorded proves it held. A launcher
+ * record written before `observed_models` existed stamped `verified` from the
+ * checks alone, so it is re-derived from the models that record names. An
+ * interactive run's models are the collector's, from agy's conversation record,
+ * which names the model without its effort (check 14), so `verified` there
+ * covers the model name only.
+ */
 export function pinRecord({ driverManifest = null, pin = null, collector = null }) {
   if (driverManifest?.pin) {
     const recorded = driverManifest.pin;
@@ -467,6 +507,7 @@ export function pinRecord({ driverManifest = null, pin = null, collector = null 
   return {
     model: pin.model, effort: pin.effort, slug: driverSlug(pin), billing_mode: pin.billing_mode,
     ...pinVerification({ pending, observed, offPin: collector?.model_mismatch ?? [] }),
+    effort_verified: false,
     pending_checks: pending, observed_models: observed,
   };
 }

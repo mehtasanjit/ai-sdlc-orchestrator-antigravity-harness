@@ -66,14 +66,31 @@ Do not run `agy plugin install` or `agy plugin import` on this repo: both copy t
 
 ## 6. Hand over
 
-Tell the user to start a **new** `agy` session in the project — plugins, rules, hooks and MCP servers load when a session begins — answer **yes** to the trust prompt, and then run `/mmo:greenfield` (empty folder + brief) or `/mmo:brownfield` (existing repo). In that session `/skills` lists the `mmo:` entry points.
+Tell the user to start a **new** `agy` session in the project — plugins, rules, hooks and MCP servers load when a session begins — with the `agy --model …` command the wizard prints after "Setup complete", answer **yes** to the trust prompt, and then run `/mmo:greenfield` (empty folder + brief) or `/mmo:brownfield` (existing repo). In that session `/skills` lists the `mmo:` entry points. For the default policy the command, run in the project folder, is:
+
+```bash
+agy --model gemini-3.8-flash-high
+```
+
+Give the reason in one sentence: without `--model` the chat runs on agy's default model, and the run refuses to start on it, because `plugin/agy/check-driver-pin.mjs` checks the model it ran on against the pin's model before anything is dispatched. For another policy the slug differs (the `driver:` block's `model_name` and `reasoning.effort`); this prints the project's own command:
+
+```bash
+node ../ai-sdlc-orchestrator-antigravity-harness/plugin/agy/start-command.mjs --project-root "$(pwd)"
+```
 
 ## 7. Verify later
+
+From the project, the same checks as the wizard with no questions, ending with the project's start command:
+
+```bash
+node ../ai-sdlc-orchestrator-antigravity-harness/plugin/agy/verify-setup.mjs --project-root "$(pwd)"
+```
+
+`npm run verify` in the clone checks the clone, not the project, and prints no start command. The offline test suite:
 
 ```bash
 cd ../ai-sdlc-orchestrator-antigravity-harness
 npm test          # offline, free: 120+ root tests and the bridge suite
-npm run verify    # the same checks as the wizard, no questions
 ```
 
 A headless dry run prints the pinned `agy` invocation with credentials reported as set/unset only:

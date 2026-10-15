@@ -59,12 +59,15 @@ test("worker_cost_usd is the cash worker lines of cost.lines, and the cable carr
     for (const key of CONSOLE_CABLE_STRINGS) assert.ok(typeof h.cable[key] === "string" && h.cable[key].length, `cable.${key}`);
     assert.deepEqual(h.cable.driver_models, ["gemini-3.8-flash"]);
     assert.equal(h.cable.worker_sdk, WORKER_SDK);
-    assert.match(h.cable.driver_display, /^antigravity-cli 1\.3\.0 · gemini-3\.8-flash \(high\) · Google seat/);
+    assert.match(h.cable.driver_display, /^antigravity-cli 1\.3\.0 · gemini-3\.8-flash \(high, effort not checked\) · Google seat/, "an interactive run's effort is the policy's, not one agy recorded");
     assert.match(h.cable.worker_display, /claude-opus-5 via claude-agent-sdk, gemini-3\.8-flash via mcp:model-dispatch/);
     assert.equal(h.cable.worker_transport, "Gemini: Gemini API key · Claude: Anthropic API key");
     assert.match(h.cable.driver_cost_note, /MODELED, not invoiced/);
     assert.equal(h.driver_cost_usd, m.cost.lines[0].cost_usd);
     assert.deepEqual(Object.keys(h).filter((k) => /total/.test(k)), [], "no figure that adds the driver to the workers");
+
+    writeFileSync(join(dir, "driver-manifest.json"), JSON.stringify({ run_id: "r1", policy: POLICY, pin: { model: "gemini-3.8-flash", effort: "high", slug: "gemini-3.8-flash-high", billing_mode: "seat", verified: true, pending_checks: [], observed_models: ["gemini-3.8-flash-high"] } }));
+    assert.match(build(dir).harness.cable.driver_display, /· gemini-3\.8-flash \(high\) ·/, "a headless run passed the slug, effort included, to agy itself");
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 

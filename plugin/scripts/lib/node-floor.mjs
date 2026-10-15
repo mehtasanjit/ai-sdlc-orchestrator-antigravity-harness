@@ -1,7 +1,8 @@
 /**
- * The oldest Node the plugin runs on: the bridge's undici 8.5 declares
- * engines.node >=22.19.0. Kept equal to `engines` in both package.json files
- * and the CI node-version; tools/test/node-floor.test.mjs checks all three.
+ * The oldest Node the plugin supports, and the one CI tests on. Kept equal to
+ * `engines` in both package.json files and the CI node-version, and inside
+ * every locked package's engines.node range; tools/test/node-floor.test.mjs
+ * checks all four.
  */
 export const MIN_NODE = "22.19.0";
 

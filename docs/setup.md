@@ -32,7 +32,7 @@ Headless, if a future agy stops expanding `${VAR}` ([check 5](verification/p1-ag
 | `<project>/.sdlc/project.json` | `default_policy`, the off-limits defaults | `plugin/scripts/setup-policy.mjs` (the policy console) |
 | `<project>/.sdlc/local/mmo-select.json` | `MMO_SELECT` when the agent path is chosen | `tools/setup.mjs --agent`, `npm run verify -- --enable-agent` |
 
-`node tools/setup.mjs --project-root <project>` prints eight numbered steps. ✓ is done, ! is advisory (a run works, with a limit named), ✗ is blocking (a run would halt at preflight or the first dispatch). `npm run verify` runs the same checks with no questions; `--fix` builds the bridge.
+`node tools/setup.mjs --project-root <project>` prints eight numbered steps. ✓ is done, ! is advisory (a run works, with a limit named), ✗ is blocking (a run would halt at preflight or the first dispatch). `npm run verify -- --project-root=/path/to/your/project`, in the clone, runs the same checks with no questions and ends with the project's start command; `--fix` builds the bridge. Without `--project-root` it checks the clone itself and prints no start command.
 
 ## Providers
 
@@ -135,6 +135,8 @@ node tools/setup.mjs --project-root /path/to/your/project
 ```
 
 `npm test` is offline and free. `npm run build` compiles the bridge under `plugin/mcp/model-dispatch/dist/`, which is gitignored and must be rebuilt after every pull that touches the bridge. The wizard's `--yes` takes every default, `--policy=<name>` skips the browser, `--no-agent` skips the door question.
+
+The wizard ends with the command that starts the run session in the project, on the policy's driver pin: `agy --model gemini-3.8-flash-high` for the default policy. Without `--model` the chat runs on agy's default model, and the run refuses to start on it: `plugin/agy/check-driver-pin.mjs` checks the model it ran on against the pin's model before anything is dispatched. `node plugin/agy/start-command.mjs --project-root=/path/to/your/project` prints the command again.
 
 ## Before any paid run
 

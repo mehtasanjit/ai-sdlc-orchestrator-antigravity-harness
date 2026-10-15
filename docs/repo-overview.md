@@ -14,7 +14,7 @@ Four things ship out of this repo:
 |---|---|
 | The plugin | Skills, rules and hooks that agy loads at session start from `.agents/plugins/mmo/`. Lives in [plugin/](../plugin/). |
 | The bridge | A small Node/TypeScript MCP server bundled inside the plugin that routes each phase to the right model and records what it cost. Lives in [plugin/mcp/model-dispatch/](../plugin/mcp/model-dispatch/). |
-| The headless driver | `run.mjs` and its helpers under [plugin/agy/](../plugin/agy/): the pinned `agy --print` invocation, the dispatch fallback, the modeled driver cost, the code-written manifest. The measured runs go through it. |
+| The headless driver | `run.mjs` and its helpers under [plugin/agy/](../plugin/agy/): the pinned `agy --print` invocation, the dispatch fallback, the modeled driver cost, the code-written manifest. It is the cost check: the same pipeline unattended, with the conductor's usage read from agy's own stream. |
 | The docs and examples | Everything under [docs/](.) and [examples/](../examples/) — setup guides, architecture notes, the runtime verification record, and the briefs. |
 
 ## How a run works, in one paragraph

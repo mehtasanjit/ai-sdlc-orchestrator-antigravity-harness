@@ -2,11 +2,11 @@
 
 Run date 2026-10-14 · `develop` at `18bcdc7` · agy `1.3.5` · policy `antigravity-flash38-plus-opus5` · `--gates=auto-approve`
 
-> **For:** the end-to-end proof the 13 Oct review asked for: one headless greenfield run and one headless brownfield run on the fixed code, with the cost checked. Historical record. **Also see:** [../running.md](../running.md#measured-runs-the-greenfield-and-brownfield-proof-runs) · [p1-agy-runtime.md](p1-agy-runtime.md).
+> **For:** the end-to-end proof the 13 Oct review asked for: one headless greenfield run and one headless brownfield run on the fixed code, with the cost checked. Historical record. **Also see:** [../running.md](../running.md#the-cost-check-the-greenfield-and-brownfield-proof-runs) · [p1-agy-runtime.md](p1-agy-runtime.md).
 
 ## Verdict
 
-Both runs completed, and both pass every cost check in [running.md](../running.md#measured-runs-the-greenfield-and-brownfield-proof-runs). Each line re-prices from its tokens at the dated list card. The driver line is one figure across a resume and matches agy's own conversation record to the token. Cash and modeled dollars are never summed. The runs found five defects, none in cost: four in the brownfield write guard and one in how a quota stop ends a run.
+Both runs completed, and both pass every cost check in [running.md](../running.md#the-cost-check-the-greenfield-and-brownfield-proof-runs). Each line re-prices from its tokens at the dated list card. The driver line is one figure across a resume and matches agy's own conversation record to the token. Cash and modeled dollars are never summed. The runs found five defects, none in cost: four in the brownfield write guard and one in how a quota stop ends a run.
 
 ## Wallets
 

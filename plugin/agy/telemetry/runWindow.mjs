@@ -1,11 +1,14 @@
 /**
  * A run's own start, end and outcome, read from its folder: the `run.start`
  * and `run.end` lines plugin/scripts/mmo-log.mjs appends to orchestrator.log,
- * gates.jsonl, and SUMMARY.md.
+ * gates.jsonl, SUMMARY.md, run-end.json and the test record.
  */
 
 import { existsSync, readFileSync, statSync } from "node:fs";
 import { basename, join } from "node:path";
+
+import { LAUNCHER_STOP_REASON } from "../../scripts/write-contract.mjs";
+import { GATE_RECORD_WRITER, readGateLines } from "../../scripts/lib/gate-record.mjs";
 
 // MMO_LOG_PREFIX can change the prefix, so a marker is found by what follows it.
 const MARKER = /(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z) +[A-Z]+ +(run\.start|run\.end)(?: (.*))?$/;
@@ -53,7 +56,13 @@ export function readRunMarkers(runDir, runId = null) {
   const declared = isoOrNull(first?.fields.started_at);
   const start = first ? (declared && declared <= first.at ? declared : first.at) : null;
   const end = last && (!start || last.at >= start) ? last.at : null;
-  return { start, end, outcome: end ? last.fields.outcome ?? null : null, start_declared: Boolean(first && declared && start === declared) };
+  const outcome = end ? last.fields.outcome ?? null : null;
+  return {
+    start, end, outcome,
+    mode: first?.fields.mode ?? null,
+    stop: outcome === "stopped" ? { reason: last.fields.reason ?? null, needs: last.fields.needs ?? null } : null,
+    start_declared: Boolean(first && declared && start === declared),
+  };
 }
 
 const seconds = (start, end) => Math.max(0, Math.round((Date.parse(end) - Date.parse(start)) / 1000));
@@ -76,18 +85,24 @@ export function sessionWindow({ launcher = null, markers = {}, dispatch = null }
   return { start, end, duration_sec: seconds(start, end), anchor, exact: anchor === "markers" };
 }
 
-/** One entry per gates.jsonl line that names a gate; null when the file is absent. */
+/**
+ * One entry per gates.jsonl line that names a gate; null when the file is
+ * absent. A line plugin/scripts/record-gate.mjs wrote keeps its SHA-256, the
+ * reply it recorded and `written_by`; a hand-written one has none of them.
+ */
 export function readGates(runDir) {
-  const path = join(runDir, "gates.jsonl");
-  if (!existsSync(path)) return null;
-  return readFileSync(path, "utf8").split("\n").filter((l) => l.trim())
-    .map((l) => { try { return JSON.parse(l); } catch { return null; } })
-    .filter((g) => g && typeof g === "object" && g.gate != null)
+  const lines = readGateLines(runDir);
+  if (lines === null) return null;
+  return lines
+    .filter((g) => g.gate != null)
     .map((g) => ({
       gate: Number.isFinite(Number(g.gate)) ? Number(g.gate) : g.gate,
       decision: g.decision ?? null,
       ...(g.artifact ? { artifact: g.artifact } : {}),
       ...(g.ts ? { ts: g.ts } : {}),
+      ...(g.written_by === GATE_RECORD_WRITER
+        ? { sha256: g.sha256 ?? null, ...(g.condition ? { condition: g.condition } : {}), reply: g.reply ?? null, written_by: g.written_by }
+        : {}),
     }));
 }
 
@@ -96,24 +111,48 @@ const accepted = (decision) => /^(auto-)?(approved?|accept(ed)?)$/i.test(String(
 const aborted = (decision) => /^(auto-)?abort(ed)?$/i.test(String(decision ?? "").trim());
 
 /**
- * `completed`: SUMMARY.md written during this run and the final gate accepted.
- * The headless launcher's own verdict stands when it recorded one.
- * `status`: interrupted, aborted, completed, awaiting_acceptance (the report
- * exists, the final gate has no accepting line yet) or incomplete.
+ * `completed`: SUMMARY.md written during this run and the final gate accepted
+ * (the headless launcher's own verdict when it recorded one), and, when
+ * `tests` says the run has a test command, a passing test record, and, when
+ * `approvals` is given, every gate-approved artifact as its gate approved it.
+ * Once a run has record-gate lines, a hand-written line decides nothing; in
+ * a chat (no launcher record), neither does an `auto-*` line, which no
+ * person answered (`auto_decisions_in_prompt_run`).
+ * `status`: interrupted, aborted, stopped (the run's own stop record: a
+ * `run.end` line or a run-end.json the launcher did not write), completed,
+ * awaiting_acceptance (the report exists, the final gate has no accepting
+ * line yet) or incomplete.
  */
-export function runOutcome({ runDir, gates, launcher = null, markers = {}, since = null }) {
+export function runOutcome({ runDir, gates, launcher = null, markers = {}, since = null, tests = null, end = null, approvals = null }) {
   const summaryPath = join(runDir, "SUMMARY.md");
   // A second's slack for filesystems that store whole-second mtimes.
   const summary = existsSync(summaryPath) && (!since || statSync(summaryPath).mtimeMs >= Date.parse(since) - 1000);
-  const last = new Map((gates ?? []).map((g) => [g.gate, g.decision]));
+  const all = gates ?? [];
+  const recorded = all.some((g) => g.written_by === GATE_RECORD_WRITER) ? all.filter((g) => g.written_by === GATE_RECORD_WRITER) : all;
+  const unattended = launcher ? [] : recorded.filter((g) => /^auto-/i.test(String(g.decision ?? "")));
+  const counted = recorded.filter((g) => !unattended.includes(g));
+  const last = new Map(counted.map((g) => [g.gate, g.decision]));
   const finalAccepted = accepted(last.get(FINAL_GATE));
-  const completed = typeof launcher?.completed === "boolean" ? launcher.completed : summary && finalAccepted;
+  const finished = typeof launcher?.completed === "boolean" ? launcher.completed : summary && finalAccepted;
+  const testsHeld = !tests?.required || tests.passed === true;
+  const approvalsHeld = !approvals || approvals.held;
+  const completed = finished && testsHeld && approvalsHeld;
+  const stop = markers.stop ?? (end?.outcome === "stopped" && end.reason !== LAUNCHER_STOP_REASON ? { reason: end.reason ?? null, needs: end.needs ?? null } : null);
   const status = launcher?.interrupted ? "interrupted"
     : [...last.values()].some(aborted) || aborted(markers.outcome) ? "aborted"
+    : stop ? "stopped"
     : completed ? "completed"
-    : summary ? "awaiting_acceptance"
+    : summary && testsHeld && approvalsHeld ? "awaiting_acceptance"
     : "incomplete";
-  return { completed, status, summary_written: summary };
+  const why = [...(testsHeld ? [] : [`the run's tests did not pass: ${tests.reason}`]), ...(approvalsHeld ? [] : [approvals.reason])];
+  const ignored = all.length - recorded.length;
+  return {
+    completed, status, summary_written: summary,
+    ...(stop ? { stop } : {}),
+    ...(summary && why.length ? { incomplete_reason: why.join("; ") } : {}),
+    ...(ignored ? { gate_lines_ignored: ignored } : {}),
+    ...(unattended.length ? { auto_decisions_in_prompt_run: unattended.map((g) => ({ gate: g.gate, decision: g.decision, ...(g.artifact ? { artifact: g.artifact } : {}) })) } : {}),
+  };
 }
 
 /**

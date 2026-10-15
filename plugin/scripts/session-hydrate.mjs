@@ -22,12 +22,17 @@
  *     baseline: { present, git_head, built_at, staleness_hint } | null,
  *     recent_runs: [{ run_id, intent, started_at, outcome, files_touched, spend_usd }, …],
  *     recent_runs_total: N,
- *     resume: { pending: bool, run_id, section, checkpoint, at, staleness } | null,
+ *     resume: { pending: bool, kind, section, at } (setup) or
+ *             { pending: bool, kind, run_id, state_path, phase, gate, checkpoint, status, at, contract_live? } (run) | null,
  *     concurrent: { possible: bool, pid, run_id, started_at } | null }
+ *
+ * A run's resume state is its own `.sdlc/runs/<run-id>/state.json` (lib/run-state.mjs);
+ * `contract_live: true` marks the run whose write contract still binds the project.
  */
 
 import { existsSync, readFileSync, statSync } from "node:fs";
 import { resolve, dirname, join } from "node:path";
+import { pendingRunState } from "./lib/run-state.mjs";
 
 const MMO_REL = ".sdlc";
 const MAX_RECENT_RUNS = 3;
@@ -116,7 +121,6 @@ function baselineHint(sdlc) {
 // ─── resume state ────────────────────────────────────────────────────
 
 function readResume(sdlc) {
-  const s = safeReadJson(join(sdlc, "local", "state.json"));
   const setup = safeReadJson(join(sdlc, "local", "setup-status.json"));
 
   // Setup-status is checked first; an interrupted setup is more urgent than an
@@ -131,19 +135,8 @@ function readResume(sdlc) {
     };
   }
 
-  if (s && s.status && s.status !== "complete" && s.status !== "aborted") {
-    return {
-      pending: true,
-      kind: "run",
-      run_id: s.run_id ?? null,
-      phase: s.phase ?? null,
-      checkpoint: s.checkpoint ?? s.next_packet_index ?? null,
-      status: s.status,
-      at: s.timestamp ?? s.updated_at ?? null,
-    };
-  }
-
-  return null;
+  const run = pendingRunState(dirname(sdlc));
+  return run ? { pending: true, kind: "run", ...run } : null;
 }
 
 // ─── concurrent-run advisory (v1 marker file, not a real lock) ───────

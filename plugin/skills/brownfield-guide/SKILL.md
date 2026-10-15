@@ -46,6 +46,26 @@ from this moment (`run_started_at`, used at Phase 9):
 date -u +%Y-%m-%dT%H:%M:%SZ
 ```
 
+Then check that this chat runs on the policy's driver pin (interactive only; a headless launch
+passes the pin to agy itself and skips every `check-driver-pin.mjs` step in this guide):
+
+```bash
+node "${MMO_PLUGIN_ROOT}/agy/check-driver-pin.mjs" --since=<run_started_at> --project-root="$(pwd)"
+```
+
+It reads the model calls agy has recorded for this chat and compares them with the pin.
+
+- **Exit 0** — every recorded call is the pin. Continue.
+- **Exit 1** — refused. Print its message verbatim and stop: run no pre-check, dispatch nothing.
+  The message names the model this chat runs on, the pin, and the command to restart agy on the
+  pin (`agy --model <slug>`). The user quits this chat, restarts agy with that command in this
+  folder, and invokes the same `/mmo:` command again.
+- **Exit 3** — not checked: agy's record holds no call for this chat yet, or a conversation's
+  record could not be read (the message names it). Say so in one line —
+  never as a pass — and continue; run the same command again before the first paid dispatch
+  (step 2's dispatch smoke, or Gate 0 when the pre-check is cached).
+- **Exit 2** — print the error and stop.
+
 Then invoke:
 
 ```bash
@@ -62,11 +82,22 @@ Read the JSON. Three cases:
 - **`resume.pending: true` with `kind: "run"`** — a previous task run was interrupted at phase
   &lt;phase&gt;. Print *"A previous &lt;intent&gt; run (`&lt;run_id&gt;`) was interrupted at phase &lt;phase&gt;.
   Would you like to resume it, or start fresh?"* Accept `resume`, `discard`, or `abort`. If
-  `resume`, follow the resume path in [plugin/skills/pipeline/SKILL.md](/plugin/skills/pipeline/SKILL.md).
+  `resume`, first check this chat against the pin the run started under (its
+  `policy_snapshot.yaml`), with the same exits as above:
+  `node "${MMO_PLUGIN_ROOT}/agy/check-driver-pin.mjs" --since=<run_started_at> --run-id=<run_id> --project-root="$(pwd)"`
+  — then follow the resume path in [plugin/skills/pipeline/SKILL.md](/plugin/skills/pipeline/SKILL.md).
+  `resume.contract_live: true` means that run still holds the project's write contract: until it
+  is resumed or discarded, that contract judges every write, so a new run cannot even write its
+  own run folder; say so. With `status: "complete"` it passed Gate 4 and stopped before its
+  close-out; `resume` then means finishing that close-out: the pipeline's run-end markers, then
+  step 7.
   If `discard`, end the interrupted run so its contract stops holding the project — ask first,
   since ending a run is the user's decision:
   `node "${MMO_PLUGIN_ROOT}/scripts/write-contract.mjs" --abandon --run-id=<run_id> --reason="discarded at resume" --project-root="$(pwd)"`
-  — then clear `.sdlc/local/state.json` and continue to step 2.
+  — an exit 2 saying there is no freeze record means the run stopped before Gate 0 froze a
+  contract; carry on. Then rewrite that run's state file (`resume.state_path`, normally
+  `.sdlc/runs/<run_id>/state.json`) with `"status": "aborted"` and a new `at`, so it is not offered
+  again, and continue to step 2.
 
 - **`resume.pending: null`** — normal flow. Print the one-line `marker` from the hydrate
   output (e.g. *"SDLC: 3 prior runs (last: docs, 2d ago); baseline at abc1234; no open resume
@@ -98,8 +129,10 @@ Agent-side steps (1 = discovery smoke, 3 = dispatch smoke) — you run yourself:
 
 3. **Dispatch smoke.** One Gemini Flash call. The policy routes `task_type: "smoke"` to the
    mechanical tier; the free `preflight_dispatch` at Rule 0 already proves every model the policy
-   names is reachable, so the smoke never goes to Opus. Write this TaskPacket to
-   `.sdlc/runs/<run-id>/smoke-packet.json`:
+   names is reachable, so the smoke never goes to Opus. If step 1's `check-driver-pin.mjs` exited
+   3, run it again first: a second exit 3 means the conductor's model cannot be checked, so tell the
+   user and ask whether to dispatch anyway (`continue` / `abort`); exit 1 stops the run as in step
+   1. Write this TaskPacket to `.sdlc/runs/<run-id>/smoke-packet.json`:
    ```json
    { "id": "smoke-1", "phase": "pre_check", "task_type": "smoke", "module": "smoke",
      "instruction": "Return the literal string OK", "inputs": [], "outputSchema": { "type": "object" },
@@ -221,9 +254,15 @@ Write the brief to `.sdlc/runs/<run-id>/intent_brief.md` with this heading contr
 ## Task type          (omit this heading entirely when the intent has no task_types)
 ## Files in scope
 ## Files off-limits
+## Test command       (the command Gate 0 confirmed, or `none`)
 ## Acceptance criteria
 ## Non-goals
 ```
+
+"Test command" holds, on its first line, the command Gate 0 confirmed, or `none` when the user
+confirmed the project has no tests. It is the reader's copy: Gate 0 freezes the command with the
+contract (`--test-command`, section 5), and code reads only the frozen one. A run with a test command
+completes only when `plugin/scripts/test-run.mjs` recorded a passing run of it (pipeline Phase 7).
 
 "Task type" holds the chosen `id` verbatim (e.g. `doc_update`), not the label — Phase 4 in
 `pipeline/SKILL.md` reads it back to set the generated TaskPacket's `task_type` field directly,
@@ -232,7 +271,10 @@ instead of inferring it from context. A policy can then route `doc_update` diffe
 `task_type` is already a routing key.
 
 Fill in "Files in scope" and "Files off-limits" with your best guess based on discovery + intent
-+ the user's description. These are proposals; Gate 0 lets the user adjust before commit.
++ the user's description. These are proposals; Gate 0 lets the user adjust before commit. A file
+in scope only on a condition ("`src/index.js` — if route error-handling is needed") keeps its
+condition next to it: Gate 0 shows it as conditional, and the freeze records it with
+`--conditional`, never in the allowlist.
 
 # 5. Gate 0 — Discovery Confirmation
 
@@ -242,7 +284,8 @@ template from [plugin/skills/pipeline/SKILL.md](/plugin/skills/pipeline/SKILL.md
 "Gate 0"), filling in:
 
 - **Stack** — top-detected from `baseline.stacks`. Ask if it's right; accept overrides.
-- **Test command** — `baseline.test_command_proposed`. Accept an override.
+- **Test command** — `baseline.test_command_proposed`. Accept an override, or `none` when the
+  project has no tests: the run then skips Phase 7 and completes without a test run.
 - **Auth mode** — `vendor`, the only mode on this runtime: every call is billed through the
   bridge on the credentials in the shell that launched agy. Required — preflight aborts
   without it. State it rather than ask; there is no in-session `estimated` mode on this runtime.
@@ -259,7 +302,8 @@ template from [plugin/skills/pipeline/SKILL.md](/plugin/skills/pipeline/SKILL.md
 - **Existing AI setup** — verbatim list from `baseline.ai_configs_detected`. Default is
   **OFF-LIMITS** for all of them. User can move any into the allowlist by naming it explicitly.
 - **Intent** — from step 4a. Re-confirm, even when the handover pre-set it.
-- **File scope** — the allowlist and off-limits proposed from step 4b. Let the user edit.
+- **File scope** — the allowlist, the conditional files with their conditions, and off-limits
+  proposed from step 4b. Let the user edit.
 
 Reply options: `approved` / `revise: <comments>` / `abort`.
 
@@ -275,12 +319,41 @@ extra confirmation lines with the plugin's default behavior. Example:
 >   into them. Continue? [assumed yes unless you say otherwise]
 
 On `approved`:
-1. Freeze the confirmed allowlist + off-limits by code — never write the contract yourself:
+0. Record the answer by code. Write the user's reply, word for word, to
+   `.sdlc/runs/<run-id>/gate-reply.txt` with your file tool, then:
+   ```bash
+   node "${MMO_PLUGIN_ROOT}/scripts/record-gate.mjs" --run-id=<run-id> --gate=0 --decision=approved \
+     --artifact=.sdlc/runs/<run-id>/discovery.md --reply-file=.sdlc/runs/<run-id>/gate-reply.txt --project-root="$(pwd)"
+   ```
+   Every later gate is recorded the same way (pipeline "Gate delivery"); never write `gates.jsonl`
+   yourself, and never put a reply on the command line.
+1. Check this chat against the pin of the policy Gate 0 confirmed, and snapshot that policy into
+   the run folder (interactive only). It writes `.sdlc/runs/<run-id>/policy_snapshot.yaml`, which
+   the manifest reads the pin from:
+   ```bash
+   node "${MMO_PLUGIN_ROOT}/agy/check-driver-pin.mjs" --since=<run_started_at> --run-id=<run-id> --policy=<policy> --project-root="$(pwd)"
+   ```
+   The exits are step 1's. On exit 1 stop: nothing is frozen yet, so there is nothing to end. On
+   exit 3, tell the user the conductor's model could not be checked and ask whether to continue
+   (`continue` / `abort`).
+2. Freeze the confirmed allowlist, off-limits and test command by code — never write the contract
+   yourself:
    ```bash
    node "${MMO_PLUGIN_ROOT}/scripts/write-contract.mjs" --freeze --run-id=<run-id> \
-     --allowlist='<JSON array of globs>' --off-limits='<JSON array of globs>' --project-root="$(pwd)"
+     --allowlist='<JSON array of globs>' --off-limits='<JSON array of globs>' \
+     --test-command='<the confirmed test command>' \
+     --conditional='<path>' --condition='<the condition Gate 0 showed>' --project-root="$(pwd)"
    ```
-   Add `--strict-write=off` only when the user passed it. It writes `.sdlc/local/write-contract.json`
+   Pass one `--conditional`/`--condition` pair per file Gate 0 showed as in scope only on a
+   condition, and none when there are none. The hook refuses such a file until the user says the
+   condition holds: ask them, quoting the condition, and record a yes with
+   `record-gate.mjs --gate=0 --decision=approved-conditional --artifact=<path>`, the reply through
+   `gate-reply.txt` as in step 0.
+   Pass `--test-command` once per package command in a monorepo, each as it runs from the repo root
+   (`pnpm --filter api test`), or `--test-command=none` when the user confirmed the project has no
+   tests; `--freeze` refuses a freeze without one. Phase 7 runs
+   only a frozen command: `test-run.mjs` refuses any other before it runs, and the close-out
+   counts a pass of no other. Add `--strict-write=off` only when the user passed it. It writes `.sdlc/local/write-contract.json`
    and the run's freeze record `.sdlc/runs/<run-id>/contract.lock.json`. The PreToolUse hook
    (`plugin/agy/hooks/write-contract-check.mjs`, wired in `plugin/hooks.json`) reads the contract
    before every file write and refuses off-limits or not-in-allowlist paths at the tool boundary.
@@ -288,17 +361,18 @@ On `approved`:
    the contract is edited after this freeze. A refusal names the rule; do not route around it.
    Headless (`agy -p`) on agy 1.3.5 loads the same hook; the run record's `harness.write_guard`
    says whether it judged this run's writes.
-2. Initialise the run's undo record:
+3. Initialise the run's undo record:
    ```bash
    node "${MMO_PLUGIN_ROOT}/scripts/write-provenance.mjs" --init --run-id=<run-id> --intent=<intent> --project-root="$(pwd)"
    ```
-3. Update `.sdlc/runs/<run-id>/intent_brief.md` with the final scope.
-4. Mark the run's start (interactive only; a headless launch records its own window). The manifest
+4. Update `.sdlc/runs/<run-id>/intent_brief.md` with the final scope, and the confirmed test
+   command under `## Test command`.
+5. Mark the run's start (interactive only; a headless launch records its own window). The manifest
    and the driver collector read this line; `<run_started_at>` is the time recorded in step 1:
    ```bash
    node "${MMO_PLUGIN_ROOT}/scripts/mmo-log.mjs" --event=run.start --run-id=<run-id> --started-at=<run_started_at> --mode=brownfield --intent=<intent> --policy=<policy> --project-root="$(pwd)"
    ```
-5. Continue to step 6.
+6. Continue to step 6.
 
 On `revise: <comments>` — rewrite the affected parts and re-show Gate 0.
 
@@ -311,6 +385,9 @@ contract stops holding the project:
 ```bash
 node "${MMO_PLUGIN_ROOT}/scripts/write-contract.mjs" --close --run-id=<run-id> --outcome=aborted --project-root="$(pwd)"
 ```
+
+A run whose tests cannot pass ends as `stopped` instead, with its reason and what it needs from the
+user (pipeline Phase 7).
 
 # 6. Run the pipeline
 
@@ -331,7 +408,10 @@ Follow [plugin/skills/pipeline/SKILL.md](../pipeline/SKILL.md) with:
 
 You then drive phases 1 through 9 with gates 1, 2, 3, 4 as usual — but branched by
 intent (see the Intent matrix in SKILL.md). At each gate, relay the gate prompt to the user; do
-not answer on their behalf.
+not answer on their behalf. A reviewer or refinement that asks for the user's approval is a gate
+too: stop, ask, and record the answer with `record-gate.mjs`. Never write an approval,
+resolution or escalation note yourself, and never edit an approved artifact without a recorded
+`revise`; the hook refuses the write.
 
 # 7. Close out
 
@@ -343,6 +423,13 @@ After the final report:
    ```bash
    node "${MMO_PLUGIN_ROOT}/scripts/write-contract.mjs" --close --run-id=<run-id> --project-root="$(pwd)"
    ```
+   It refuses to end the run as `completed` unless `.sdlc/runs/<run-id>/test-run.json` records a
+   passing run of the frozen test command, and the hook allowed no project write after that run
+   started; or Gate 0 froze `none`. When a project write came after it, run the recorder again
+   (pipeline Phase 7 step 2). When the tests do not pass, stop the run as pipeline Phase 7 says.
+   It also refuses while an approved artifact differs from the SHA-256 its gate recorded, or a
+   `revise` re-opened one and no approval followed: show the user what changed and record their
+   answer.
 2. Append a row to `.sdlc/ledger.md` (human-readable) and `.sdlc/ledger.json` (machine mirror).
    Any cost in the row is the labelled lines the manifest rebuild after `run.end` printed, copied;
    never a single total. Those carry the complete driver line; `SUMMARY.md`'s stops before Gate 4.

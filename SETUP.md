@@ -23,7 +23,7 @@ Nothing under `~/.gemini/` or `~/.claude/` is written. There is no global instal
 | ! | Advisory — a run works, with a limit named | Say what the limit is |
 | ✗ | Blocking — a run would halt at preflight or the first dispatch | Name the variable or tool and where it goes; do not try to fix credentials yourself |
 
-`npm run verify` runs the same checks with no questions; `--fix` builds the bridge.
+`npm run verify -- --project-root=<project>` runs the same checks with no questions and ends with the project's start command; `--fix` builds the bridge. Without `--project-root` it checks the harness clone, not a project, and prints no start command.
 
 ## 3. The Claude wallets — two arms and the seat
 
@@ -80,7 +80,14 @@ The conductor runs on your Google seat by default: no invoice exists, so its cos
 
 ## 7. Hand over
 
-Setup ends by telling the user to start a **new** `agy` session in the project and to answer **yes** to the trust prompt. Plugins, rules, hooks and MCP servers load when a session begins, only in a trusted workspace; the setup session has none of them. Then `/mmo:greenfield` or `/mmo:brownfield`.
+Setup ends by telling the user to start a **new** `agy` session in the project with the `agy --model …` command the wizard prints after "Setup complete", and to answer **yes** to the trust prompt. Plugins, rules, hooks and MCP servers load when a session begins, only in a trusted workspace; the setup session has none of them. Then `/mmo:greenfield` or `/mmo:brownfield`.
+
+| Policy | Start command |
+|---|---|
+| `antigravity-flash38-plus-opus5` (the default) | `agy --model gemini-3.8-flash-high` |
+| Any other | `node plugin/agy/start-command.mjs --project-root <project>` prints it: the slug from the policy's `driver:` block, derived the way `run.mjs` derives `--model` |
+
+Tell the user why in one sentence: without `--model` the chat runs on agy's default model, and `plugin/agy/check-driver-pin.mjs` refuses the run at its start, because it checks the model the chat ran on against the pin's model. agy's local record names the model, not the effort, so a chat started at another effort passes that check: give the slug exactly as printed.
 
 ## 8. Before any paid run
 

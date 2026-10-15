@@ -237,34 +237,31 @@ test("--guard-active-run reports active:false when there is no state.json", () =
   } finally { cleanup(dir); }
 });
 
-test("--guard-active-run reports active:true for an in-flight run", () => {
+function writeRunState(dir, runId, state) {
+  const runDir = join(dir, ".sdlc", "runs", runId);
+  mkdirSync(runDir, { recursive: true });
+  writeFileSync(join(runDir, "state.json"), typeof state === "string" ? state : JSON.stringify(state));
+}
+
+test("--guard-active-run reports active:true for an in-flight run, from its own run folder", () => {
   const dir = newTmpDir();
   try {
-    const stateDir = join(dir, ".sdlc", "local");
-    mkdirSync(stateDir, { recursive: true });
-    writeFileSync(join(stateDir, "state.json"), JSON.stringify({
-      run_id: "run-abc",
-      phase: "codegen",
-      status: "in_progress",
-    }));
+    writeRunState(dir, "run-abc", { run_id: "run-abc", phase: "codegen", gate: 3, status: "gate_pending", at: "2026-10-14T10:00:00Z" });
     const r = run(dir, ["--guard-active-run"]);
     assert.equal(r.code, 0);
     const parsed = JSON.parse(r.stdout);
     assert.equal(parsed.active, true);
     assert.equal(parsed.run_id, "run-abc");
     assert.equal(parsed.phase, "codegen");
+    assert.equal(parsed.status, "gate_pending");
   } finally { cleanup(dir); }
 });
 
 test("--guard-active-run treats terminal statuses as inactive", () => {
   const dir = newTmpDir();
   try {
-    const stateDir = join(dir, ".sdlc", "local");
-    mkdirSync(stateDir, { recursive: true });
     for (const status of ["complete", "completed", "aborted", "failed"]) {
-      writeFileSync(join(stateDir, "state.json"), JSON.stringify({
-        run_id: "run-x", phase: "docs", status,
-      }));
+      writeRunState(dir, "run-x", { run_id: "run-x", phase: "docs", status });
       const r = run(dir, ["--guard-active-run"]);
       assert.equal(r.code, 0, `status=${status}: ${r.stderr}`);
       const parsed = JSON.parse(r.stdout);
@@ -273,12 +270,42 @@ test("--guard-active-run treats terminal statuses as inactive", () => {
   } finally { cleanup(dir); }
 });
 
+test("--guard-active-run judges the run that wrote its state last, not an older interrupted one", () => {
+  const dir = newTmpDir();
+  try {
+    writeRunState(dir, "20261014-090000-bugfix-a", { phase: "requirements", gate: 1, status: "gate_pending", at: "2026-10-14T09:05:00Z" });
+    writeRunState(dir, "20261014-120000-bugfix-b", { phase: "final_acceptance", gate: 4, status: "complete", at: "2026-10-14T12:30:00Z" });
+    assert.equal(JSON.parse(run(dir, ["--guard-active-run"]).stdout).active, false);
+  } finally { cleanup(dir); }
+});
+
+test("--guard-active-run treats a run with an end record as over, whatever its state says", () => {
+  const dir = newTmpDir();
+  try {
+    writeRunState(dir, "run-closed", { phase: "final_acceptance", gate: 4, status: "gate_pending" });
+    writeFileSync(join(dir, ".sdlc", "runs", "run-closed", "run-end.json"), JSON.stringify({ run_id: "run-closed", outcome: "completed" }));
+    assert.equal(JSON.parse(run(dir, ["--guard-active-run"]).stdout).active, false);
+  } finally { cleanup(dir); }
+});
+
+test("--guard-active-run still reads .sdlc/local/state.json from a run that started before the move", () => {
+  const dir = newTmpDir();
+  try {
+    mkdirSync(join(dir, ".sdlc", "local"), { recursive: true });
+    writeFileSync(join(dir, ".sdlc", "local", "state.json"), JSON.stringify({ run_id: "run-old", phase: "codegen", status: "in_progress" }));
+    const parsed = JSON.parse(run(dir, ["--guard-active-run"]).stdout);
+    assert.equal(parsed.active, true);
+    assert.equal(parsed.run_id, "run-old");
+
+    writeRunState(dir, "run-new", { phase: "final_acceptance", gate: 4, status: "complete" });
+    assert.equal(JSON.parse(run(dir, ["--guard-active-run"]).stdout).active, false, "a run folder's state outranks the old shared file");
+  } finally { cleanup(dir); }
+});
+
 test("--guard-active-run tolerates malformed state.json (treats as inactive)", () => {
   const dir = newTmpDir();
   try {
-    const stateDir = join(dir, ".sdlc", "local");
-    mkdirSync(stateDir, { recursive: true });
-    writeFileSync(join(stateDir, "state.json"), "not valid json {");
+    writeRunState(dir, "run-bad", "not valid json {");
     const r = run(dir, ["--guard-active-run"]);
     assert.equal(r.code, 0);
     const parsed = JSON.parse(r.stdout);

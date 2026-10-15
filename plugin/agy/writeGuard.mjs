@@ -6,26 +6,30 @@
  * contract does not allow.
  */
 import { spawnSync } from "node:child_process";
-import { existsSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { readFileSync, statSync, writeFileSync } from "node:fs";
 import { isAbsolute, join, relative, sep } from "node:path";
 
-import { matchGlob } from "./hooks/write-contract-check.mjs";
+import { INSTALL_OUTPUT, conditionApproved, conditionalEntry, matchGlob } from "./hooks/write-contract-check.mjs";
 import { HARDCODED_OFF_LIMITS } from "../scripts/lib/off-limits.mjs";
-import { contractState, readContract, runEnded } from "../scripts/lib/contract-state.mjs";
+import { contractState, guardDecisions, readContract, runEnded } from "../scripts/lib/contract-state.mjs";
+import { conditionalApprovals, readGateLines } from "../scripts/lib/gate-record.mjs";
 import { LAUNCHER_STOP_REASON, endRun } from "../scripts/write-contract.mjs";
 
 export const NO_CONTRACT_REASON = "no write contract was frozen for this run, so the hook had nothing to judge (a greenfield run takes none)";
 export const NO_HOOK_DECISION_REASON =
   "the write hook recorded no decision for this run: agy loaded no hooks (print mode before agy 1.3.5 loads none, p1-agy-runtime.md check 1), or the run wrote nothing";
 
-/** The hook's decisions that name this run, from the project's `.sdlc/local/guard-decisions.jsonl`. */
+/**
+ * The hook's decisions that name this run, from the project's `.sdlc/local/guard-decisions.jsonl`.
+ * `installed`: the hook allowed a package install, whose output it names as INSTALL_OUTPUT.
+ */
 export function hookDecisions(projectRoot, runId) {
-  const path = join(projectRoot, ".sdlc", "local", "guard-decisions.jsonl");
-  if (!existsSync(path)) return { judged: 0, refused: 0, paths: [] };
-  const mine = readFileSync(path, "utf8").split("\n").flatMap((l) => { try { const d = JSON.parse(l); return d?.run_id === runId ? [d] : []; } catch { return []; } });
+  const mine = guardDecisions(projectRoot, runId);
   const rel = (p) => (isAbsolute(p) ? relative(projectRoot, p) : p).split(sep).join("/");
-  const paths = [...new Set(mine.flatMap((d) => [...(d.paths ?? []), ...(d.path ? [d.path] : [])]).map(rel))];
-  return { judged: mine.length, refused: mine.filter((d) => d.decision === "deny").length, paths };
+  const named = (d) => [...(d.paths ?? []), ...(d.path ? [d.path] : [])].map(rel);
+  const paths = [...new Set(mine.flatMap(named))];
+  const installed = mine.some((d) => d.decision === "allow" && named(d).includes(INSTALL_OUTPUT));
+  return { judged: mine.length, refused: mine.filter((d) => d.decision === "deny").length, paths, installed };
 }
 
 /** Changed paths no hook decision for the run named: a file, or anything under a judged `node_modules/`. */
@@ -75,11 +79,18 @@ export function changedSince(before, after) {
   return [...paths].filter((p) => a.get(p) !== b.get(p) && !p.startsWith(".sdlc/")).sort();
 }
 
-/** The changed paths a contract does not allow: always-off-limits, its off_limits, or outside its allowlist. */
-export function outsideContract(paths, contract) {
+/**
+ * The changed paths a contract does not allow: always-off-limits, its off_limits, a conditional file no
+ * Gate 0 record opened (`opened`), or outside its allowlist.
+ * After an install the hook allowed, `node_modules/` is that install's output, not a write outside the contract.
+ */
+export function outsideContract(paths, contract, { installed = false, opened = [] } = {}) {
   // An ignored folder is listed as `dir/`: judged as the folder and as anything under it.
   const any = (p, list, anyCase) => (list ?? []).some((g) => [p, p.endsWith("/") ? `${p}x` : p].some((q) => matchGlob(q, g, { anyCase }) || matchGlob(q, `**/${g}`, { anyCase })));
-  return paths.filter((p) => any(p, HARDCODED_OFF_LIMITS, true) || any(p, contract?.off_limits, true) || !(contract?.allowlist ?? []).some((g) => matchGlob(p, g)));
+  const inScope = (p) => (conditionalEntry(p, contract) ? conditionApproved(p, opened) : (contract?.allowlist ?? []).some((g) => matchGlob(p, g)));
+  return paths
+    .filter((p) => !(installed && p.startsWith("node_modules/")))
+    .filter((p) => any(p, HARDCODED_OFF_LIMITS, true) || any(p, contract?.off_limits, true) || !inScope(p));
 }
 
 /**
@@ -91,7 +102,8 @@ export function finishWriteGuard({ projectRoot, runId, statusBefore, outcome, st
   if (contract?.run_id !== runId) return { state: "off", reason: NO_CONTRACT_REASON };
   const hook = hookDecisions(projectRoot, runId);
   const changed = changedSince(statusBefore, status(projectRoot));
-  const outside = outsideContract(changed, contract);
+  const opened = conditionalApprovals(readGateLines(join(projectRoot, ".sdlc", "runs", runId)));
+  const outside = outsideContract(changed, contract, { installed: hook.installed, opened });
   const unjudged = unjudgedChanges(changed, hook.paths);
   const guard = hook.judged
     ? {
@@ -101,7 +113,7 @@ export function finishWriteGuard({ projectRoot, runId, statusBefore, outcome, st
         hook_decisions: { judged: hook.judged, refused: hook.refused },
       }
     : { state: "off", reason: NO_HOOK_DECISION_REASON };
-  guard.contract = { run_id: runId, allowlist: contract.allowlist ?? [], off_limits: contract.off_limits ?? [] };
+  guard.contract = { run_id: runId, allowlist: contract.allowlist ?? [], off_limits: contract.off_limits ?? [], ...(contract.conditional ? { conditional: contract.conditional } : {}) };
   guard.after_run_check = { files_changed: changed.length, outside_contract: outside, unjudged_changes: unjudged };
   if (contractState(projectRoot).binding && !runEnded(projectRoot, runId)) {
     endRun(projectRoot, runId, { outcome, reason: LAUNCHER_STOP_REASON });

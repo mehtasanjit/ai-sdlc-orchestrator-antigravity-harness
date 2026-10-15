@@ -24,12 +24,14 @@
  */
 
 import { readFileSync, writeFileSync, mkdirSync, existsSync, renameSync } from "node:fs";
-import { dirname, extname, resolve } from "node:path";
+import { dirname, extname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { readMmoSelectFile } from "./mmoSelect.mjs";
 import { isMain } from "../scripts/lib/is-main.mjs";
 import { staleBuild, staleBuildWarning } from "../scripts/lib/stale-build.mjs";
+import { readTestRecord, TEST_RECORD_FILE, TEST_RECORD_WRITER } from "../scripts/lib/test-record.mjs";
+import { runMode } from "./telemetry/conductorWork.mjs";
 
 const BRIDGE_CLIENT = resolve(
   dirname(fileURLToPath(import.meta.url)),
@@ -148,7 +150,7 @@ function writeResult(outPath, payload) {
  * and they accrue to the driver loop rather than here; the reason string
  * carries that so the row explains itself.
  */
-export function buildLogEventArgs({ phase, taskType, module, reason, policyName, telemetryPath, runId }) {
+export function buildLogEventArgs({ phase, taskType, module, reason, policyName, telemetryPath, runId, testRun = null }) {
   if (!phase) throw new Error("dispatch: --log-phase=<state> is required for --log-phase.");
   if (!telemetryPath) {
     throw new Error("dispatch: --telemetry=<path> is required for --log-phase — an unwritten event is not a record.");
@@ -157,6 +159,21 @@ export function buildLogEventArgs({ phase, taskType, module, reason, policyName,
   if (kind !== "skipped" && kind !== "in_session") {
     throw new Error(`dispatch: --task-type must be 'skipped' or 'in_session', got '${kind}'.`);
   }
+  if (phase === "test_run" && testRun && runId && testRun.run_id !== runId) testRun = null;
+  // Greenfield Phase 7 runs its tests by hand: its row has no record to copy.
+  const testRow = phase === "test_run" && kind === "in_session" && (testRun || runMode(dirname(resolve(telemetryPath))) === "brownfield");
+  if (testRow && !testRun) {
+    throw new Error(
+      `dispatch: a test_run row records the test run ${TEST_RECORD_WRITER} wrote, and ${join(dirname(resolve(telemetryPath)), TEST_RECORD_FILE)} holds none for this run. ` +
+        `Run the test command through ${TEST_RECORD_WRITER} first.`,
+    );
+  }
+  const testFields = testRow
+    ? { success: testRun.status === "passed", test_status: testRun.status ?? null, test_exit_code: testRun.exit_code ?? null }
+    : { success: true };
+  const testReason = testRow
+    ? `${JSON.stringify(testRun.command ?? "?")} ${testRun.status ?? "?"}, exit code ${testRun.exit_code ?? "none"} (attempt ${testRun.attempt ?? 1}, recorded by ${TEST_RECORD_WRITER})`
+    : null;
   // Snake_case to match the bridge's declared inputSchema — camelCase reaches
   // the handler as undefined and fails inside appendEvent, not at validation.
   return {
@@ -175,6 +192,7 @@ export function buildLogEventArgs({ phase, taskType, module, reason, policyName,
         policy_version: 1,
         rule_index: -1,
         rule_reason:
+          testReason ??
           reason ??
           (kind === "skipped"
             ? "phase skipped for this intent — no model call made"
@@ -184,9 +202,22 @@ export function buildLogEventArgs({ phase, taskType, module, reason, policyName,
       input_tokens_cached: 0,
       output_tokens: 0,
       cost_usd: 0,
-      success: true,
+      ...testFields,
       retry_count: 0,
     },
+  };
+}
+
+/** What a --log-phase call leaves in --out: the row it logged, never a bare "ok" that reads as a verdict. */
+export function logReceipt(toolArgs, reply) {
+  const e = toolArgs.event;
+  return {
+    logged: e.phase,
+    task_type: e.task_type,
+    success: e.success,
+    ...("test_status" in e ? { test_status: e.test_status, test_exit_code: e.test_exit_code } : {}),
+    telemetry_path: toolArgs.telemetry_path,
+    reply,
   };
 }
 
@@ -210,6 +241,7 @@ export async function runDispatch(args, { connect, env = process.env } = {}) {
       policyName: args.policy,
       telemetryPath: args.telemetry,
       runId: typeof args["run-id"] === "string" ? args["run-id"] : undefined,
+      testRun: args["log-phase"] === "test_run" && typeof args.telemetry === "string" ? readTestRecord(dirname(resolve(args.telemetry))) : null,
     });
   } else if (isPreflight) {
     if (!args["auth-mode"]) {
@@ -260,7 +292,7 @@ export async function runDispatch(args, { connect, env = process.env } = {}) {
     const result = await bridge.callTool(toolName, toolArgs);
     const kept = toolName === "execute_with_model" ? keepEarlierResult(outPath) : null;
     if (kept) console.error(`dispatch: ${outPath} held an earlier dispatch's result; kept it as ${kept}.`);
-    writeResult(outPath, result);
+    writeResult(outPath, toolName === "log_telemetry" ? logReceipt(toolArgs, result) : result);
     // The tool call succeeding is not the same as the tool being happy. A
     // preflight that reports ok:false is the single most important "stop
     // now" signal in the whole run, and a caller that only checked the exit

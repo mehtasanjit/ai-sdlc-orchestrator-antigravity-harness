@@ -98,6 +98,26 @@ test("a --resume launch keeps the earlier launch's driver usage instead of overw
   } finally { rmSync(proj, { recursive: true, force: true }); }
 });
 
+test("a run that recorded its own stop is not resumed, and its record says it stopped", { skip: built ? false : "bridge not built (npm run build)" }, () => {
+  const proj = mkdtempSync(join(tmpdir(), "agy-smoke-stop-"));
+  const agyHome = mkdtempSync(join(tmpdir(), "agy-smoke-home-"));
+  try {
+    copyFileSync(join(ROOT, "examples", "quick-demo", "brief.md"), join(proj, "brief.md"));
+    const r = spawnSync(process.execPath, [
+      join(ROOT, "plugin", "agy", "run.mjs"), `--project-root=${proj}`, "--policy=antigravity-flash38-plus-opus5",
+      "--gates=auto-approve", "--run-id=stopped", "--allow-unverified-pin", `--agy-bin=${FAKE_AGY}`,
+    ], { encoding: "utf8", timeout: 120_000, env: { ...process.env, FAKE_AGY_STOP_FIRST: "1", MMO_AGY_HOME: agyHome } });
+    assert.doesNotMatch(r.stdout, /resuming/, r.stderr + r.stdout);
+    assert.match(r.stdout, /the run recorded its end \(stopped: the tests fail\) and needs: fix the failing test/);
+    const out = join(proj, ".sdlc", "runs", "stopped");
+    const driver = JSON.parse(readFileSync(join(out, "driver-manifest.json"), "utf8"));
+    assert.deepEqual([driver.agy_invocations, driver.completed], [1, false]);
+    const manifest = JSON.parse(readFileSync(join(out, "manifest.json"), "utf8"));
+    assert.deepEqual([manifest.harness.completed, manifest.harness.status], [false, "stopped"]);
+    assert.deepEqual(manifest.harness.stop, { reason: "the tests fail", needs: "fix the failing test" });
+  } finally { rmSync(proj, { recursive: true, force: true }); rmSync(agyHome, { recursive: true, force: true }); }
+});
+
 test("the stub refuses the argv shapes a real headless run must not carry", () => {
   const run = (args) => spawnSync(process.execPath, [FAKE_AGY, ...args], { encoding: "utf8" });
   const base = ["--print", "x /o/skills/pipeline.md", "--output-format", "stream-json", "--model", "gemini-3.8-flash-high", "--add-dir", "/p"];

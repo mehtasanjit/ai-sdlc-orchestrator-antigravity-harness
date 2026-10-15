@@ -89,7 +89,7 @@ export function studiesConsoleFields({ lines, dispatched, pin, harness }) {
 
   return {
     cable: {
-      driver_display: `${cable.driver_runtime} · ${pin ? `${pin.model}${pin.effort ? ` (${pin.effort})` : ""}` : "driver model not pinned"} · ${cable.driver_auth}`,
+      driver_display: `${cable.driver_runtime} · ${pin ? `${pin.model}${pin.effort ? ` (${pin.effort}${pin.effort_verified === false ? ", effort not checked" : ""})` : ""}` : "driver model not pinned"} · ${cable.driver_auth}`,
       worker_sdk: WORKER_SDK,
       worker_sdk_label: WORKER_SDK_LABEL,
       worker_display: `via ${WORKER_SDK_LABEL} (MCP) → ${legs.length ? legs.join(", ") : "no dispatches"}`,
@@ -101,6 +101,9 @@ export function studiesConsoleFields({ lines, dispatched, pin, harness }) {
       driver_cost_note: measured
         ? `The driver's dollar figure is MODELED, not invoiced. Driver auth: ${cable.driver_auth}. agy reports token ` +
           `counts and never a cost, so the harness priced them; driver_cost_basis names the card. ${tokensRead}. ` +
+          (driver.incomplete
+            ? `It is a floor, not the whole figure: ${driver.unpriced_calls.map((u) => `${u.calls} call(s) on ${u.model}`).join(", ")} have no price on the list, so their dollars are in no figure. `
+            : "") +
           "The worker dollars are a different kind and are not added to it."
         : "The driver side of this run has NO dollar figure: no agy usage was captured (no headless launcher record and no " +
           "collect-driver-usage.mjs record), so the $0 beside it means unmeasured, not free. The worker dollars stand on their own.",

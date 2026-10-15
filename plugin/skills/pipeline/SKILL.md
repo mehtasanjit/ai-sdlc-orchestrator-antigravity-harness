@@ -23,7 +23,7 @@ This skill is the source of truth for the conductor. Whether you arrived here fr
 5. execute_packets                    → for each: route → execute → validate → integrate → retry on failure
 6. senior_code_review                 → review.json + refinement packets
    re-execute refinement packets
-7. test_run                           → npm install && npm test; debug failures (route via policy)
+7. test_run                           → install deps, run the tests through test-run.mjs; debug failures (route via policy)
 8. security_review                    → security_review.md
    ── GATE 3 ─────────────────────────────────────
 9. generate_final_report              → SUMMARY.md; manifest.json is written by code
@@ -39,7 +39,7 @@ routes it per policy, runs it, prices it and appends the telemetry row; you neve
 and never write the content yourself. There are two ways to hand a packet over, and which one you
 have depends on how this session was started:
 
-**Headless (`plugin/agy/run.mjs`, the measured runs).** The Antigravity CLI loads no plugin, MCP
+**Headless (`plugin/agy/run.mjs`, the cost check).** The Antigravity CLI loads no plugin, MCP
 server or hook in print mode (p1-agy-runtime.md check 1), so the bridge is *not* in your toolset.
 Write the TaskPacket to a JSON file and run:
 
@@ -79,17 +79,28 @@ two lines in `<output_dir>/orchestrator.log`. Write them with the log script, ne
 script writes to `<project_root>/.sdlc/runs/<run_id>/orchestrator.log`, which is `<output_dir>`'s
 log on the default layout.
 
-Before Phase -1 on greenfield (on brownfield the guide logged it at Gate 0; do not log it twice):
+Before Phase -1 on greenfield (on brownfield the guide ran both at Gate 0; do not run them twice):
 
 ```
+node "${MMO_PLUGIN_ROOT}/agy/check-driver-pin.mjs" --since=<run_started_at> --run-id=<run_id> --policy=<policy> --project-root="<project_root>" --output-dir="<output_dir>"
 node "${MMO_PLUGIN_ROOT}/scripts/mmo-log.mjs" --event=run.start --run-id=<run_id> --started-at=<run_started_at> --mode=greenfield --policy=<policy> --project-root="<project_root>"
 ```
 
-After Gate 4 is answered `accept`, or when the run stops at any gate on `abort`, log the end,
-collect your own usage again, and rebuild the manifest, in this order:
+The first checks the model calls agy recorded for this chat against the policy's driver pin and
+writes `<output_dir>/policy_snapshot.yaml`, which the manifest reads the pin from. Exit 0: log
+`run.start` and continue. Exit 1 is a refusal: print its message verbatim — it names the model
+seen, the pin, and the `agy --model <slug>` command to restart agy on the pin — and stop before
+Phase -1; the run has spent nothing. Exit 3 means agy's record holds no call for this chat yet, or
+a conversation's record could not be read: tell the user the conductor's model could not be
+checked, never that it passed, and ask whether to continue (`continue` / `abort`). Exit 2: print
+the error and stop.
+
+After Gate 4 is answered `accept`, when the run stops at any gate on `abort`, or when Phase 7
+stops it (`stopped`, with `--reason` and `--needs`), log the end, collect your own usage again,
+and rebuild the manifest, in this order:
 
 ```
-node "${MMO_PLUGIN_ROOT}/scripts/mmo-log.mjs" --event=run.end --run-id=<run_id> --outcome=<completed|aborted> --project-root="<project_root>"
+node "${MMO_PLUGIN_ROOT}/scripts/mmo-log.mjs" --event=run.end --run-id=<run_id> --outcome=<completed|aborted|stopped> --project-root="<project_root>"
 node "${MMO_PLUGIN_ROOT}/agy/collect-driver-usage.mjs" "<output_dir>" --run-id=<run_id> --project-root="<project_root>" --since=<run_started_at>
 node "${MMO_PLUGIN_ROOT}/agy/manifest.mjs" "<output_dir>" --policy=<policy> --run-id=<run_id>
 ```
@@ -351,7 +362,44 @@ If codegen introduced new required env vars (via `existing_file_edit` on `.env.e
 2. Print the list of new keys to the operator with a mini-gate: *"Codegen introduced N new required env vars: X, Y, Z. Populate them in your .env before Phase 7 continues, or say `skip` to run Phase 7 anyway (tests requiring these keys will fail)."*
 3. Wait for the user's response before invoking the test command.
 
-The test command in brownfield is `baseline.test_command` (confirmed at Gate 0), not hardcoded `npm test`. Working directory is the repo root (not `<output_dir>`); in monorepos, use the per-package scope from `baseline.monorepo.packages[].test_command` for whichever package the changed files belong to.
+The test command in brownfield is the one Gate 0 confirmed and froze, in `test_commands` of
+`<output_dir>/contract.lock.json` (`## Test command` in the intent brief is a copy), not hardcoded `npm test`. Working directory is the repo root (not `<output_dir>`); in monorepos, use the frozen per-package command for whichever package the changed files belong to. When `test_commands` is empty (the user confirmed at Gate 0 that the project has no tests), skip this phase: log it with `--log-phase=test_run --task-type=skipped` and go to Phase 8.
+
+**1. Install the project's dependencies** when the test's working directory has a `package.json`
+and no `node_modules/`. The pre-check's test-command probe does not prove they are installed: it
+passes whenever the runner starts, whatever its exit code. Pick the command by the lockfile in
+that folder:
+
+| Lockfile | Install command |
+|---|---|
+| `package-lock.json` | `npm ci` |
+| `yarn.lock` | `yarn install --frozen-lockfile` |
+| `pnpm-lock.yaml` | `pnpm install --frozen-lockfile` |
+| `bun.lockb` | `bun install --frozen-lockfile` |
+| none | `npm install --no-package-lock` |
+
+Every command in the table leaves the lockfile as it is, so the install needs no provenance step.
+Run it as its own command, not inside the test command. Under the live contract the write hook
+allows an install that names no package: it writes `node_modules/`, never `package.json`.
+`node_modules/**` in the contract's off-limits keeps your own edits out of installed code; it does
+not stop this install. Never install a named package here (`npm install <pkg>`, `yarn add <pkg>`):
+that changes `package.json`, and the hook judges it as a `package.json` write.
+
+**2. Run the test command through the test recorder**, never by hand:
+
+```bash
+node "${MMO_PLUGIN_ROOT}/scripts/test-run.mjs" --run-id=<run_id> --output-dir="<output_dir>" --cwd="<repo-root>" --command="<test command>"
+```
+
+`--command` is a frozen test command, as frozen, and `--cwd` the repo root; the recorder refuses
+anything else before it runs. It runs the command, writes its output to
+`<output_dir>/test-output.txt`, records the status
+(`passed`, `failed`, or `not_run` when the command could not start) and the exit code in
+`<output_dir>/test-run.json`, and exits 0 only on a pass. That record decides whether the run can
+complete; while the contract binds, the write hook refuses any tool's write to `test-run.json`.
+Run the recorder again after each debug fix: the last attempt counts. The phase's zero-cost row is
+`--log-phase=test_run --task-type=in_session`; `dispatch.mjs` copies its status and exit code
+from `test-run.json`.
 
 **Both modes:**
 
@@ -359,7 +407,24 @@ On failure:
 - If the error is `Config validation error: "X" is required` or equivalent → the codegen phase missed keys. In greenfield build a debug TaskPacket routed to codegen to add the missing keys with schema-valid values. In brownfield, ask the user via the mini-gate above; do NOT patch `.env` from the harness.
 - Any other failure → parse the output, build a `debug` TaskPacket with the failing test name + error + relevant source slice. Route via policy. Retry up to 2 cost-efficient tier attempts; the policy escalates to the premium tier from there.
 
-**Test-command probe (optional Phase 0.5 in brownfield).** The pipeline pre-check (§7.4) already ran the discovered test command with `--collect-only` / `--dry-run` at prompt 1 to prove deps are installed. If pre-check step 2 failed for this run, Phase 7 halts with the recorded error rather than attempting the real run.
+**Brownfield: stop the run when its tests cannot pass.** When the install or the test command
+cannot run (the hook refused the install, or `test-run.json` says `not_run`), or the tests still
+fail after the debug retries, the run ends here. Do not start Phase 8, do not write `SUMMARY.md`,
+and do not open Gate 4. Record the stop, in this order:
+
+```bash
+node "${MMO_PLUGIN_ROOT}/scripts/mmo-log.mjs" --event=run.end --run-id=<run_id> --outcome=stopped --reason="<what failed>" --needs="<what the user must do>" --project-root="<project_root>"
+node "${MMO_PLUGIN_ROOT}/agy/collect-driver-usage.mjs" "<output_dir>" --run-id=<run_id> --project-root="<project_root>" --since=<run_started_at>
+node "${MMO_PLUGIN_ROOT}/agy/manifest.mjs" "<output_dir>" --policy=<policy> --run-id=<run_id>
+node "${MMO_PLUGIN_ROOT}/scripts/write-contract.mjs" --close --run-id=<run_id> --outcome=stopped --reason="<what failed>" --needs="<what the user must do>" --project-root="<project_root>"
+```
+
+`--reason` names what failed: the refused install with the hook's reason, or the failing test and
+the exit code from `test-run.json`. `--needs` names what the user must do before another run can
+pass, for example *"run npm ci in the repo root"* or *"decide whether the expected status in
+src/auth.spec.js is still right"*. Then tell the user both, with the paths of `test-run.json` and
+`test-output.txt`. Headless: run only the last command; the launcher records the run's window,
+builds the manifest, and does not resume a run that recorded its end.
 
 ### Phase 8 — security_review
 
@@ -380,7 +445,15 @@ Phase 6.
 
 ### Phase 9 — generate_final_report
 
-**Brownfield: close the undo record first**, after the last project write and before the report:
+**Brownfield: the tests decide first.** Read `<output_dir>/test-run.json`. Unless Gate 0 froze
+`none`, its `status` must be `passed`; otherwise stop the run as Phase 7 says and write no report.
+A pass stops counting once the hook allows a project write after the test run started: after a
+Gate 3 `revise` or a Gate 4 `reject` changes project files, run the recorder again (Phase 7 step 2)
+before the report, and stop the run as Phase 7 says if it fails. `write-contract.mjs --close`
+refuses to end a run as `completed` without a passing record that counts, and `manifest.mjs` marks
+such a run `incomplete`.
+
+**Brownfield: close the undo record**, after the last project write and before the report:
 
 ```bash
 node "${MMO_PLUGIN_ROOT}/scripts/write-provenance.mjs" --finalize --run-id=<run_id> --project-root="<repo-root>"
@@ -412,7 +485,8 @@ cost lines; it never computes them.
    has priced your own loop from the agy stream.
 2. **Write `<output_dir>/SUMMARY.md`:**
    - **Cost.** Interactive: one bullet per line `manifest.mjs` printed, copied with its kind and
-     figure exactly as printed. Mark the driver bullet "through the final report": it does not yet
+     figure exactly as printed. A driver line printed `at least $X (… unpriced: <model>)` is a
+     floor: keep the words `at least` and the unpriced count. Mark the driver bullet "through the final report": it does not yet
      hold your calls for Gate 4, which the collection after `run.end` adds to `manifest.json`. Headless: one sentence saying the labelled cost lines are in
      `manifest.json` → `cost.lines`, written by the launcher after this session. Never compute a
      total, never add a `modeled` figure to a `cash` one, and never put a figure on a
@@ -499,16 +573,35 @@ with `phase: <name>, task_type: "skipped"` so downstream summaries stay complete
 ## HITL gate prompt templates
 
 **Gate delivery.** Interactive, you print the gate block yourself and wait for the user's reply,
-then append one line with their decision to `<output_dir>/gates.jsonl`:
-`{"gate": <N>, "artifact": "<file the gate reviewed>", "decision": "approved|revise|aborted|accepted", "note": "<one line>"}`
-(`accepted` for Gate 4's `accept`; the manifest reads Gate 4's last line to mark the run completed).
+then record it by code, never by writing `gates.jsonl` yourself. Write the reply as you received
+it, word for word, to `<output_dir>/gate-reply.txt` with your file tool; never put it on the
+command line, where shell quoting rewrites it and can run parts of it. Then run:
+
+```bash
+node "${MMO_PLUGIN_ROOT}/scripts/record-gate.mjs" --run-id=<run_id> --gate=<N> --decision=<approved|accepted|revise|reject|abort> --artifact=<output_dir>/<file the gate reviewed> --reply-file=<output_dir>/gate-reply.txt --project-root="<project_root>" --output-dir="<output_dir>"
+```
+
+`--artifact` is relative to the project root (`.sdlc/runs/<run_id>/requirements.md`). `accepted`
+is Gate 4's `accept` and `reject` its `reject: <comments>`; the manifest reads Gate 4's last line to
+mark the run completed. The decision is the one the reply gives: a `revise`, `reject` or `abort`
+reply begins with that word, an approving one with none of them, and the script refuses a
+mismatch. It stores the reply, records the artifact's SHA-256 with it, and removes the reply file. **An approved artifact is locked:** while a brownfield
+contract binds, the hook refuses any write to it, and the close-out (any mode) refuses `completed`
+when its bytes no longer match the approval. It changes only after a recorded `revise` (or Gate 4
+`reject`), which re-opens it until its gate approves it again.
 Every gate is a fenced `> ⏸ **HITL Gate <N> — <Title>**` block (templates below), printed
 verbatim. Headless, the conductor prompt names the gate mode (`auto-approve` or `auto-abort`):
-print the block anyway, apply the mode's decision, and append the line to `<output_dir>/gates.jsonl`
-that the conductor prompt specifies — a run whose gates were not reviewed by a person must say so. **Persist
-the gate-pending state to `.sdlc/local/state.json` before printing** — if the session dies
-mid-gate, session-hydrate detects a non-terminal state and re-prompts on the next
-`/mmo:brownfield` invocation. No new command needed.
+print the block anyway, apply the mode's decision, and record it with the same script
+(`--decision=auto-approved` or `--decision=auto-aborted`, no reply; the script takes them only in a
+run `plugin/agy/run.mjs` launched in that mode) — a run whose gates were not reviewed by a person must say so. **Persist
+the gate-pending state to `<output_dir>/state.json` before printing** — the run's own folder,
+`.sdlc/runs/<run-id>/state.json`, the one place under `.sdlc/` a live write contract lets the run
+write. Write the whole file, one object:
+`{"run_id": "<run-id>", "phase": "<phase>", "gate": <N>, "status": "gate_pending", "at": "<ISO-8601 now>"}`.
+After recording the decision, rewrite it with a new `at` and the status the decision
+leaves: `"complete"` once Gate 4 is accepted (or auto-approved), `"aborted"` after any abort,
+`"running"` otherwise. If the session dies mid-gate, session-hydrate finds the non-terminal state and
+re-prompts on the next `/mmo:brownfield` invocation. No new command needed.
 
 ### Gate 0 — Brownfield only, before Gate 1
 
@@ -517,7 +610,8 @@ mid-gate, session-hydrate detects a non-terminal state and re-prompts on the nex
 > I read your repo and produced `<sdlc_root>/runs/<run-id>/discovery.md`. Confirm:
 >
 > - **Stack:** `<top-detected stacks>` — correct? add/override?
-> - **Test command:** `<detected>` — enter to accept, or paste the command.
+> - **Test command:** `<detected>` — enter to accept, paste the command, or say `none` when the
+>   project has no tests (the run then skips Phase 7).
 > - **Policy:** `<the default_policy field setup wrote to .sdlc/project.json>` — accept, or
 >   name another on-disk policy for this run only (one saved from the policy console). To change the project's
 >   persistent default, re-run setup (`node "${MMO_PLUGIN_ROOT}/scripts/setup-policy.mjs"`
@@ -527,6 +621,9 @@ mid-gate, session-hydrate detects a non-terminal state and re-prompts on the nex
 > - **Intent:** `<intent picked in step 4a of /mmo:brownfield>`
 > - **File scope:**
 >   - allowlist: `<paths proposed by the intent brief>` — accept / edit
+>   - conditional: `<path>` — in scope only `<condition, e.g. if route error-handling is needed>`;
+>     written only after you approve it when the condition arises (one line per file the brief
+>     scopes "if needed"; never in the allowlist)
 >   - off-limits: **project defaults from `.sdlc/project.json.off_limits_default`** apply
 >     (`.env*`, `.mcp.json`, `node_modules/**`, `.cursor/rules/**`, other AI tools'
 >     settings files, `dist/**`, `.sdlc/**`, `.git/**`) — add anything else this ticket must not touch
@@ -539,9 +636,15 @@ mid-gate, session-hydrate detects a non-terminal state and re-prompts on the nex
 >
 > Reply: `approved`, `revise: <comments>`, or `abort`.
 
-On `approved`, freeze the write contract by code with
-`node "${MMO_PLUGIN_ROOT}/scripts/write-contract.mjs" --freeze --run-id=<run_id> --allowlist='<JSON>' --off-limits='<JSON>' --project-root="$(pwd)"`
-(the brownfield guide's step 5); never write `.sdlc/local/write-contract.json` yourself. Build `off_limits` by concatenating `.sdlc/project.json.off_limits_default`
+On `approved`, record it (`--gate=0 --artifact=.sdlc/runs/<run_id>/discovery.md`), then freeze
+the write contract by code with
+`node "${MMO_PLUGIN_ROOT}/scripts/write-contract.mjs" --freeze --run-id=<run_id> --allowlist='<JSON>' --off-limits='<JSON>' --test-command='<test command>' --conditional='<path>' --condition='<condition>' --project-root="$(pwd)"`
+(the brownfield guide's step 5; `--test-command=none` when the user answered `none`; one
+`--conditional`/`--condition` pair per conditional file, none when there are none); never write
+`.sdlc/local/write-contract.json` yourself. The hook refuses a conditional file until the user
+says its condition holds: ask, quoting the condition, and record a yes with
+`--gate=0 --decision=approved-conditional --artifact=<path>`, the reply through `gate-reply.txt`
+as at every gate. Build `off_limits` by concatenating `.sdlc/project.json.off_limits_default`
 (the project-level constants — `.env*`, `.mcp.json`, `node_modules/**`, etc., written by setup)
 with the AI-configs from `baseline.ai_configs_detected` and any ticket-specific paths the user
 added at Gate 0. The PreToolUse hook and the packet validator both read the merged list — the
@@ -572,7 +675,7 @@ explicitly.
 > ⏸ **HITL Gate 4 — Final Acceptance**
 > The full SDLC pass is complete.
 > Cost so far: Gemini workers cash $X.XX · Claude worker <cash or modeled> $Y.YY · driver <modeled $Z.ZZ or NOT MEASURED> — separate lines, never added together
-> Files: N  ·  Tests: passing/total
+> Files: N  ·  Tests: `<status>` (exit `<code>`) from `test-run.json`, or `none`
 > Reply `accept` to finalize the manifest, or `reject: <comments>` to revise.
 
 ---
@@ -662,6 +765,12 @@ never by editing the file yourself. The same holds for any other fix to a file a
 dispatch a refined packet for it. Write each worker's returned content to its `artifact_path`
 exactly as returned. An `in_session` row explains a change you made yourself; it does not make
 that change dispatched work.
+
+**A review or refinement that asks for the user's approval is a gate, not a packet.** Stop, ask
+the user, and record the answer with `record-gate.mjs`. Never write an approval, resolution or
+escalation note yourself, and never edit an approved artifact without a recorded `revise`. An
+answer that changes an approved artifact is a `revise` on that artifact's gate, followed by its
+gate again; a conditional file is an `approved-conditional` at Gate 0.
 
 The code-written manifest checks this. `harness.unrecorded_phases` lists every judgment phase the
 run went through with no row at all, and `harness.conductor_edits` lists every planned file whose

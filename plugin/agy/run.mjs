@@ -51,12 +51,17 @@ import { isMain } from "../scripts/lib/is-main.mjs";
 import { staleBuild, staleBuildWarning } from "../scripts/lib/stale-build.mjs";
 import { finishWriteGuard, gitStatus, loadLaunchSnapshot, saveLaunchSnapshot } from "./writeGuard.mjs";
 import { resumeRun } from "../scripts/write-contract.mjs";
+import { runEnd } from "../scripts/lib/contract-state.mjs";
+import { testVerdict } from "../scripts/lib/test-record.mjs";
+import { approvalVerdict, recordGateMode } from "../scripts/lib/gate-record.mjs";
+import { runMode } from "./telemetry/conductorWork.mjs";
 import { agyHome, readConversationRecord } from "./telemetry/conversationUsage.mjs";
+import { DEFAULT_POLICY, loadPolicyFile as loadProjectPolicyFile, policyPath as projectPolicyPath, resolvePolicy as resolveProjectPolicy } from "./projectPolicy.mjs";
 
 const AGY_DIR = dirname(fileURLToPath(import.meta.url));
 export const PLUGIN_ROOT = dirname(AGY_DIR);
 export const HARNESS_ROOT = dirname(PLUGIN_ROOT);
-export const DEFAULT_POLICY = "antigravity-flash38-plus-opus5";
+export { DEFAULT_POLICY };
 export const DEFAULT_PRINT_TIMEOUT = "6h";
 /** Seconds to wait before each resume after agy's own model hit a quota (Vertex 429). */
 export const DEFAULT_QUOTA_WAITS_SEC = [60, 180, 600];
@@ -96,10 +101,10 @@ export const GATE_MODES = {
     "gate, print what was produced and where it is, record the decision as `auto-approved`, " +
     "and continue without waiting. Do not ask a question you cannot receive an answer to. " +
     "If an artifact looks wrong enough that a reviewer would have rejected it, say so plainly " +
-    "in the gate record and in your final report rather than passing it silently.",
+    "in your final report rather than passing it silently.",
   "auto-abort":
     "You are running UNATTENDED with gates set to abort. At each gate, print what was " +
-    "produced, record the decision as `aborted`, and stop the run there. Use this to produce " +
+    "produced, record the decision as `auto-aborted`, and stop the run there. Use this to produce " +
     "one phase's artifact for inspection without proceeding.",
 };
 
@@ -188,40 +193,16 @@ export function renderSkills(outputDir, values, pluginRoot = PLUGIN_ROOT) {
 }
 
 export function policyPath(policyName, pluginRoot = PLUGIN_ROOT) {
-  return join(pluginRoot, "config", "policies", `${policyName}.yaml`);
+  return projectPolicyPath(policyName, pluginRoot);
 }
 
 export function loadPolicyFile(policyName, pluginRoot = PLUGIN_ROOT) {
-  const path = policyPath(policyName, pluginRoot);
-  if (!existsSync(path)) throw new Error(`run: policy '${policyName}' not found at ${path}.`);
-  return parseYaml(readFileSync(path, "utf-8"));
+  return loadProjectPolicyFile(policyName, pluginRoot, parseYaml);
 }
 
-/**
- * The policy this run uses, resolved the way the bridge resolves it, so the
- * launcher's pin, rates and cap come from the file the bridge routes by:
- *   1. <project-root>/routing-policy.yaml — the bridge always takes it when present
- *   2. --policy=<name>
- *   3. <project-root>/.sdlc/project.json default_policy (setup's console choice)
- *   4. the shipped default
- * Returns `{ name, path, source, policy, ignoredFlag }`.
- */
-export function resolvePolicy({ projectRoot, flag = null, pluginRoot = PLUGIN_ROOT, read = readFileSync, exists = existsSync }) {
-  const override = join(projectRoot, "routing-policy.yaml");
-  if (exists(override)) {
-    const policy = parseYaml(read(override, "utf-8"));
-    if (!policy?.name) throw new Error(`run: ${override} has no name: field.`);
-    return { name: policy.name, path: override, source: "routing-policy.yaml", policy, ignoredFlag: flag && flag !== policy.name ? flag : null };
-  }
-  if (flag) return { name: flag, path: policyPath(flag, pluginRoot), source: "--policy", policy: loadPolicyFile(flag, pluginRoot), ignoredFlag: null };
-  const projectFile = join(projectRoot, ".sdlc", "project.json");
-  if (exists(projectFile)) {
-    let project = null;
-    try { project = JSON.parse(read(projectFile, "utf-8")); } catch { throw new Error(`run: ${projectFile} is not valid JSON.`); }
-    const name = typeof project?.default_policy === "string" ? project.default_policy.replace(/\.ya?ml$/, "") : null;
-    if (name) return { name, path: policyPath(name, pluginRoot), source: ".sdlc/project.json", policy: loadPolicyFile(name, pluginRoot), ignoredFlag: null };
-  }
-  return { name: DEFAULT_POLICY, path: policyPath(DEFAULT_POLICY, pluginRoot), source: "default", policy: loadPolicyFile(DEFAULT_POLICY, pluginRoot), ignoredFlag: null };
+/** projectPolicy.mjs resolvePolicy, parsed with this clone's yaml. Returns `{ name, path, source, policy, ignoredFlag }`. */
+export function resolvePolicy({ pluginRoot = PLUGIN_ROOT, ...rest }) {
+  return resolveProjectPolicy({ ...rest, pluginRoot, parse: parseYaml });
 }
 
 /** The bridge's own validation (adapter ids, rules, the cost cap), run at launch instead of at the first dispatch. */
@@ -292,6 +273,23 @@ export function runIsComplete(outputDir, since = null, { before = null, exists =
   if (!since) return true;
   // A second's slack for filesystems that store whole-second mtimes.
   return stat(path).mtimeMs >= Date.parse(since) - 1000;
+}
+
+/**
+ * A session that wrote its SUMMARY.md completes a brownfield run only on a
+ * passing test record, unless Gate 0 froze no test command; any run, only
+ * with every gate-approved artifact as its gate approved it.
+ */
+export function headlessVerdict({ outputDir, runId, mode = null, summaryWritten, projectRoot = null }) {
+  const tests = runMode(outputDir, mode) === "brownfield" ? testVerdict(outputDir, runId, { projectRoot }) : null;
+  const approvals = approvalVerdict(outputDir, runId, { projectRoot });
+  const testsHeld = !tests?.required || tests.passed === true;
+  return {
+    completed: summaryWritten && testsHeld && approvals.held,
+    tests,
+    ...(approvals.held ? {} : { approved_artifact_changed: approvals.changed }),
+    ...(summaryWritten && !(testsHeld && approvals.held) ? { reason: testsHeld ? approvals.reason : tests.reason } : {}),
+  };
 }
 
 /** SUMMARY.md as a fresh launch found it, or null when there was none. */
@@ -610,6 +608,8 @@ async function main(args) {
   if (pending.length && !args["allow-unverified-pin"]) throw new Error(pinGateMessage(pending));
 
   mkdirSync(outputDir, { recursive: true });
+  // record-gate.mjs takes an auto-* decision only from a run this launcher started in that mode.
+  recordGateMode(outputDir, runId, gateMode);
   renderSkills(outputDir, renderValues);
   copyFileSync(resolvedPolicy.path, join(outputDir, "policy_snapshot.yaml"));
   if (runRoot) materialiseRunRoot({ runRoot, pluginRoot: PLUGIN_ROOT });
@@ -694,7 +694,8 @@ async function main(args) {
 
     let quotaRetries = 0;
     const resumable = () => result.status === 0 || (quotaStop(result) && quotaRetries < quotaWaits.length);
-    while (!interrupted && invocations < maxTurns && resumable() && conversationId && !runIsComplete(outputDir, started, { before: staleSummary })) {
+    // A run that recorded its own end (a stop, an abort) is the person's to reopen, never the loop's.
+    while (!interrupted && invocations < maxTurns && resumable() && conversationId && !runIsComplete(outputDir, started, { before: staleSummary }) && !runEnd(projectRoot, runId)) {
       if (result.status !== 0) {
         const wait = quotaWaits[quotaRetries++];
         console.log(`run ${runId}: agy's model hit its quota (429) in invocation ${invocations} — resuming ${conversationId} in ${wait}s (quota retry ${quotaRetries} of ${quotaWaits.length})`);
@@ -709,11 +710,19 @@ async function main(args) {
       invocations += 1;
       provisional(conversationId);
     }
-    const completed = runIsComplete(outputDir, started, { before: staleSummary });
-    if (!completed) {
+    const summaryWritten = runIsComplete(outputDir, started, { before: staleSummary });
+    const { completed, reason: incomplete } = headlessVerdict({ outputDir, runId, mode, summaryWritten, projectRoot });
+    const ownEnd = runEnd(projectRoot, runId);
+    if (!completed && ownEnd) {
       console.log(
-        `run ${runId}: stopped after ${invocations} invocation(s) without this run's SUMMARY.md — ` +
-          (interrupted ? `interrupted (${interrupted}).` : invocations >= maxTurns ? `hit --max-turns=${maxTurns}.` : quotaStop(result) ? `agy's model was still over its quota after ${quotaRetries} wait(s).` : `agy exited ${result.status}.`) +
+        `run ${runId}: the run recorded its end (${ownEnd.outcome}${ownEnd.reason ? `: ${ownEnd.reason}` : ""})${ownEnd.needs ? ` and needs: ${ownEnd.needs}` : ""}. ` +
+          "It is not resumed; reopening it is your decision.",
+      );
+    } else if (!completed) {
+      console.log(
+        `run ${runId}: stopped after ${invocations} invocation(s) ` +
+          (summaryWritten ? `with this run's SUMMARY.md, but ${incomplete}. ` : `without this run's SUMMARY.md — ` +
+          (interrupted ? `interrupted (${interrupted}).` : invocations >= maxTurns ? `hit --max-turns=${maxTurns}.` : quotaStop(result) ? `agy's model was still over its quota after ${quotaRetries} wait(s).` : `agy exited ${result.status}.`)) +
           ` Artifacts so far are in the output directory; re-run with --resume=${conversationId ?? "<conversation-id>"} --run-id=${runId} to continue.`,
       );
     }
