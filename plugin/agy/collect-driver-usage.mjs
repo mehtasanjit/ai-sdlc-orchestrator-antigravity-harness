@@ -6,7 +6,14 @@
  *
  * Writes into the run directory:
  *   driver-cost-modeled.jsonl  one modeled line per model call in the run's window
- *   driver-collector.json      the evidence: conversations, window, field map, agy version
+ *   driver-collector.json      the evidence: conversations, window, field map, agy version,
+ *                              and the calls no card priced
+ *
+ * Each call is priced on its day at its own model's card: a call on the pin
+ * through the driver block (telemetry/driverPrice.mjs), any other from the
+ * price list alone. A call on a model the list cannot price keeps its tokens
+ * and has no dollars (`cost_usd: null`, `unpriced`), and the driver line
+ * becomes a floor.
  *
  * Usage:
  *   node plugin/agy/collect-driver-usage.mjs <run-dir> [--run-id=<id>] [--project-root=<path>]
@@ -20,9 +27,10 @@
  */
 import { existsSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
+import { parse as parseYaml } from "yaml";
 
 import { LOCAL_RECORD_FIELDS, agyHome, collectConversationUsage } from "./telemetry/conversationUsage.mjs";
-import { driverPrice, unpricedDriverRefusal } from "./telemetry/driverPrice.mjs";
+import { driverPrice, unpricedCalls } from "./telemetry/driverPrice.mjs";
 import { driverSlug, readPin } from "./telemetry/fairnessPin.mjs";
 import { offPinModels } from "./telemetry/event-reader.mjs";
 import { computeCostUsd } from "../mcp/model-dispatch/dist/pricing.js";
@@ -33,11 +41,18 @@ import { inferRunId, readRunMarkers } from "./telemetry/runWindow.mjs";
 
 export const RECORD_SOURCE = "agy-local-record";
 
+const normalName = (name) => String(name).toLowerCase().replace(/^models\//, "").trim();
+
+/** One call's price: through the driver block when the call is on the pin, else the list's card for its own model. */
+export function callPrice(driver, pin, model, at) {
+  const onPin = model == null || offPinModels([model], pin, driverSlug(pin)).length === 0;
+  return driverPrice(driver, at, onPin ? driver.model_name : normalName(model));
+}
+
 /** One `provenance: "modeled"` line per model call, in the shape of the headless driver lines. */
 export function modeledFromRecord(calls, { pass, pin, driver, policyName }) {
   return calls.map((c, i) => {
-    const price = driverPrice(driver, c.at);
-    if (price.unpriced) throw new Error(unpricedDriverRefusal(driver.model_name, c.at.slice(0, 10), price.reason));
+    const price = callPrice(driver, pin, c.model, c.at);
     const tokens = { input: c.fresh, input_cached: c.cached, output: c.output };
     return {
       ts: c.at,
@@ -61,9 +76,10 @@ export function modeledFromRecord(calls, { pass, pin, driver, policyName }) {
       input_tokens_cached: tokens.input_cached,
       output_tokens: tokens.output,
       output_tokens_reasoning: c.thinking,
-      cost_usd: computeCostUsd(tokens, price.pricing),
-      price_basis: price.basis,
-      ...(price.period ? { price_period: price.period } : {}),
+      cost_usd: price.unpriced ? null : computeCostUsd(tokens, price.pricing),
+      ...(price.unpriced
+        ? { unpriced: price.reason }
+        : { price_basis: price.basis, ...(price.period ? { price_period: price.period } : {}) }),
       latency_ms: null,
       success: true,
       retry_count: 0,
@@ -74,15 +90,24 @@ export function modeledFromRecord(calls, { pass, pin, driver, policyName }) {
   });
 }
 
+/** The run's own policy, the one the manifest reads the pin from, over the project's current one. */
+function runPolicy(runDir, projectRoot) {
+  const snapshot = join(runDir, "policy_snapshot.yaml");
+  if (!existsSync(snapshot)) return resolvePolicy({ projectRoot });
+  const policy = parseYaml(readFileSync(snapshot, "utf8"));
+  return { name: policy?.name, policy };
+}
+
 export async function collectDriverUsage({ runDir, runId, projectRoot, since, until, windowSources = null, conversationIds = null, home = agyHome(), version = null }) {
   if (existsSync(join(runDir, "driver-manifest.json"))) {
     throw new Error(`collect-driver-usage: ${runDir} holds a headless launcher record (driver-manifest.json); its driver line comes from agy's stream, not from this collector.`);
   }
-  const resolved = resolvePolicy({ projectRoot });
+  const resolved = runPolicy(runDir, projectRoot);
   const pin = readPin(resolved.policy);
   const { conversations, calls } = await collectConversationUsage({ home, projectRoot, conversationIds, since, until });
   const modeled = modeledFromRecord(calls, { pass: runId, pin, driver: resolved.policy.driver, policyName: resolved.name });
   const models = [...new Set(calls.map((c) => c.model).filter(Boolean))];
+  const unpriced = unpricedCalls(modeled);
   const evidence = {
     source: RECORD_SOURCE,
     run_id: runId,
@@ -95,6 +120,7 @@ export async function collectDriverUsage({ runDir, runId, projectRoot, since, un
     calls: calls.length,
     reported_models: models,
     ...(offPinModels(models, pin, driverSlug(pin)).length ? { model_mismatch: offPinModels(models, pin, driverSlug(pin)) } : {}),
+    ...(unpriced.length ? { priced_in_full: false, unpriced_calls: unpriced } : {}),
     ...(conversations.filter((c) => c.found).length > 1 ? { note: "more than one conversation of this project was active in the window; all are counted as this run's driver" } : {}),
     written_by: "plugin/agy/collect-driver-usage.mjs",
     written_at: new Date().toISOString(),
@@ -146,9 +172,12 @@ if (isMain(import.meta.url)) {
       process.exit(0);
     }
     writeFileSync(join(runDir, "driver-cost-modeled.jsonl"), modeled.map((e) => JSON.stringify(e)).join("\n") + "\n");
-    const usd = Math.round(modeled.reduce((s, e) => s + e.cost_usd, 0) * 1e6) / 1e6;
-    console.log(`collect-driver-usage: ${modeled.length} driver call(s) from ${evidence.conversations.filter((c) => c.found).length} conversation(s) — driver modeled $${usd}`);
+    const usd = Math.round(modeled.reduce((s, e) => s + (e.cost_usd ?? 0), 0) * 1e6) / 1e6;
+    console.log(`collect-driver-usage: ${modeled.length} driver call(s) from ${evidence.conversations.filter((c) => c.found).length} conversation(s) — driver modeled ${evidence.unpriced_calls ? "at least " : ""}$${usd}`);
     if (evidence.model_mismatch) console.error(`collect-driver-usage: agy recorded model(s) ${evidence.model_mismatch.join(", ")}, not the pinned driver.`);
+    for (const u of evidence.unpriced_calls ?? []) {
+      console.error(`collect-driver-usage: ${u.calls} call(s) on ${u.model} have no price (${u.reason}); their tokens are counted and their dollars are in no figure, so the driver line is a floor.`);
+    }
     if (evidence.fields_unverified_for_version) console.error(`collect-driver-usage: the record's field map was read on agy ${LOCAL_RECORD_FIELDS.verified_on}; this is agy ${evidence.fields_unverified_for_version}. Every row still passed the layout check.`);
   } catch (err) {
     console.error(`collect-driver-usage failed: ${err?.message ?? err}`);

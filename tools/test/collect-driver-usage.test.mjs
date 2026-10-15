@@ -1,9 +1,6 @@
 /**
  * An interactive run's driver line, read from agy's local conversation
- * record. The fixture is a synthetic agy home in the layout agy 1.3.0 keeps
- * (p1-agy-runtime.md check 18): a summaries database naming each
- * conversation's workspace, and one SQLite database per conversation whose
- * gen_metadata rows are protobufs holding each model call's usage.
+ * record. The fixture is a synthetic agy home (lib/agy-record.mjs).
  */
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -15,42 +12,10 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { decodeRaw } from "../../plugin/agy/telemetry/protobufRaw.mjs";
 import { readConversationRecord, collectConversationUsage } from "../../plugin/agy/telemetry/conversationUsage.mjs";
 import { collectDriverUsage } from "../../plugin/agy/collect-driver-usage.mjs";
-import { buildHarnessManifest } from "../../plugin/agy/manifest.mjs";
+import { buildHarnessManifest, describeManifest } from "../../plugin/agy/manifest.mjs";
+import { agyHomeWith, bytes, generation, msg, str, T } from "./lib/agy-record.mjs";
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
-const { DatabaseSync } = await import("node:sqlite");
-
-// ── a minimal protobuf writer, enough for the fields the reader takes ──
-const varint = (n) => { const out = []; let v = BigInt(n); do { let b = Number(v & 0x7fn); v >>= 7n; if (v) b |= 0x80; out.push(b); } while (v); return Buffer.from(out); };
-const int = (field, n) => Buffer.concat([varint((field << 3) | 0), varint(n)]);
-const bytes = (field, buf) => Buffer.concat([varint((field << 3) | 2), varint(buf.length), buf]);
-const str = (field, s) => bytes(field, Buffer.from(s, "utf8"));
-const msg = (...parts) => Buffer.concat(parts);
-
-function generation({ model = "gemini-3.8-flash", fresh, cached = 0, thinking, text, step, output = thinking + text }) {
-  const usage = msg(int(1, 1318), int(2, fresh), int(3, output), ...(cached ? [int(5, cached)] : []), int(6, 3), int(9, thinking), int(10, text));
-  return msg(bytes(1, msg(bytes(17, bytes(2, usage)), str(19, model), bytes(20, msg(str(1, "last_step_index"), str(2, String(step)))))));
-}
-const stepMeta = (epochSeconds) => msg(bytes(1, int(1, epochSeconds)));
-
-function agyHomeWith(projectRoot, conversations) {
-  const home = mkdtempSync(join(tmpdir(), "agy-home-"));
-  mkdirSync(join(home, "conversations"));
-  const sum = new DatabaseSync(join(home, "conversation_summaries.db"));
-  sum.exec("CREATE TABLE conversation_summaries (conversation_id text, workspace_uris text, last_modified_time datetime, parent_conversation_id text)");
-  for (const c of conversations) {
-    sum.prepare("INSERT INTO conversation_summaries VALUES (?, ?, ?, '')").run(c.id, JSON.stringify([pathToFileURL(c.workspace ?? projectRoot).href]), c.lastModified);
-    const db = new DatabaseSync(join(home, "conversations", `${c.id}.db`));
-    db.exec("CREATE TABLE steps (idx integer, metadata blob); CREATE TABLE gen_metadata (idx integer, data blob, size integer)");
-    c.steps.forEach((t, i) => db.prepare("INSERT INTO steps VALUES (?, ?)").run(i, stepMeta(t)));
-    c.gens.forEach((g, i) => db.prepare("INSERT INTO gen_metadata VALUES (?, ?, 0)").run(i, generation(g)));
-    db.close();
-  }
-  sum.close();
-  return home;
-}
-
-const T = (iso) => Math.floor(Date.parse(iso) / 1000);
 
 test("the raw reader finds nested fields by number", () => {
   const f = decodeRaw(generation({ fresh: 5208, cached: 7434, thinking: 32, text: 61, step: 4 }));
@@ -117,6 +82,97 @@ test("the collected calls become the interactive run's modeled driver line, pric
     assert.equal(m.cost.driver_modeled_usd, 4.575);
     assert.equal(m.harness.driver_collector.calls, 1);
   } finally { rmSync(home, { recursive: true, force: true }); rmSync(project, { recursive: true, force: true }); }
+});
+
+// ── each call priced at its own model's card ──
+const BIG = { fresh: 1_000_000, cached: 1_000_000, thinking: 500_000, text: 500_000 };
+const CARD_38 = 0.75 + 0.075 + 3.75;
+const CARD_35 = 1.5 + 0.15 + 9;
+
+/** A run folder with the shipped policy snapshotted, and one chat whose calls ran on `models`. */
+async function collected(models) {
+  const project = mkdtempSync(join(tmpdir(), "proj-"));
+  const runDir = join(project, ".sdlc", "runs", "i1");
+  mkdirSync(runDir, { recursive: true });
+  writeFileSync(join(runDir, "telemetry.jsonl"), "");
+  copyFileSync(join(ROOT, "plugin", "config", "policies", "antigravity-flash38-plus-opus5.yaml"), join(runDir, "policy_snapshot.yaml"));
+  const home = agyHomeWith(project, [{ id: "c1", lastModified: "2026-10-13T11:00:00Z", steps: models.map((_, i) => T("2026-10-13T10:10:00Z") + i), gens: models.map((model, i) => ({ model, ...BIG, step: i })) }]);
+  const { modeled, evidence } = await collectDriverUsage({ runDir, runId: "i1", projectRoot: project, since: "2026-10-13T10:00:00Z", until: "2026-10-13T12:00:00Z", home, version: "1.3.5" });
+  writeFileSync(join(runDir, "driver-cost-modeled.jsonl"), modeled.map((e) => JSON.stringify(e)).join("\n") + "\n");
+  writeFileSync(join(runDir, "driver-collector.json"), JSON.stringify(evidence));
+  const manifest = buildHarnessManifest({ runDir, runId: "i1", env: {} });
+  return { modeled, evidence, manifest, runDir, cleanup: () => { rmSync(home, { recursive: true, force: true }); rmSync(project, { recursive: true, force: true }); } };
+}
+
+test("a record whose every call is the pin is priced as before: complete, at the pin's card", async () => {
+  const r = await collected(["gemini-3.8-flash", "gemini-3.8-flash"]);
+  try {
+    assert.deepEqual(r.modeled.map((e) => [e.model, e.cost_usd, e.price_basis, e.unpriced]), [["gemini-3.8-flash", CARD_38, "list", undefined], ["gemini-3.8-flash", CARD_38, "list", undefined]]);
+    assert.equal(r.evidence.unpriced_calls, undefined);
+    assert.equal(r.evidence.model_mismatch, undefined);
+    const line = r.manifest.cost.lines[0];
+    assert.equal(line.cost_usd, 9.15);
+    assert.equal(line.incomplete, undefined);
+    assert.match(line.basis, /at the dated price list for gemini-3\.8-flash \(period 2026-09-02\.\.2026-12-31\) \(seat\); thinking at the output rate, cache reads at the cached rate$/);
+    assert.equal(r.manifest.cost.driver_modeled_usd_is_floor, undefined);
+    assert.match(describeManifest(r.manifest, null), /driver modeled \$9\.15$/);
+    assert.equal(r.manifest.harness.pin.verified, true);
+  } finally { r.cleanup(); }
+});
+
+test("an off-pin call on a model the list prices is billed at that model's own dated card, not the pin's", async () => {
+  const r = await collected(["gemini-3.8-flash", "gemini-3.5-flash"]);
+  try {
+    assert.deepEqual(r.modeled.map((e) => [e.model, e.cost_usd]), [["gemini-3.8-flash", CARD_38], ["gemini-3.5-flash", CARD_35]]);
+    assert.deepEqual([r.modeled[1].price_period.from, r.modeled[1].price_period.to], ["2026-05-19", null]);
+    assert.deepEqual(r.evidence.model_mismatch, ["gemini-3.5-flash"]);
+    assert.equal(r.evidence.unpriced_calls, undefined, "every call has a price");
+    const line = r.manifest.cost.lines[0];
+    assert.equal(line.cost_usd, Math.round((CARD_38 + CARD_35) * 1e6) / 1e6);
+    assert.equal(line.incomplete, undefined);
+    assert.deepEqual(line.models, ["gemini-3.8-flash", "gemini-3.5-flash"]);
+    assert.match(line.basis, /dated price list for gemini-3\.8-flash and gemini-3\.5-flash \(period 2026-09-02\.\.2026-12-31, 2026-05-19\.\.open\)/);
+    assert.deepEqual([r.manifest.harness.pin.verified, r.manifest.harness.pin.unverified_reason], [false, "model_mismatch"]);
+  } finally { r.cleanup(); }
+});
+
+test("an off-pin call on a model the list cannot price keeps its tokens, has no dollars, and makes the driver line a floor", async () => {
+  const r = await collected(["gemini-3.8-flash", "gemini-4-argon", "gemini-4-argon"]);
+  try {
+    const argon = r.modeled.filter((e) => e.model === "gemini-4-argon");
+    assert.equal(argon.length, 2);
+    for (const e of argon) {
+      assert.equal(e.cost_usd, null, "unpriced, never $0");
+      assert.match(e.unpriced, /unknown model "gemini-4-argon": not on the price list/);
+      assert.equal(e.price_basis, undefined);
+      assert.equal(e.input_tokens, 1_000_000);
+    }
+    assert.equal(r.evidence.priced_in_full, false);
+    assert.deepEqual(r.evidence.unpriced_calls.map((u) => [u.model, u.calls]), [["gemini-4-argon", 2]]);
+    assert.match(r.evidence.unpriced_calls[0].reason, /not on the price list/);
+
+    const line = r.manifest.cost.lines[0];
+    assert.equal(line.kind, "modeled");
+    assert.equal(line.incomplete, true);
+    assert.equal(line.cost_usd, CARD_38, "the floor: the priced call only");
+    assert.deepEqual([line.calls, line.input_tokens], [3, 3_000_000], "the unpriced calls' tokens are counted");
+    assert.match(line.basis, /AT LEAST this figure: 2 of 3 call\(s\) ran on a model the price list cannot price \(gemini-4-argon, 2 call\(s\)\)/);
+    assert.equal(r.manifest.cost.driver_modeled_usd_is_floor, true);
+    assert.equal(r.manifest.harness.driver_cost_is_floor, true);
+    assert.deepEqual(r.manifest.harness.driver_unpriced_calls.map((u) => [u.model, u.calls]), [["gemini-4-argon", 2]]);
+    assert.match(r.manifest.harness.cable.driver_cost_note, /It is a floor, not the whole figure: 2 call\(s\) on gemini-4-argon/);
+    assert.match(describeManifest(r.manifest, null), /driver modeled at least \$4\.575 \(2 of 3 call\(s\) unpriced: gemini-4-argon\)$/);
+  } finally { r.cleanup(); }
+});
+
+test("a chat that ran wholly on an unpriced model shows its tokens and a $0 floor, never a complete $0", async () => {
+  const r = await collected(["gemini-4-argon", "gemini-4-argon"]);
+  try {
+    const line = r.manifest.cost.lines[0];
+    assert.deepEqual([line.cost_usd, line.incomplete, line.calls], [0, true, 2]);
+    assert.match(line.basis, /at no card: the price list prices none of the models agy recorded/);
+    assert.match(describeManifest(r.manifest, null), /driver modeled at least \$0 \(2 of 2 call\(s\) unpriced: gemini-4-argon\)/);
+  } finally { r.cleanup(); }
 });
 
 test("a headless run is refused: its driver comes from the stream run.mjs captured", async () => {

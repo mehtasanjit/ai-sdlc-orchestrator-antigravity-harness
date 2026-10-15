@@ -175,13 +175,13 @@ What happens next, in order (the full list is in [INSTALL.md](INSTALL.md)):
 4. It connects the plugin to your folder through a hidden `.agents/plugins/mmo/` folder. Nothing is written to your home folder's Antigravity settings (`~/.gemini/`).
 5. A browser page opens once. Press **Save** to keep the default policy.
 
-**Prompt 2 — run.** Start a **new `agy` session in the same folder**: quit the app, then open it again in the same folder with this exact command. Answer **yes** when it asks whether you trust the folder.
+**Prompt 2 — run.** Start a **new `agy` session in the same folder**, on the conductor's model: quit the app, then open it again in the same folder with this exact command. Answer **yes** when it asks whether you trust the folder.
 
 ```bash
 cd ~/my-first-app && agy --model gemini-3.8-flash-high
 ```
 
-Without `--model` the app runs on its own default model, while the bill prices the conductor as Gemini 3.8 Flash and checks that model, so the model check fails. `gemini-3.8-flash-high` is the default policy's model; setup prints the command for the policy you picked.
+Without `--model` the app runs on its own default model, and the run refuses to start on it, because the bill would describe a conductor the policy does not price. `gemini-3.8-flash-high` is the default policy's model; setup prints the command for the policy you picked.
 
 Then type one command:
 

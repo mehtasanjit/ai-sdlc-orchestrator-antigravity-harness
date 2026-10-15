@@ -46,6 +46,26 @@ from this moment (`run_started_at`, used at Phase 9):
 date -u +%Y-%m-%dT%H:%M:%SZ
 ```
 
+Then check that this chat runs on the policy's driver pin (interactive only; a headless launch
+passes the pin to agy itself and skips every `check-driver-pin.mjs` step in this guide):
+
+```bash
+node "${MMO_PLUGIN_ROOT}/agy/check-driver-pin.mjs" --since=<run_started_at> --project-root="$(pwd)"
+```
+
+It reads the model calls agy has recorded for this chat and compares them with the pin.
+
+- **Exit 0** — every recorded call is the pin. Continue.
+- **Exit 1** — refused. Print its message verbatim and stop: run no pre-check, dispatch nothing.
+  The message names the model this chat runs on, the pin, and the command to restart agy on the
+  pin (`agy --model <slug>`). The user quits this chat, restarts agy with that command in this
+  folder, and invokes the same `/mmo:` command again.
+- **Exit 3** — not checked: agy's record holds no call for this chat yet, or a conversation's
+  record could not be read (the message names it). Say so in one line —
+  never as a pass — and continue; run the same command again before the first paid dispatch
+  (step 2's dispatch smoke, or Gate 0 when the pre-check is cached).
+- **Exit 2** — print the error and stop.
+
 Then invoke:
 
 ```bash
@@ -62,7 +82,10 @@ Read the JSON. Three cases:
 - **`resume.pending: true` with `kind: "run"`** — a previous task run was interrupted at phase
   &lt;phase&gt;. Print *"A previous &lt;intent&gt; run (`&lt;run_id&gt;`) was interrupted at phase &lt;phase&gt;.
   Would you like to resume it, or start fresh?"* Accept `resume`, `discard`, or `abort`. If
-  `resume`, follow the resume path in [plugin/skills/pipeline/SKILL.md](/plugin/skills/pipeline/SKILL.md).
+  `resume`, first check this chat against the pin the run started under (its
+  `policy_snapshot.yaml`), with the same exits as above:
+  `node "${MMO_PLUGIN_ROOT}/agy/check-driver-pin.mjs" --since=<run_started_at> --run-id=<run_id> --project-root="$(pwd)"`
+  — then follow the resume path in [plugin/skills/pipeline/SKILL.md](/plugin/skills/pipeline/SKILL.md).
   If `discard`, end the interrupted run so its contract stops holding the project — ask first,
   since ending a run is the user's decision:
   `node "${MMO_PLUGIN_ROOT}/scripts/write-contract.mjs" --abandon --run-id=<run_id> --reason="discarded at resume" --project-root="$(pwd)"`
@@ -98,8 +121,10 @@ Agent-side steps (1 = discovery smoke, 3 = dispatch smoke) — you run yourself:
 
 3. **Dispatch smoke.** One Gemini Flash call. The policy routes `task_type: "smoke"` to the
    mechanical tier; the free `preflight_dispatch` at Rule 0 already proves every model the policy
-   names is reachable, so the smoke never goes to Opus. Write this TaskPacket to
-   `.sdlc/runs/<run-id>/smoke-packet.json`:
+   names is reachable, so the smoke never goes to Opus. If step 1's `check-driver-pin.mjs` exited
+   3, run it again first: a second exit 3 means the conductor's model cannot be checked, so tell the
+   user and ask whether to dispatch anyway (`continue` / `abort`); exit 1 stops the run as in step
+   1. Write this TaskPacket to `.sdlc/runs/<run-id>/smoke-packet.json`:
    ```json
    { "id": "smoke-1", "phase": "pre_check", "task_type": "smoke", "module": "smoke",
      "instruction": "Return the literal string OK", "inputs": [], "outputSchema": { "type": "object" },
@@ -275,7 +300,16 @@ extra confirmation lines with the plugin's default behavior. Example:
 >   into them. Continue? [assumed yes unless you say otherwise]
 
 On `approved`:
-1. Freeze the confirmed allowlist + off-limits by code — never write the contract yourself:
+1. Check this chat against the pin of the policy Gate 0 confirmed, and snapshot that policy into
+   the run folder (interactive only). It writes `.sdlc/runs/<run-id>/policy_snapshot.yaml`, which
+   the manifest reads the pin from:
+   ```bash
+   node "${MMO_PLUGIN_ROOT}/agy/check-driver-pin.mjs" --since=<run_started_at> --run-id=<run-id> --policy=<policy> --project-root="$(pwd)"
+   ```
+   The exits are step 1's. On exit 1 stop: nothing is frozen yet, so there is nothing to end. On
+   exit 3, tell the user the conductor's model could not be checked and ask whether to continue
+   (`continue` / `abort`).
+2. Freeze the confirmed allowlist + off-limits by code — never write the contract yourself:
    ```bash
    node "${MMO_PLUGIN_ROOT}/scripts/write-contract.mjs" --freeze --run-id=<run-id> \
      --allowlist='<JSON array of globs>' --off-limits='<JSON array of globs>' --project-root="$(pwd)"
@@ -288,17 +322,17 @@ On `approved`:
    the contract is edited after this freeze. A refusal names the rule; do not route around it.
    Headless (`agy -p`) on agy 1.3.5 loads the same hook; the run record's `harness.write_guard`
    says whether it judged this run's writes.
-2. Initialise the run's undo record:
+3. Initialise the run's undo record:
    ```bash
    node "${MMO_PLUGIN_ROOT}/scripts/write-provenance.mjs" --init --run-id=<run-id> --intent=<intent> --project-root="$(pwd)"
    ```
-3. Update `.sdlc/runs/<run-id>/intent_brief.md` with the final scope.
-4. Mark the run's start (interactive only; a headless launch records its own window). The manifest
+4. Update `.sdlc/runs/<run-id>/intent_brief.md` with the final scope.
+5. Mark the run's start (interactive only; a headless launch records its own window). The manifest
    and the driver collector read this line; `<run_started_at>` is the time recorded in step 1:
    ```bash
    node "${MMO_PLUGIN_ROOT}/scripts/mmo-log.mjs" --event=run.start --run-id=<run-id> --started-at=<run_started_at> --mode=brownfield --intent=<intent> --policy=<policy> --project-root="$(pwd)"
    ```
-5. Continue to step 6.
+6. Continue to step 6.
 
 On `revise: <comments>` — rewrite the affected parts and re-show Gate 0.
 

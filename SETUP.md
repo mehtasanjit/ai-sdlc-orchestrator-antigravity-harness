@@ -87,7 +87,7 @@ Setup ends by telling the user to start a **new** `agy` session in the project w
 | `antigravity-flash38-plus-opus5` (the default) | `agy --model gemini-3.8-flash-high` |
 | Any other | `node plugin/agy/start-command.mjs --project-root <project>` prints it: the slug from the policy's `driver:` block, derived the way `run.mjs` derives `--model` |
 
-Tell the user why in one sentence: without `--model` the chat runs on agy's default model, while the run prices the conductor at the pin's rates and checks the model it ran on against the pin's model, so the model check fails (`pin.unverified_reason: model_mismatch`). agy's local record names the model, not the effort, so a chat started at another effort passes that check: give the slug exactly as printed.
+Tell the user why in one sentence: without `--model` the chat runs on agy's default model, and `plugin/agy/check-driver-pin.mjs` refuses the run at its start, because it checks the model the chat ran on against the pin's model. agy's local record names the model, not the effort, so a chat started at another effort passes that check: give the slug exactly as printed.
 
 ## 8. Before any paid run
 

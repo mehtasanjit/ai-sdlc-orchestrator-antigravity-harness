@@ -133,3 +133,31 @@ test("a run with no fallback packet prints no fallback section", () => {
     assert.doesNotMatch(report(dir), /no policy rule matched/);
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
+
+test("a driver line with unpriced calls is shown as a floor, at least its figure, never as complete", () => {
+  const dir = mkdtempSync(join(tmpdir(), "agy-report-"));
+  try {
+    copyFileSync(join(ROOT, "plugin", "config", "policies", `${POLICY}.yaml`), join(dir, "policy_snapshot.yaml"));
+    writeFileSync(join(dir, "telemetry.jsonl"), [ev(OPUS), ev({})].map((e) => JSON.stringify(e)).join("\n") + "\n");
+    const call = (model, cost, extra = {}) => ({ pass: "r1", tier: "orchestrator", provenance: "modeled", phase: "driver_loop", task_type: "conductor", model, usage_source: "agy-local-record", input_tokens: 1000, input_tokens_cached: 0, output_tokens: 100, output_tokens_reasoning: 0, cost_usd: cost, ...extra });
+    const modeled = [
+      call("gemini-3.8-flash", 0.001125, { price_basis: "list", price_period: { from: "2026-09-02", to: "2026-12-31" } }),
+      call("gemini-4-argon", null, { unpriced: 'unknown model "gemini-4-argon": not on the price list' }),
+    ];
+    writeFileSync(join(dir, "driver-cost-modeled.jsonl"), modeled.map((e) => JSON.stringify(e)).join("\n") + "\n");
+    writeFileSync(join(dir, "driver-collector.json"), JSON.stringify({ source: "agy-local-record", run_id: "r1", calls: 2, reported_models: ["gemini-3.8-flash", "gemini-4-argon"], model_mismatch: ["gemini-4-argon"] }));
+    writeFileSync(join(dir, "manifest.json"), JSON.stringify(buildHarnessManifest({ runDir: dir, runId: "r1", env: { ANTHROPIC_API_KEY: "k" } }), null, 2) + "\n");
+
+    const text = report(dir);
+    assert.match(text, /driver\s+modeled\s+2\s+.*at least \$0\.0011/);
+    assert.match(text, /Modeled cost\s+at least \$0\.0011/);
+    assert.match(text, /driver figure is a floor, not the whole cost: 1 call\(s\) on gemini-4-argon/);
+    const rows = text.split("\n");
+    const end = (re) => { const row = rows.find((r) => re.test(r)); return row.indexOf("$") + row.slice(row.indexOf("$")).search(/\d(?!\d|\.)/) + 1; };
+    assert.equal(end(/^\s+driver\s+modeled/), end(/^\s+Cash\s/), "the floor's cost ends in the column the cash figure ends in");
+    assert.equal(end(/^\s+gemini workers\s/), end(/^\s+Cash\s/));
+    const md = report(dir, "--markdown");
+    assert.match(md, /\| driver \| \*\*modeled\*\* \| 2 \| .* \| at least \$0\.0011 \|/);
+    assert.match(md, /\| 2 \| 2\.0K \/ 200 \| at least \$0\.0011 \|/);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});

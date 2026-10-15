@@ -79,11 +79,21 @@ two lines in `<output_dir>/orchestrator.log`. Write them with the log script, ne
 script writes to `<project_root>/.sdlc/runs/<run_id>/orchestrator.log`, which is `<output_dir>`'s
 log on the default layout.
 
-Before Phase -1 on greenfield (on brownfield the guide logged it at Gate 0; do not log it twice):
+Before Phase -1 on greenfield (on brownfield the guide ran both at Gate 0; do not run them twice):
 
 ```
+node "${MMO_PLUGIN_ROOT}/agy/check-driver-pin.mjs" --since=<run_started_at> --run-id=<run_id> --policy=<policy> --project-root="<project_root>" --output-dir="<output_dir>"
 node "${MMO_PLUGIN_ROOT}/scripts/mmo-log.mjs" --event=run.start --run-id=<run_id> --started-at=<run_started_at> --mode=greenfield --policy=<policy> --project-root="<project_root>"
 ```
+
+The first checks the model calls agy recorded for this chat against the policy's driver pin and
+writes `<output_dir>/policy_snapshot.yaml`, which the manifest reads the pin from. Exit 0: log
+`run.start` and continue. Exit 1 is a refusal: print its message verbatim — it names the model
+seen, the pin, and the `agy --model <slug>` command to restart agy on the pin — and stop before
+Phase -1; the run has spent nothing. Exit 3 means agy's record holds no call for this chat yet, or
+a conversation's record could not be read: tell the user the conductor's model could not be
+checked, never that it passed, and ask whether to continue (`continue` / `abort`). Exit 2: print
+the error and stop.
 
 After Gate 4 is answered `accept`, or when the run stops at any gate on `abort`, log the end,
 collect your own usage again, and rebuild the manifest, in this order:
@@ -412,7 +422,8 @@ cost lines; it never computes them.
    has priced your own loop from the agy stream.
 2. **Write `<output_dir>/SUMMARY.md`:**
    - **Cost.** Interactive: one bullet per line `manifest.mjs` printed, copied with its kind and
-     figure exactly as printed. Mark the driver bullet "through the final report": it does not yet
+     figure exactly as printed. A driver line printed `at least $X (… unpriced: <model>)` is a
+     floor: keep the words `at least` and the unpriced count. Mark the driver bullet "through the final report": it does not yet
      hold your calls for Gate 4, which the collection after `run.end` adds to `manifest.json`. Headless: one sentence saying the labelled cost lines are in
      `manifest.json` → `cost.lines`, written by the launcher after this session. Never compute a
      total, never add a `modeled` figure to a `cash` one, and never put a figure on a
