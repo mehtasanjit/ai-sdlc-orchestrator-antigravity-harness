@@ -26,7 +26,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { readMmoSelectFile, writeMmoSelectFile } from "./mmoSelect.mjs";
-import { projectStartCommand, whyThePin } from "./start-command.mjs";
+import { HARNESS_ROOT, isHarnessClone, projectStartCommand, whyThePin } from "./start-command.mjs";
 import { runChecks as runEnvChecks, renderText as renderEnvChecks } from "./env-checks.mjs";
 import { isMain } from "../scripts/lib/is-main.mjs";
 import { staleBuild } from "../scripts/lib/stale-build.mjs";
@@ -431,6 +431,7 @@ export function evaluate({
   hasGcloud = true,
   agentWorker = null,
   policy = null,
+  start = null,
 }) {
   const problems = [];
 
@@ -497,6 +498,15 @@ export function evaluate({
       severity: "blocking",
       message: "The bundled MCP server is not compiled (dist/server.js missing) — mcp_config.json points at it.",
       fix: "Run this script with --fix (or: npm run build at the repo root).",
+    });
+  }
+  // With the bridge uninstalled the error may be only the missing yaml, which mcp-dependencies reports.
+  if (start && !start.command && hasNodeModules) {
+    problems.push({
+      id: "driver-pin",
+      severity: "blocking",
+      message: `No command to start a chat on the driver pin: ${start.error}`,
+      fix: "Fix the policy the message names: its driver: block needs runtime: agy, model_name, reasoning.effort and pricing (the shipped antigravity-flash38-plus-opus5.yaml has one). Or pick a shipped policy with /mmo:policy change.",
     });
   }
 
@@ -660,6 +670,7 @@ function observe(pluginRoot, env = process.env, projectRoot = process.cwd()) {
     env: effectiveEnv,
     agentWorker: observeAgentWorker(pluginRoot, effectiveEnv),
     policy: observePolicy(pluginRoot, projectRoot),
+    start: projectStartCommand({ projectRoot, pluginRoot }),
   };
 }
 
@@ -736,28 +747,35 @@ export function agentProbeHint(pluginRoot, env = {}, ok = true) {
   );
 }
 
-export function nextStepsBanner(cwd = process.cwd(), ok = true, start = projectStartCommand({ projectRoot: cwd })) {
+export function nextStepsBanner(projectRoot = process.cwd(), ok = true, start = projectStartCommand({ projectRoot }), harnessRoot = HARNESS_ROOT) {
   if (!ok) return null;
-  let currentPolicy = null;
-  try {
-    currentPolicy = JSON.parse(readFileSync(join(cwd, ".sdlc", "project.json"), "utf8")).default_policy ?? null;
-  } catch { /* no project.json yet */ }
-  const policyLine = currentPolicy
-    ? `\n  Current policy: ${currentPolicy}   (change: the policy skill)`
-    : `\n  No policy set yet — the launcher defaults to ${DEFAULT_POLICY}.`;
-  const interactive = start.command
-    ? `  Interactive, how you use the harness: start a NEW agy session in this project on the\n` +
-      `  policy's driver pin, invoke a skill, and answer the gates yourself:\n` +
-      `    cd "${cwd}" && ${start.command}\n` +
-      `  ${whyThePin(start.slug)}\n` +
-      `  /plugins lists mmo, /mcp shows model-dispatch, /skills lists greenfield, brownfield, pass, policy and the rest.\n\n`
-    : `  ✗ No command to start a chat on the driver pin: ${start.error}\n\n`;
+  const headless = `  Headless, the cost check: node "${join(harnessRoot, "plugin", "agy", "run.mjs")}" --brief=<file> --project-root=<dir> --output-dir=<dir> --dry-run\n`;
+  const signIn = `\n  Sign-in is not checked here: \`agy models\` must list models before a run.`;
+  if (isHarnessClone(projectRoot, harnessRoot)) {
+    return (
+      `\n✓ The harness clone is ready.\n\n` +
+      `  This checked the clone, not a project, so it gives no command to start a run. Check the\n` +
+      `  project you run in; that prints its start command, on its own policy's driver pin:\n` +
+      `    npm run verify -- --project-root=/path/to/your/project\n\n` +
+      headless +
+      signIn
+    );
+  }
+  if (!start?.command) return null;
+  const policyLine = {
+    "routing-policy.yaml": `Current policy: ${start.policy}, from the project's routing-policy.yaml   (change: edit that file; it outranks the policy skill)`,
+    ".sdlc/project.json": `Current policy: ${start.policy}   (change: the policy skill)`,
+  }[start.source] ?? `No policy set yet — the launcher defaults to ${start.policy}.`;
   return (
     `\n✓ Setup complete for this project.\n\n` +
-    interactive +
-    `  Headless, the cost check: node plugin/agy/run.mjs --brief=<file> --project-root=<dir> --output-dir=<dir> --dry-run\n` +
-    policyLine +
-    `\n  Sign-in is not checked here: \`agy models\` must list models before a run.`
+    `  Interactive, how you use the harness: start a NEW agy session in this project on the\n` +
+    `  policy's driver pin, invoke a skill, and answer the gates yourself:\n` +
+    `    cd "${projectRoot}" && ${start.command}\n` +
+    `  ${whyThePin(start.model)}\n` +
+    `  /plugins lists mmo, /mcp shows model-dispatch, /skills lists greenfield, brownfield, pass, policy and the rest.\n\n` +
+    headless +
+    `\n  ${policyLine}` +
+    signIn
   );
 }
 
@@ -851,7 +869,7 @@ if (isMain(import.meta.url)) {
   for (const hint of [
     agentProbeHint(pluginRoot, env, passed),
     agentPathAvailableHint(pluginRoot, observed.vertex, env),
-    brownfieldCheck ? null : nextStepsBanner(projectRoot, passed),
+    brownfieldCheck ? null : nextStepsBanner(projectRoot, passed, observed.start),
   ]) {
     if (hint) log(hint);
   }
@@ -863,7 +881,7 @@ if (isMain(import.meta.url)) {
     brownfieldOk = bf.ok;
     log(renderEnvChecks(bf).trimEnd());
     if (headless && !brownfieldOk) log("\nHeadless mode: a blocker check needs human action. Fix the reported items and re-run.");
-    const banner = nextStepsBanner(projectRoot, passed && brownfieldOk);
+    const banner = nextStepsBanner(projectRoot, passed && brownfieldOk, observed.start);
     if (banner) log(banner);
   }
   process.exit(passed && brownfieldOk ? 0 : 1);

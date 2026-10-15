@@ -170,16 +170,44 @@ test("the next-steps banner names the repo-discovery route and the sign-in cavea
   assert.equal(nextStepsBanner("/nonexistent", false), null);
 });
 
-test("the banner starts the chat on the project's driver pin, or says why it cannot", () => {
+test("the banner starts the chat on the project's driver pin, and gives none without one", () => {
   const banner = nextStepsBanner("/nonexistent", true);
   assert.ok(banner.includes(`cd "/nonexistent" && agy --model gemini-3.8-flash-high\n`), banner);
-  assert.match(banner, /Without --model the chat runs on agy's default model/);
+  assert.match(banner, /Without --model the chat runs on agy's default model.*against gemini-3\.8-flash, so/);
   assert.doesNotMatch(banner, /open `agy` in the repo root/);
-  const other = nextStepsBanner("/p", true, { command: "agy --model gemini-3.8-flash-low", slug: "gemini-3.8-flash-low" });
+  assert.match(banner, /No policy set yet — the launcher defaults to antigravity-flash38-plus-opus5\./);
+  const other = nextStepsBanner("/p", true, { command: "agy --model gemini-3.8-flash-low", slug: "gemini-3.8-flash-low", model: "gemini-3.8-flash", policy: "team-low", source: ".sdlc/project.json" });
   assert.ok(other.includes(`cd "/p" && agy --model gemini-3.8-flash-low\n`), other);
-  const none = nextStepsBanner("/p", true, { command: null, error: "fairness pin: policy 'x' has no top-level driver: block" });
-  assert.match(none, /✗ No command to start a chat on the driver pin: fairness pin: policy 'x' has no top-level driver: block/);
-  assert.doesNotMatch(none, /agy --model/);
+  assert.match(other, /Current policy: team-low   \(change: the policy skill\)/);
+  const none = { command: null, error: "fairness pin: policy 'x' has no top-level driver: block", policy: "x", source: "routing-policy.yaml" };
+  assert.equal(nextStepsBanner("/p", true, none), null, "no 'Setup complete' without a start command");
+});
+
+test("the banner's policy line names the policy the start command came from", () => {
+  const start = { command: "agy --model gemini-3.8-flash-medium", slug: "gemini-3.8-flash-medium", model: "gemini-3.8-flash", policy: "team-medium", source: "routing-policy.yaml" };
+  const banner = nextStepsBanner("/p", true, start);
+  assert.match(banner, /Current policy: team-medium, from the project's routing-policy\.yaml/);
+  assert.doesNotMatch(banner, /No policy set yet/);
+});
+
+test("run in the harness clone, the banner gives no start command and points at the project", () => {
+  const banner = nextStepsBanner(ROOT, true);
+  assert.doesNotMatch(banner, /agy --model/);
+  assert.ok(!banner.includes(`cd "${ROOT}"`), banner);
+  assert.doesNotMatch(banner, /Setup complete for this project/);
+  assert.match(banner, /npm run verify -- --project-root=\/path\/to\/your\/project/);
+});
+
+test("a policy with no usable driver pin blocks, so the exit code and the header agree with setup", () => {
+  const start = { command: null, error: "fairness pin: policy 'no-driver' has no top-level driver: block to read the pin from.", policy: "no-driver", source: "routing-policy.yaml" };
+  const state = evaluate({ ...HEALTHY, start });
+  assert.equal(state.ok, false);
+  const problem = state.problems.find((p) => p.id === "driver-pin");
+  assert.equal(problem.severity, "blocking");
+  assert.match(problem.message, /^No command to start a chat on the driver pin: fairness pin: policy 'no-driver'/);
+  assert.deepEqual(evaluate({ ...HEALTHY, start: { command: "agy --model gemini-3.8-flash-high" } }), { ok: true, problems: [] });
+  const unbuilt = evaluate({ ...HEALTHY, hasNodeModules: false, start: { command: null, error: "the policy cannot be read until the bridge is installed" } });
+  assert.deepEqual(unbuilt.problems.map((p) => p.id), ["mcp-dependencies"], "an uninstalled bridge is reported once, as itself");
 });
 
 // ── env-checks ────────────────────────────────────────────────────────────

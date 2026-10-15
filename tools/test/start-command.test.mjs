@@ -6,13 +6,13 @@
  */
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync, copyFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync, copyFileSync, symlinkSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
-import { chatStartCommand, projectStartCommand, whyThePin, yamlParser } from "../../plugin/agy/start-command.mjs";
+import { chatStartCommand, isHarnessClone, projectStartCommand, whyThePin, yamlParser } from "../../plugin/agy/start-command.mjs";
 import { DEFAULT_POLICY } from "../../plugin/agy/run.mjs";
 import { registerProject } from "../setup.mjs";
 
@@ -43,7 +43,7 @@ test("the default policy starts the chat with agy --model gemini-3.8-flash-high"
   const dir = project();
   try {
     const start = projectStartCommand({ projectRoot: dir });
-    assert.deepEqual(start, { command: "agy --model gemini-3.8-flash-high", slug: "gemini-3.8-flash-high", policy: DEFAULT_POLICY, source: "default" });
+    assert.deepEqual(start, { command: "agy --model gemini-3.8-flash-high", slug: "gemini-3.8-flash-high", model: "gemini-3.8-flash", policy: DEFAULT_POLICY, source: "default" });
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
@@ -79,6 +79,7 @@ test("a policy with no driver pin yields no command and says why", () => {
     const start = projectStartCommand({ projectRoot: dir });
     assert.equal(start.command, null);
     assert.match(start.error, /no top-level driver: block/);
+    assert.deepEqual([start.policy, start.source], ["no-driver", "routing-policy.yaml"], "the policy that failed is still named");
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
@@ -92,9 +93,28 @@ test("the policy is read with the bridge's yaml when the clone's root install is
   } finally { rmSync(bare, { recursive: true, force: true }); }
 });
 
-test("the reason names the slug the run checks against", () => {
+test("the reason names the model the run checks, not the slug: agy's local record carries no effort", async () => {
+  const { offPinModels } = await import("../../plugin/agy/telemetry/event-reader.mjs");
+  const { driverSlug } = await import("../../plugin/agy/telemetry/fairnessPin.mjs");
   assert.equal(chatStartCommand({ model: "gemini-3.8-flash", effort: "low" }), "agy --model gemini-3.8-flash-low");
-  assert.match(whyThePin("gemini-3.8-flash-high"), /agy's default model.*gemini-3\.8-flash-high/);
+  const pin = { model: "gemini-3.8-flash", effort: "medium" };
+  assert.deepEqual(offPinModels(["gemini-3.8-flash"], pin, driverSlug(pin)), [], "a chat at another effort still passes");
+  const why = whyThePin(pin.model);
+  assert.match(why, /^Without --model the chat runs on agy's default model, .*checks the model it ran on against gemini-3\.8-flash, so the model check fails\.$/);
+  assert.doesNotMatch(why, /-medium|-high|-low/);
+});
+
+test("only the harness clone itself counts as the clone, whatever the path's spelling", () => {
+  assert.equal(isHarnessClone(ROOT), true);
+  assert.equal(isHarnessClone(join(ROOT, "plugin", "..")), true);
+  assert.equal(isHarnessClone(join(PLUGIN, "skills")), false);
+  const dir = project();
+  try {
+    assert.equal(isHarnessClone(dir), false);
+    symlinkSync(ROOT, join(dir, "clone"));
+    assert.equal(isHarnessClone(join(dir, "clone")), true, "a link to the clone is the clone");
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+  assert.equal(isHarnessClone("/p", "/p"), true, "a path that does not exist compares as resolved");
 });
 
 test("the CLI prints the command, through the project's plugin mount too", () => {
