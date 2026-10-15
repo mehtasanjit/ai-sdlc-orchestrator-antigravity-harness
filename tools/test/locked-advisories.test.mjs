@@ -17,6 +17,7 @@ const ADVISORIES = [
   { name: "@modelcontextprotocol/sdk", from: "1.12.0", fixed: "1.31.0" },
   { name: "body-parser", from: "2.0.0", fixed: "2.3.0" },
   { name: "fast-uri", from: "3.0.0", fixed: "3.1.8" },
+  { name: "form-data", from: "4.0.0", fixed: "4.0.6" },
   { name: "hono", fixed: "4.13.7" },
   { name: "ip-address", fixed: "10.7.1" },
   { name: "protobufjs", from: "7.5.0", fixed: "7.6.5" },
@@ -36,11 +37,16 @@ function below(a, b) {
 const affected = (name, version) =>
   ADVISORIES.filter((a) => a.name === name && !below(version, a.from ?? "0.0.0") && below(version, a.fixed));
 
-test("the range check flags the versions develop locked before the cleanup, and only those", () => {
-  for (const [name, version] of [["@modelcontextprotocol/sdk", "1.30.0"], ["proxy-addr", "2.0.7"], ["hono", "4.12.22"], ["@hono/node-server", "1.19.14"], ["fast-uri", "3.1.2"], ["ip-address", "10.2.0"], ["undici", "8.5.0"], ["qs", "6.15.2"]]) {
+test("the range check flags every version main and develop locked before the cleanup, and only those", () => {
+  const locked = [
+    ["@hono/node-server", "1.19.14"], ["@modelcontextprotocol/sdk", "1.29.0"], ["@modelcontextprotocol/sdk", "1.30.0"], ["body-parser", "2.2.2"],
+    ["fast-uri", "3.1.2"], ["form-data", "4.0.5"], ["hono", "4.12.22"], ["ip-address", "10.2.0"], ["protobufjs", "7.6.4"],
+    ["proxy-addr", "2.0.7"], ["qs", "6.15.2"], ["undici", "8.5.0"],
+  ];
+  for (const [name, version] of locked) {
     assert.equal(affected(name, version).length, 1, `${name} ${version}`);
   }
-  for (const [name, version] of [["@modelcontextprotocol/sdk", "1.31.0"], ["@hono/node-server", "2.1.5"], ["body-parser", "1.20.3"], ["undici", "7.16.0"], ["ip-address", "10.7.1"]]) {
+  for (const [name, version] of [["@modelcontextprotocol/sdk", "1.31.0"], ["@hono/node-server", "2.1.5"], ["body-parser", "1.20.3"], ["form-data", "4.0.6"], ["form-data", "3.0.4"], ["undici", "7.16.0"], ["ip-address", "10.7.1"]]) {
     assert.deepEqual(affected(name, version), [], `${name} ${version}`);
   }
 });
