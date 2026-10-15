@@ -421,7 +421,8 @@ cost lines; it never computes them.
    has priced your own loop from the agy stream.
 2. **Write `<output_dir>/SUMMARY.md`:**
    - **Cost.** Interactive: one bullet per line `manifest.mjs` printed, copied with its kind and
-     figure exactly as printed. Mark the driver bullet "through the final report": it does not yet
+     figure exactly as printed. A driver line printed `at least $X (… unpriced: <model>)` is a
+     floor: keep the words `at least` and the unpriced count. Mark the driver bullet "through the final report": it does not yet
      hold your calls for Gate 4, which the collection after `run.end` adds to `manifest.json`. Headless: one sentence saying the labelled cost lines are in
      `manifest.json` → `cost.lines`, written by the launcher after this session. Never compute a
      total, never add a `modeled` figure to a `cash` one, and never put a figure on a

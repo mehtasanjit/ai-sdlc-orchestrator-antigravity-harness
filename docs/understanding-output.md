@@ -5,7 +5,7 @@
 After a run finishes, the record lives in the run's own folder, `.sdlc/runs/<run-id>/`: `run.mjs`'s default `--output-dir`, `/mmo:greenfield` (`<YYYYMMDD-HHMMSS>-greenfield`), and every brownfield entry (`<YYYYMMDD-HHMMSS>-<intent>-<slug>`). The manifest and the report book only the run's own lines (`pass`), so a folder reused across runs never adds one run's cost to another's; `harness.other_runs_in_directory` names the other runs found there. Two files carry the money, and they are kept apart on purpose:
 
 - `telemetry.jsonl` — one JSON object per line, one line per **dispatched** model call: everything that went through the bridge. Vendor-metered. Real usage, and on a key or a GCP project, real money.
-- `driver-cost-modeled.jsonl` — one line per conductor turn, priced through the dated price list. **Modeled.** A Google seat has no per-token invoice, so this figure is what the tokens *would* cost at the published rate, not what anyone was billed. A headless run writes it from agy's stream-json `usage`; an interactive run from agy's local conversation record, through `plugin/agy/collect-driver-usage.mjs` (its lines carry `usage_source: "agy-local-record"`, and `driver-collector.json` holds the evidence). An interactive run that never ran the collector carries the driver line as `kind: "unmeasured"`: $0 with a `NOT MEASURED` basis and `cost.driver_measured: false`, never a modeled $0.
+- `driver-cost-modeled.jsonl` — one line per conductor turn, priced through the dated price list. **Modeled.** A Google seat has no per-token invoice, so this figure is what the tokens *would* cost at the published rate, not what anyone was billed. A headless run writes it from agy's stream-json `usage`; an interactive run from agy's local conversation record, through `plugin/agy/collect-driver-usage.mjs` (its lines carry `usage_source: "agy-local-record"`, and `driver-collector.json` holds the evidence). An interactive run that never ran the collector carries the driver line as `kind: "unmeasured"`: $0 with a `NOT MEASURED` basis and `cost.driver_measured: false`, never a modeled $0. The collector prices each call at its own model's dated card; a call on a model the price list cannot price has `cost_usd: null`, and the driver line is then a floor, printed `at least`.
 
 Around them:
 
@@ -63,7 +63,7 @@ One named row per phase that logged an event. Known phases come in state-machine
 
 Its own section, deliberately. Turns, tokens and the modeled cost of the conductor's own loop — reasoning, file reads, the growing conversation — derived from agy's `usage` counters at the driver card. The text under the table repeats the point every time: this is not an amount anyone was billed, and it is kept out of the cash figure. Full method in [methodology.md](methodology.md#three-cost-lines).
 
-On an interactive run the section is filled by `node plugin/agy/collect-driver-usage.mjs <run-dir>`, which reads agy's local conversation record for the run's window and writes `driver-collector.json` beside the modeled lines ([check 18](verification/p1-agy-runtime.md)). Until it runs, the section reads **NOT MEASURED**: the conductor's tokens are in no figure, which is not the same as free. _No driver turns recorded._ appears only when a launcher or collector record exists but reported no usage.
+On an interactive run the section is filled by `node plugin/agy/collect-driver-usage.mjs <run-dir>`, which reads agy's local conversation record for the run's window and writes `driver-collector.json` beside the modeled lines ([check 18](verification/p1-agy-runtime.md)). When some calls ran on a model the price list cannot price, the modeled cost reads **at least $X** and a note names the model, its call count and the reason: the tokens are complete, the dollars are a floor. Until it runs, the section reads **NOT MEASURED**: the conductor's tokens are in no figure, which is not the same as free. _No driver turns recorded._ appears only when a launcher or collector record exists but reported no usage.
 
 ### Packets that hit the output cap
 
@@ -211,6 +211,20 @@ Same line shape as telemetry, so the two files can be concatenated for analysis 
 | `price_warnings` | The driver block's card differs from the dated list for a day the run spent on; the list was used |
 | `local_record` | The same conversation as agy's local record holds it ([check 18](verification/p1-agy-runtime.md)): `record` and `stream` token totals side by side, and `agrees` (within 1%). `found: false` when the record is not on this machine |
 
+A line the interactive collector wrote carries `usage_source: "agy-local-record"`, `conversation_id`, `task_id: "driver-call-<n>"`, and `model` as agy's record names it. Each is priced on its day at its own model's card: a call on the pinned model as every driver turn is (the dated list, or the `driver:` block under `pricing_override: true`), a call on any other model at the list's card for that model. A call on a model the list cannot price keeps its tokens and has `cost_usd: null`, no `price_basis`, and `unpriced` holding the reason.
+
+`driver-collector.json` holds the evidence behind an interactive run's lines:
+
+| Field | Meaning |
+|---|---|
+| `window` | `since`, `until`, and where each came from (`since_from`, `until_from`) |
+| `conversations[]` | Each conversation read: `id`, `found`, `calls` inside the window, `inferred` (dated from a neighbouring call), `undated` |
+| `calls` | The model calls counted |
+| `reported_models` | Every model name the record holds for those calls |
+| `model_mismatch` | The names that are neither the pinned model nor its slug |
+| `unpriced_calls` | `[{ model, calls, reason }]`, one per model the price list cannot price; `priced_in_full: false` beside it. Absent when every call has a price |
+| `fields_verified_on`, `fields_unverified_for_version` | The agy version the record's field map was read on, and this run's when it differs |
+
 `driver-manifest.json` also records `driver_reported_models` (every model name any agy event carried; empty when agy names none, and then only the local record's names can verify the pin), `driver_model_mismatch` (reported names that are neither the pinned model nor its slug: the run was not on the pin), and `bridge_build` (`stale: true` when the bridge's `dist/` was older than its `src/`).
 
 ### `manifest.json`
@@ -256,6 +270,7 @@ A `model_breakdown` or `by_model` row's `calls` counts attempts routed to that m
 | `worker_cost_usd`, `worker_cost_usd_modeled`, `worker_cost_basis` | The worker lines of `cost.lines` split by kind: cash a vendor invoices, and Claude seat calls priced at the Anthropic card. A `mixed` Claude line splits at its seat share; an `unclassified` line counts as cash. Neither includes the driver |
 | `driver_work` | The driver line in the console's units: `turns`, `input_tokens` (the whole prompt: fresh input plus cache reads), `input_tokens_cached`, `output_tokens` (thinking included), `thinking_tokens`, `what_it_spent_on`. Absent while the driver is unmeasured or reported no usage |
 | `driver_cost_usd`, `driver_cost_basis`, `driver_turns`, `agy_invocations` | The modeled driver figure and the sentence that says how it was derived; how many turns and how many `agy --print` invocations (the resume loop) |
+| `driver_cost_is_floor`, `driver_unpriced_calls` | Present when some driver calls have no price: `driver_cost_usd` is then at least the figure, and `driver_unpriced_calls` lists `{ model, calls, reason }` per model |
 | `driver_cost_usd_low`, `driver_cost_resume_check` | Present while check 16 is pending on a resumed run: the lower bound of the driver range; `driver_cost_usd` is the per-invocation reading |
 | `driver_resumed_without_earlier_record` | This launch resumed a conversation without the earlier launch's record; check 16 decides whether its first counters include that launch |
 | `driver_invocations_without_usage` | `agy --print` processes that reported no usage (no `result` event, or only an all-zero error result); the true driver figure may be higher |
@@ -276,11 +291,12 @@ A `model_breakdown` or `by_model` row's `calls` counts attempts routed to that m
 | Field | Meaning |
 |---|---|
 | `dispatched_cash_usd` | Bridge dispatches that a vendor invoiced. On arm A or B this equals `total_cost_usd`. Opus calls on the seat are subtracted out, because they were not invoiced either |
-| `driver_modeled_usd` | The conductor's loop at the driver card, headless or interactive. $0, with `driver_measured: false`, only when neither the launcher nor the collector recorded the driver |
+| `driver_modeled_usd` | The conductor's loop at the driver card, headless or interactive; a chat's call on another model at that model's card. $0, with `driver_measured: false`, only when neither the launcher nor the collector recorded the driver |
+| `driver_modeled_usd_is_floor` | Present and `true` when some driver calls have no price: `driver_modeled_usd` is a floor |
 | `driver_modeled_usd_low` | Present while check 16 is pending on a resumed run: the lower bound |
 | `driver_measured` | Present, and `false`, only when neither the launcher nor the collector recorded the driver: no agy usage was read, and the $0 is not a measurement |
 | `claude_seat_modeled_usd` | Present only when Opus calls ran on the seat: those calls, priced at the Anthropic card, no invoice |
-| `lines[]` | Three entries — `driver`, `gemini_workers`, `claude_worker` — each with `kind` (`cash`, `modeled`, `mixed` on a Claude line partly on the seat, or `unmeasured` for a driver neither the launcher nor the collector recorded), the wallet, models, tokens, `cost_usd`, and on the modeled, mixed and unmeasured ones a `basis` sentence. The driver line also carries `cost_usd_low`, `cost_usd_high`, `tokens_low`, `resume_check`, `resumed_without_earlier_record` and `invocations_without_usage` when they apply. A fourth, `unclassified`, appears only when an event names no known worker adapter and no `claude-` or `gemini-` model; its dollars stay off both worker lines. Each worker line also carries `attempts` (equal to `calls`), `dispatches`, `failed_attempts` and `failed_cost_usd` |
+| `lines[]` | Three entries — `driver`, `gemini_workers`, `claude_worker` — each with `kind` (`cash`, `modeled`, `mixed` on a Claude line partly on the seat, or `unmeasured` for a driver neither the launcher nor the collector recorded), the wallet, models, tokens, `cost_usd`, and on the modeled, mixed and unmeasured ones a `basis` sentence. The driver line also carries `models` (the model names its calls recorded), and `cost_usd_low`, `cost_usd_high`, `tokens_low`, `resume_check`, `resumed_without_earlier_record` and `invocations_without_usage` when they apply; `incomplete: true` with `unpriced_calls` when some calls have no price, and `manifest.mjs` then prints it as `driver modeled at least $X (N of M call(s) unpriced: <model>)`. A fourth, `unclassified`, appears only when an event names no known worker adapter and no `claude-` or `gemini-` model; its dollars stay off both worker lines. Each worker line also carries `attempts` (equal to `calls`), `dispatches`, `failed_attempts` and `failed_cost_usd` |
 | `note` | The rule, restated in the file itself: the cash figure and the modeled figures are different kinds of dollars and are not summed |
 
 The two worker lines take their wallet from each event's `wallet` stamp:

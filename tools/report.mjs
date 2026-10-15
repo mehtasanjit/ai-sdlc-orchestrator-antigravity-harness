@@ -281,6 +281,12 @@ if (manifest.harness?.driver_collection_incomplete) {
   lineNotes.push(`The driver line was collected up to ${gap.collected_until}; the run ended ${gap.uncollected_sec} s later at ${gap.run_ended_at}. The conductor's calls in between are in no figure: re-run collect-driver-usage.mjs, then manifest.mjs.`);
 }
 if (driverUnmeasured) lineNotes.push("The driver is NOT MEASURED: no headless launcher record and no driver-collector.json, so the conductor's tokens are in no figure. Unmeasured, never free.");
+const unpricedDriver = lineByName.driver.incomplete ? lineByName.driver.unpriced_calls : [];
+const unpricedText = unpricedDriver.map((u) => `${u.calls} call(s) on ${u.model}`).join(", ");
+const driverFloor = unpricedDriver.length
+  ? `The driver figure is a floor, not the whole cost: ${unpricedText} have no price on the list (${unpricedDriver.map((u) => u.reason).join("; ")}). Their tokens are counted; their dollars are in no figure.`
+  : null;
+if (driverFloor) lineNotes.push(`driver: at least ${fmtUSD(lineByName.driver.cost_usd)}, because ${unpricedText} have no price on the list. The driver loop section below says why.`);
 if (lines.some((l) => (l.input_tokens_cached ?? 0) + (l.input_tokens_cache_write ?? 0) > 0)) {
   lineNotes.push("Tokens in is fresh input. Cache reads and cache writes are billed at their own rates and counted apart from it.");
 }
@@ -299,7 +305,7 @@ if (rebuild) lineNotes.push("! manifest.json books these lines differently. Rebu
 const lineCells = (l) => {
   if (l.kind === "unmeasured") return { calls: "—", tok: "—", cache: "—", cost: "—" };
   const range = l.cost_usd_low !== undefined ? ` (${fmtUSD(l.cost_usd_low)} – ${fmtUSD(l.cost_usd)})` : "";
-  return { calls: String(l.calls), tok: `${fmtCompact(l.input_tokens)} / ${fmtCompact(l.output_tokens)}`, cache: fmtCache(l.input_tokens_cached, l.input_tokens_cache_write), cost: fmtUSD(l.cost_usd), range };
+  return { calls: String(l.calls), tok: `${fmtCompact(l.input_tokens)} / ${fmtCompact(l.output_tokens)}`, cache: fmtCache(l.input_tokens_cached, l.input_tokens_cache_write), cost: `${l.incomplete ? "at least " : ""}${fmtUSD(l.cost_usd)}`, range };
 };
 
 if (asMarkdown) {
@@ -323,7 +329,7 @@ if (asMarkdown) {
   p(`  ${"─".repeat(93)}`);
   for (const l of workersFirst) {
     const c = lineCells(l);
-    p(`  ${lineName(l).padEnd(18)}${kindLabel(l).padEnd(14)}${c.calls.padStart(6)}${c.tok.padStart(21)}${c.cache.padStart(23)}${c.cost.padStart(11)}${c.range ?? ""}`);
+    p(`  ${lineName(l).padEnd(18)}${kindLabel(l).padEnd(14)}${c.calls.padStart(6)}${c.tok.padStart(21)}${c.cache.padStart(23)}${` ${c.cost}`.padStart(11)}${c.range ?? ""}`);
   }
   p(`  ${"─".repeat(93)}`);
   p(`  ${"Cash".padEnd(82)}${fmtUSD(cashUsd).padStart(11)}`);
@@ -380,6 +386,7 @@ if (events.length > 0) {
 // ─── modeled driver cost — deliberately its own section ───────────────
 
 const driverNotes = [
+  driverFloor,
   driverBounds.cost_usd_low !== undefined &&
     `agy was resumed, and whether its usage counters restart in a resumed process is p1 check ${driverBounds.resume_check.check}, still pending. ` +
       `The cost and tokens are the per-invocation reading${driverBounds.invocations_without_usage ? "" : ", the upper bound"}; the range is ${fmtUSD(driverBounds.cost_usd_low)} – ${fmtUSD(driverBounds.cost_usd_high)}.`,
@@ -402,13 +409,13 @@ if (asMarkdown) {
     } else {
       p(`| Turns | Tokens (in / out) | Modeled cost |`);
       p(`|---:|---|---:|`);
-      p(`| ${modeledEvents.length} | ${fmtCompact(driverIn)} / ${fmtCompact(driverOut)} | ${fmtUSD(driverCost)} |`);
+      p(`| ${modeledEvents.length} | ${fmtCompact(driverIn)} / ${fmtCompact(driverOut)} | ${driverFloor ? "at least " : ""}${fmtUSD(driverCost)} |`);
     }
     p();
     for (const note of driverNotes) { p(`> **Note:** ${note}`); p(); }
     if (modeledEvents.length > 0) {
-      p(`> agy reports token counts and no wallet figure, so this is derived from the`);
-      p(`> stream's usage counters at the policy's driver card. It is **not** an amount`);
+      p(`> agy reports token counts and no wallet figure, so this is derived from its`);
+      p(`> usage counters at the dated card \`driver_cost_basis\` names. It is **not** an amount`);
       p(`> anyone was billed — a driver on a Google seat may have cost nothing in money at`);
       p(`> all. It is reported separately, and excluded from the cash figure above.`);
     }
@@ -427,7 +434,7 @@ if (asMarkdown) {
     } else {
       p(`  ${"Turns".padEnd(24)}${String(modeledEvents.length).padStart(13)}`);
       p(`  ${"Tokens (in / out)".padEnd(24)}${`${fmtCompact(driverIn)} / ${fmtCompact(driverOut)}`.padStart(13)}`);
-      p(`  ${"Modeled cost".padEnd(24)}${fmtUSD(driverCost).padStart(13)}`);
+      p(`  ${"Modeled cost".padEnd(24)}${` ${driverFloor ? "at least " : ""}${fmtUSD(driverCost)}`.padStart(13)}`);
       if (driverBounds.cost_usd_low !== undefined) {
         p(`  ${"Range".padEnd(24)}${`${fmtUSD(driverBounds.cost_usd_low)} – ${fmtUSD(driverBounds.cost_usd_high)}`.padStart(13)}`);
       }
@@ -435,8 +442,8 @@ if (asMarkdown) {
     for (const note of driverNotes) p(`  ! ${note}`);
     if (modeledEvents.length > 0) {
       p();
-      p(`  agy reports token counts and no wallet figure, so this is derived from the`);
-      p(`  stream's usage at the driver card. It is NOT an amount anyone was billed — a`);
+      p(`  agy reports token counts and no wallet figure, so this is derived from its`);
+      p(`  usage at the dated card driver_cost_basis names. It is NOT an amount anyone was billed — a`);
       p(`  driver on a Google seat may have cost nothing in money. Kept out of the cash figure.`);
     }
   }
