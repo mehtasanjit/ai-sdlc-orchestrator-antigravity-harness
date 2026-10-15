@@ -437,7 +437,7 @@ export function evaluate({
     problems.push({
       id: "node-version",
       severity: "blocking",
-      message: `Node ${nodeVersion ?? nodeMajor} is too old — the bridge needs Node ${MIN_NODE} or newer (its undici dependency requires it).`,
+      message: `Node ${nodeVersion ?? nodeMajor} is too old — the bridge needs Node ${MIN_NODE} or newer.`,
       fix: `Install Node ${MIN_NODE} or newer (https://nodejs.org) and re-run this script.`,
     });
   }
