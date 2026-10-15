@@ -7,13 +7,16 @@
  *              to the contract later in the run refuses every write.
  *   --close    at close-out, after Gate 4: records the run's end in
  *              .sdlc/runs/<run-id>/run-end.json, then switches the contract off.
+ *              `completed` needs a passing test record (lib/test-record.mjs);
+ *              `stopped` carries the stop record: why, and what the person must do.
  *   --abandon  ends a run that will never end by itself (its chat closed, it
  *              crashed after Gate 0): the person's decision, never the run's.
  *
  * Usage:
  *   node write-contract.mjs --freeze --run-id <id> --allowlist '<JSON array>' [--off-limits '<JSON array>']
  *                           [--strict-write=off] [--project-root <dir>]
- *   node write-contract.mjs --close --run-id <id> [--outcome completed|aborted|stopped] [--project-root <dir>]
+ *   node write-contract.mjs --close --run-id <id> [--outcome completed|aborted] [--project-root <dir>]
+ *   node write-contract.mjs --close --run-id <id> --outcome stopped --reason "<what failed>" --needs "<what the person must do>"
  *   node write-contract.mjs --abandon --run-id <id> [--reason "<text>"] [--project-root <dir>]
  *
  * The project root must be its git project's root: the hook reads only the
@@ -24,11 +27,12 @@ import { dirname, join, resolve } from "node:path";
 
 import { CONTRACT_REL_PATH, RUN_ID, contractState, endRelPath, fingerprint, gitRoot, liveLocks, lockRelPath, readContract, readLock, runEnd, runEnded } from "./lib/contract-state.mjs";
 import { isMain } from "./lib/is-main.mjs";
+import { testVerdict } from "./lib/test-record.mjs";
 
 export const OUTCOMES = new Set(["completed", "aborted", "stopped"]);
 
 function parseArgs(argv) {
-  const out = { mode: null, runId: null, allowlist: null, offLimits: "[]", strict: true, reason: null, outcome: "completed", projectRoot: process.cwd() };
+  const out = { mode: null, runId: null, allowlist: null, offLimits: "[]", strict: true, reason: null, needs: null, outcome: "completed", projectRoot: process.cwd() };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     const val = () => (a.includes("=") ? a.slice(a.indexOf("=") + 1) : argv[++i]);
@@ -40,6 +44,7 @@ function parseArgs(argv) {
     else if (a.startsWith("--off-limits")) out.offLimits = val();
     else if (a === "--strict-write=off") out.strict = false;
     else if (a.startsWith("--reason")) out.reason = val();
+    else if (a.startsWith("--needs")) out.needs = val();
     else if (a.startsWith("--outcome")) out.outcome = val();
     else if (a.startsWith("--project-root")) out.projectRoot = val();
   }
@@ -47,6 +52,8 @@ function parseArgs(argv) {
 }
 
 const PERSON_DECIDES = "A wider scope is the person's decision, for a new run with its own Gate 0: stop and tell the person which path is needed and why.";
+
+const filled = (v) => (typeof v === "string" && v.trim() ? v.trim() : null);
 
 function globs(text) {
   try {
@@ -95,9 +102,9 @@ export function resumeRun(root, runId, { now = () => new Date().toISOString() } 
 }
 
 /** Records the run's end, then switches its contract off if it names the run. */
-export function endRun(root, runId, { outcome, reason = null, now = () => new Date().toISOString() }) {
+export function endRun(root, runId, { outcome, reason = null, needs = null, now = () => new Date().toISOString() }) {
   if (!runEnded(root, runId)) {
-    writeWhole(join(root, endRelPath(runId)), JSON.stringify({ run_id: runId, outcome, ...(reason ? { reason } : {}), ended_at: now(), written_by: "plugin/scripts/write-contract.mjs" }, null, 2) + "\n");
+    writeWhole(join(root, endRelPath(runId)), JSON.stringify({ run_id: runId, outcome, ...(reason ? { reason } : {}), ...(needs ? { needs } : {}), ended_at: now(), written_by: "plugin/scripts/write-contract.mjs" }, null, 2) + "\n");
   }
   const current = readContract(root)?.parsed;
   if (current?.run_id === runId && current.active === true) writeContract(root, { ...current, active: false });
@@ -135,7 +142,17 @@ export function main(argv = process.argv.slice(2), { log = (m) => process.stdout
     const current = readContract(root)?.parsed;
     const ownsLock = liveLocks(root).includes(a.runId);
     if (current?.run_id !== a.runId && !ownsLock) return refuse(`no contract of run ${a.runId} in ${root}`);
-    endRun(root, a.runId, { outcome: a.outcome, reason: a.reason });
+    const stopWith = `write-contract.mjs --close --run-id ${a.runId} --outcome=stopped --reason="<what failed>" --needs="<what the person must do>"`;
+    if (a.outcome === "stopped" && !(filled(a.reason) && filled(a.needs))) {
+      return refuse(`a stopped run records why it stopped and what it needs from the person: ${stopWith}`);
+    }
+    if (a.outcome === "completed") {
+      const tests = testVerdict(join(root, ".sdlc", "runs", a.runId), a.runId);
+      if (tests.required && !tests.passed) {
+        return refuse(`run ${a.runId} cannot end as completed: ${tests.reason}. A run completes only on a passing test record, or when its intent brief's test command is none. Nothing is written. End it as stopped: ${stopWith}`);
+      }
+    }
+    endRun(root, a.runId, { outcome: a.outcome, reason: filled(a.reason), needs: filled(a.needs) });
     log(`write-contract: run ${a.runId} ended (${a.outcome}); its contract is switched off`);
     return 0;
   }

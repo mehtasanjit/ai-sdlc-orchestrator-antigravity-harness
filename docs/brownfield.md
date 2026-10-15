@@ -59,7 +59,7 @@ No `/sdlc-precheck` or `/sdlc-doctor` sub-commands exist — the four above cove
 Gate 0 is the one confirmation between discovery reading your repo and the pipeline starting work. Five things appear — approve, revise, or abort:
 
 - **Stack** — the detected stack. Confirm or override.
-- **Test command** — the command detected from `package.json` scripts / `pytest.ini` / equivalent. Accept or paste your own.
+- **Test command** — the command detected from `package.json` scripts / `pytest.ini` / equivalent. Accept, paste your own, or say `none` when the project has no tests. A run with a test command installs the project's dependencies if they are missing, runs the command through `plugin/scripts/test-run.mjs`, and completes only when it passes.
 - **Existing AI setup** — verbatim list of Cursor rules / `.mcp.json` / competing configs discovery found. **Default is OFF-LIMITS** for all of them — the plugin never touches them unless you explicitly move one into scope.
 - **Intent** — which of the seven job types.
 - **File scope** — the allowlist (paths the pipeline may write to) and off-limits (paths never touched). Two-tier: the constant off-limits from `.sdlc/project.json.off_limits_default` (`.env*`, `.mcp.json`, `node_modules/**`, etc., written once at setup time) are pre-merged; only ticket-specific paths appear as editable at Gate 0. Edit either the allowlist or the additions list.

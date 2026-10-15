@@ -1,11 +1,13 @@
 /**
  * A run's own start, end and outcome, read from its folder: the `run.start`
  * and `run.end` lines plugin/scripts/mmo-log.mjs appends to orchestrator.log,
- * gates.jsonl, and SUMMARY.md.
+ * gates.jsonl, SUMMARY.md, run-end.json and the test record.
  */
 
 import { existsSync, readFileSync, statSync } from "node:fs";
 import { basename, join } from "node:path";
+
+import { LAUNCHER_STOP_REASON } from "../../scripts/write-contract.mjs";
 
 // MMO_LOG_PREFIX can change the prefix, so a marker is found by what follows it.
 const MARKER = /(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z) +[A-Z]+ +(run\.start|run\.end)(?: (.*))?$/;
@@ -53,7 +55,13 @@ export function readRunMarkers(runDir, runId = null) {
   const declared = isoOrNull(first?.fields.started_at);
   const start = first ? (declared && declared <= first.at ? declared : first.at) : null;
   const end = last && (!start || last.at >= start) ? last.at : null;
-  return { start, end, outcome: end ? last.fields.outcome ?? null : null, start_declared: Boolean(first && declared && start === declared) };
+  const outcome = end ? last.fields.outcome ?? null : null;
+  return {
+    start, end, outcome,
+    mode: first?.fields.mode ?? null,
+    stop: outcome === "stopped" ? { reason: last.fields.reason ?? null, needs: last.fields.needs ?? null } : null,
+    start_declared: Boolean(first && declared && start === declared),
+  };
 }
 
 const seconds = (start, end) => Math.max(0, Math.round((Date.parse(end) - Date.parse(start)) / 1000));
@@ -96,24 +104,31 @@ const accepted = (decision) => /^(auto-)?(approved?|accept(ed)?)$/i.test(String(
 const aborted = (decision) => /^(auto-)?abort(ed)?$/i.test(String(decision ?? "").trim());
 
 /**
- * `completed`: SUMMARY.md written during this run and the final gate accepted.
- * The headless launcher's own verdict stands when it recorded one.
- * `status`: interrupted, aborted, completed, awaiting_acceptance (the report
- * exists, the final gate has no accepting line yet) or incomplete.
+ * `completed`: SUMMARY.md written during this run and the final gate accepted
+ * (the headless launcher's own verdict when it recorded one), and, when
+ * `tests` says the run has a test command, a passing test record.
+ * `status`: interrupted, aborted, stopped (the run's own stop record: a
+ * `run.end` line or a run-end.json the launcher did not write), completed,
+ * awaiting_acceptance (the report exists, the final gate has no accepting
+ * line yet) or incomplete.
  */
-export function runOutcome({ runDir, gates, launcher = null, markers = {}, since = null }) {
+export function runOutcome({ runDir, gates, launcher = null, markers = {}, since = null, tests = null, end = null }) {
   const summaryPath = join(runDir, "SUMMARY.md");
   // A second's slack for filesystems that store whole-second mtimes.
   const summary = existsSync(summaryPath) && (!since || statSync(summaryPath).mtimeMs >= Date.parse(since) - 1000);
   const last = new Map((gates ?? []).map((g) => [g.gate, g.decision]));
   const finalAccepted = accepted(last.get(FINAL_GATE));
-  const completed = typeof launcher?.completed === "boolean" ? launcher.completed : summary && finalAccepted;
+  const finished = typeof launcher?.completed === "boolean" ? launcher.completed : summary && finalAccepted;
+  const testsHeld = !tests?.required || tests.passed === true;
+  const completed = finished && testsHeld;
+  const stop = markers.stop ?? (end?.outcome === "stopped" && end.reason !== LAUNCHER_STOP_REASON ? { reason: end.reason ?? null, needs: end.needs ?? null } : null);
   const status = launcher?.interrupted ? "interrupted"
     : [...last.values()].some(aborted) || aborted(markers.outcome) ? "aborted"
+    : stop ? "stopped"
     : completed ? "completed"
-    : summary ? "awaiting_acceptance"
+    : summary && testsHeld ? "awaiting_acceptance"
     : "incomplete";
-  return { completed, status, summary_written: summary };
+  return { completed, status, summary_written: summary, ...(stop ? { stop } : {}), ...(finished && !testsHeld ? { incomplete_reason: `the run's tests did not pass: ${tests.reason}` } : {}) };
 }
 
 /**

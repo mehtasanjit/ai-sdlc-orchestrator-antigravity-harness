@@ -19,7 +19,9 @@ Around them:
 Brownfield runs add, under `.sdlc/runs/<run-id>/`:
 
 - `provenance.json` — every file this run created or modified, keyed by path, with the pre-run hash. `/mmo:revert` reads this to undo the run.
-- `intent_brief.md`, `discovery.md`, `change_plan.md`, `senior-review.md`, `security-review.md`, `final_report.md` — the per-phase artifacts.
+- `intent_brief.md`, `discovery.md`, `change_plan.md`, `senior-review.md`, `security-review.md`, `final_report.md` — the per-phase artifacts. `intent_brief.md`'s `## Test command` holds the command Gate 0 confirmed, or `none`.
+- `test-run.json`, `test-output.txt` — the test record [plugin/scripts/test-run.mjs](../plugin/scripts/test-run.mjs) writes when it runs the test command: the status (`passed`, `failed`, `not_run`), the exit code, the command, its folder, and every earlier attempt; and the command's output (an earlier attempt's as `test-output.<n>.txt`). The run completes only on a passing record, unless the brief's test command is `none`.
+- `run-end.json` — the run's end, written by `plugin/scripts/write-contract.mjs` or the headless launcher: `outcome` (`completed`, `aborted`, `stopped`), and for a stop its `reason` and what it `needs` from you.
 - `packets.jsonl` — the TaskPacket stream the conductor dispatched, one per line.
 
 A `delegation/` directory appears only on runs that chose the Antigravity SDK agent path — three files per delegated packet (brief, worker usage sidecar, receipt). See [the delegation directory](#the-delegation-directory).
@@ -141,7 +143,7 @@ Fields the report reads: `phase`, `provenance`, `input_tokens`, `input_tokens_ca
 - A `claude-agent-sdk` line adds `prompt_cache_ttl`: `pinned` (the policy's `prompt_cache_ttl`, `null` when unset), `observed` (`1h`, `5m`, `mixed`, `none` for no cache writes, `unknown` when a write carried no TTL split) and `mismatch`, true when the writes used a lifetime other than the pin. See [methodology.md](methodology.md#why-the-claude-line-is-cash-on-the-arms-and-modeled-on-the-seat).
 - `dispatch_id` is one id per `execute_with_model` call, shared by all its attempts. `stop_reason` is the vendor's reason for the attempt's stop (`MAX_TOKENS`, `end_turn`, ...), `hit_output_cap` whether it stopped at its ceiling, and `terminal_reason` (on the dispatch's last attempt) why the dispatch ended: `success`, `output_cap_doubling_budget_exhausted`, `output_cap_at_model_absolute` or `vendor_error`. Events written before `dispatch_id` existed are grouped by `task_id`, with `attempt_number: 1` starting a new dispatch.
 - `worker_per_model` is a Claude worker attempt's ledger: one row per model the call billed, with that model's `tokens` (`input_cache_write` is the 5-minute share, disjoint from `input_cache_write_1h`) and `cost_usd`. A `claude-agent-sdk` call that also billed a Haiku call carries a `claude-haiku-4-5` row, and the manifest books those tokens and dollars on Haiku's own `model_breakdown` row instead of Opus's.
-- `provenance: "none"` with `task_type: "in_session"` or `"skipped"` is a phase the conductor logged without dispatching (`dispatch.mjs --log-phase`). Zero tokens, zero cost; its work, if any, accrues to the driver loop.
+- `provenance: "none"` with `task_type: "in_session"` or `"skipped"` is a phase the conductor logged without dispatching (`dispatch.mjs --log-phase`). Zero tokens, zero cost; its work, if any, accrues to the driver loop. An `in_session` `test_run` row copies `success`, `test_status` and `test_exit_code` from the run's `test-run.json`, and `dispatch.mjs` refuses to log one without that record. The `--out` receipt names the row it logged; it is not a test result.
 - `latency_ms` is a real wall-clock figure on dispatched calls and `null` on logged-only lines.
 
 Sum a phase with standard shell tools:
@@ -274,8 +276,11 @@ A `model_breakdown` or `by_model` row's `calls` counts attempts routed to that m
 | `driver_cost_usd_low`, `driver_cost_resume_check` | Present while check 16 is pending on a resumed run: the lower bound of the driver range; `driver_cost_usd` is the per-invocation reading |
 | `driver_resumed_without_earlier_record` | This launch resumed a conversation without the earlier launch's record; check 16 decides whether its first counters include that launch |
 | `driver_invocations_without_usage` | `agy --print` processes that reported no usage (no `result` event, or only an all-zero error result); the true driver figure may be higher |
-| `completed` | Headless: whether `SUMMARY.md` appeared during the run (the launcher's verdict). Interactive: `SUMMARY.md` written during the run and Gate 4's last line in `gates.jsonl` accepted |
-| `status` | `interrupted` (headless, stopped by a signal), `aborted` (a gate's last decision, or `run.end`'s `outcome`, is an abort), `completed`, `awaiting_acceptance` (`SUMMARY.md` exists, Gate 4 not accepted yet), or `incomplete` |
+| `completed` | Headless: whether `SUMMARY.md` appeared during the run (the launcher's verdict). Interactive: `SUMMARY.md` written during the run and Gate 4's last line in `gates.jsonl` accepted. On a brownfield run, either way, also a passing `test-run.json`, unless the brief's test command is `none` |
+| `status` | `interrupted` (headless, stopped by a signal), `aborted` (a gate's last decision, or `run.end`'s `outcome`, is an abort), `stopped` (the run's own stop: `run.end` with `outcome=stopped`, or a `run-end.json` stop the launcher did not write), `completed`, `awaiting_acceptance` (`SUMMARY.md` exists, Gate 4 not accepted yet), or `incomplete` (also a brownfield run whose tests did not pass) |
+| `incomplete_reason` | Present when the session finished but its tests did not pass: what the test record says |
+| `stop` | Present on a `stopped` run: `{reason, needs}`, what failed and what the run needs from you |
+| `tests` | Brownfield only: `required` (false when the brief's test command is `none`), `passed`, `status`, `exit_code`, `command`, `brief_command`, `attempt`, `ended_at`, `reason` when it did not pass, read from `test-run.json` |
 | `driver_collection_incomplete` | Interactive only, present when the driver was collected before the run's `run.end` line: `{collected_until, run_ended_at, uncollected_sec}`. The conductor's calls in that gap are in no figure; re-run `collect-driver-usage.mjs`, then `manifest.mjs` |
 | `gate_mode` | `auto-approve` or `auto-abort` on a headless run; `prompt` on an interactive one |
 | `gates` | One `{gate, decision, artifact?, ts?}` per line of `gates.jsonl`, in file order; `null` when the file is absent |

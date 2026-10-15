@@ -268,3 +268,15 @@ test("packageInstallTargets splits an install's own output from a package.json c
   assert.deepEqual(packageInstallTargets("npm test && npm run build"), { output: [], manifest: [] });
   assert.deepEqual(packageInstallTargets(undefined), { output: [], manifest: [] });
 });
+
+test("a live run's test record is refused to every tool, as its contract files are", () => {
+  const dir = repoWithContract(CONTRACT);
+  try {
+    const record = join(dir, ".sdlc", "runs", "t1", "test-run.json");
+    const tool = runHook({ toolCall: { name: "write_to_file", args: { TargetFile: record, CodeContent: "{}" } }, workspacePaths: [dir] }, dir).reply;
+    assert.equal(tool.decision, "deny");
+    assert.match(tool.reason, /test record.*only plugin\/scripts\/write-contract\.mjs and plugin\/scripts\/test-run\.mjs write them/);
+    assert.equal(shell(dir, `echo '{"status":"passed"}' > ${record}`).decision, "deny");
+    assert.equal(runHook({ toolCall: { name: "write_to_file", args: { TargetFile: join(dir, ".sdlc", "runs", "t1", "test-output.txt") } }, workspacePaths: [dir] }, dir).reply.decision, "allow", "the run's other files stay its own");
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});

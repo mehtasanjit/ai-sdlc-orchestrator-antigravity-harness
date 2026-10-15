@@ -246,9 +246,14 @@ Write the brief to `.sdlc/runs/<run-id>/intent_brief.md` with this heading contr
 ## Task type          (omit this heading entirely when the intent has no task_types)
 ## Files in scope
 ## Files off-limits
+## Test command       (the command Gate 0 confirmed, or `none`)
 ## Acceptance criteria
 ## Non-goals
 ```
+
+"Test command" holds, on its first line, the command Gate 0 confirmed, or `none` when the user
+confirmed the project has no tests. Code reads it: a run whose brief names a command completes only
+when `plugin/scripts/test-run.mjs` recorded a passing test run (pipeline Phase 7).
 
 "Task type" holds the chosen `id` verbatim (e.g. `doc_update`), not the label — Phase 4 in
 `pipeline/SKILL.md` reads it back to set the generated TaskPacket's `task_type` field directly,
@@ -267,7 +272,8 @@ template from [plugin/skills/pipeline/SKILL.md](/plugin/skills/pipeline/SKILL.md
 "Gate 0"), filling in:
 
 - **Stack** — top-detected from `baseline.stacks`. Ask if it's right; accept overrides.
-- **Test command** — `baseline.test_command_proposed`. Accept an override.
+- **Test command** — `baseline.test_command_proposed`. Accept an override, or `none` when the
+  project has no tests: the run then skips Phase 7 and completes without a test run.
 - **Auth mode** — `vendor`, the only mode on this runtime: every call is billed through the
   bridge on the credentials in the shell that launched agy. Required — preflight aborts
   without it. State it rather than ask; there is no in-session `estimated` mode on this runtime.
@@ -326,7 +332,8 @@ On `approved`:
    ```bash
    node "${MMO_PLUGIN_ROOT}/scripts/write-provenance.mjs" --init --run-id=<run-id> --intent=<intent> --project-root="$(pwd)"
    ```
-4. Update `.sdlc/runs/<run-id>/intent_brief.md` with the final scope.
+4. Update `.sdlc/runs/<run-id>/intent_brief.md` with the final scope, and the confirmed test
+   command under `## Test command`.
 5. Mark the run's start (interactive only; a headless launch records its own window). The manifest
    and the driver collector read this line; `<run_started_at>` is the time recorded in step 1:
    ```bash
@@ -345,6 +352,9 @@ contract stops holding the project:
 ```bash
 node "${MMO_PLUGIN_ROOT}/scripts/write-contract.mjs" --close --run-id=<run-id> --outcome=aborted --project-root="$(pwd)"
 ```
+
+A run whose tests cannot pass ends as `stopped` instead, with its reason and what it needs from the
+user (pipeline Phase 7).
 
 # 6. Run the pipeline
 
@@ -377,6 +387,9 @@ After the final report:
    ```bash
    node "${MMO_PLUGIN_ROOT}/scripts/write-contract.mjs" --close --run-id=<run-id> --project-root="$(pwd)"
    ```
+   It refuses to end the run as `completed` unless `.sdlc/runs/<run-id>/test-run.json` records a
+   passing test run, or the brief's test command is `none`. On that refusal, stop the run as
+   pipeline Phase 7 says.
 2. Append a row to `.sdlc/ledger.md` (human-readable) and `.sdlc/ledger.json` (machine mirror).
    Any cost in the row is the labelled lines the manifest rebuild after `run.end` printed, copied;
    never a single total. Those carry the complete driver line; `SUMMARY.md`'s stops before Gate 4.

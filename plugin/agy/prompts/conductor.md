@@ -103,7 +103,7 @@ Numbering matches `pipeline.md` exactly.
  4. plan_task_packets            → packets.json
  5. execute_packets              → for each: dispatch → validate → integrate → retry on failure
  6. senior_code_review           → review.json + refinement packets, then re-execute those
- 7. test_run                     → npm install && npm test; debug failures via dispatched packets
+ 7. test_run                     → install deps, run the tests through test-run.mjs; debug failures via dispatched packets
  8. security_review              → security_review.md
     ── GATE 3 ────────────────────────────────
  9. generate_final_report        → final report + SUMMARY.md

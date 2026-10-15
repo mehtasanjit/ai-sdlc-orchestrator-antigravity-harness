@@ -29,6 +29,7 @@ import { existsSync, realpathSync } from "node:fs";
 import { resolve, relative, sep, dirname, isAbsolute, join, basename } from "node:path";
 import { HARDCODED_OFF_LIMITS } from "../../scripts/lib/off-limits.mjs";
 import { CONTRACT_REL_PATH, contractState, endRelPath, gitRoot, lockRelPath } from "../../scripts/lib/contract-state.mjs";
+import { testRecordRelPath } from "../../scripts/lib/test-record.mjs";
 import { log, redactText } from "../../scripts/lib/log.mjs";
 import { isMain } from "../../scripts/lib/is-main.mjs";
 import { scan } from "../../scripts/dispatch-sanitize.mjs";
@@ -462,9 +463,9 @@ function hardcodedHit(path) {
 function judgeUnderContract(rel, state, { installOutput = false } = {}) {
   const { contract, runId } = state;
   const strict = contract?.strict !== false;
-  const control = [CONTRACT_REL_PATH, lockRelPath(runId), endRelPath(runId)];
+  const control = [CONTRACT_REL_PATH, lockRelPath(runId), endRelPath(runId), testRecordRelPath(runId)];
   if (control.some((p) => matchGlob(rel, p, { anyCase: true }))) {
-    return { rule: "contract-control", msg: `${rel} is the write contract of live run ${runId}, or its freeze or end record. A live run never changes its own contract or records its own end; only plugin/scripts/write-contract.mjs writes them. ${NOT_YOURS}` };
+    return { rule: "contract-control", msg: `${rel} is the write contract of live run ${runId}, or its freeze, end or test record. A live run never changes its own contract, records its own end or writes its own test result; only plugin/scripts/write-contract.mjs and plugin/scripts/test-run.mjs write them. ${NOT_YOURS}` };
   }
   const hard = hardcodedHit(rel);
   if (hard) return { rule: hard, msg: `${rel} matches always-off-limits pattern "${hard}" (run ${runId}); no contract can open it. ${NOT_YOURS}` };

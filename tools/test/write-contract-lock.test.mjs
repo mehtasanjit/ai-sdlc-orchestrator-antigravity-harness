@@ -30,6 +30,10 @@ function repo() {
 const wc = (dir, ...args) => spawnSync(process.execPath, [WRITE_CONTRACT, ...args, `--project-root=${dir}`], { encoding: "utf8" });
 const freeze = (dir, runId = "r1", extra = []) =>
   wc(dir, "--freeze", `--run-id=${runId}`, `--allowlist=${JSON.stringify(["src/**"])}`, `--off-limits=${JSON.stringify([".env", ".sdlc/**", "secrets/**"])}`, ...extra);
+const passingTests = (dir, runId) => {
+  const r = spawnSync(process.execPath, [join(ROOT, "plugin", "scripts", "test-run.mjs"), `--run-id=${runId}`, `--output-dir=${join(dir, ".sdlc", "runs", runId)}`, `--cwd=${dir}`, `--command=node -e 0`], { encoding: "utf8" });
+  assert.equal(r.status, 0, r.stderr + r.stdout);
+};
 const write = (dir, path, cwd = dir) => {
   const r = spawnSync(process.execPath, [HOOK], { input: JSON.stringify({ toolCall: { name: "write_to_file", args: { TargetFile: path } }, workspacePaths: [cwd] }), encoding: "utf8", cwd });
   return JSON.parse(r.stdout);
@@ -49,14 +53,14 @@ test("Gate 0 freezes by code and the run's own folder is writable while the cont
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
-test("a live run cannot write its own contract or its freeze and end records", () => {
+test("a live run cannot write its own contract or its freeze, end and test records", () => {
   const dir = repo();
   try {
     freeze(dir, "r1", ["--strict-write=off"]);
-    for (const rel of [".sdlc/local/write-contract.json", ".sdlc/runs/r1/contract.lock.json", ".sdlc/runs/r1/run-end.json"]) {
+    for (const rel of [".sdlc/local/write-contract.json", ".sdlc/runs/r1/contract.lock.json", ".sdlc/runs/r1/run-end.json", ".sdlc/runs/r1/test-run.json"]) {
       const reply = write(dir, join(dir, rel));
       assert.equal(reply.decision, "deny", rel);
-      assert.match(reply.reason, /only plugin\/scripts\/write-contract\.mjs writes them/);
+      assert.match(reply.reason, /only plugin\/scripts\/write-contract\.mjs and plugin\/scripts\/test-run\.mjs write them/);
     }
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
@@ -66,6 +70,7 @@ test("the contract stops binding once the run has ended, and the close-out recor
   try {
     freeze(dir);
     assert.equal(write(dir, join(dir, "README.md")).decision, "deny");
+    passingTests(dir, "r1");
     const closed = wc(dir, "--close", "--run-id=r1");
     assert.equal(closed.status, 0, closed.stderr);
     assert.equal(JSON.parse(readFileSync(join(dir, ".sdlc", "runs", "r1", "run-end.json"), "utf8")).outcome, "completed");
@@ -155,7 +160,7 @@ test("freeze refuses a second freeze, a run that ended, and a project another li
     assert.equal(freeze(dir).status, 0);
     assert.match(freeze(dir).stderr, /already frozen/);
     assert.match(freeze(dir, "r2").stderr, /run r1 is live and holds this project's contract/);
-    wc(dir, "--close", "--run-id=r1");
+    wc(dir, "--close", "--run-id=r1", "--outcome=aborted");
     assert.match(freeze(dir, "r1").stderr, /already frozen|has ended/);
     assert.equal(freeze(dir, "r2").status, 0, "a new run freezes after the last one ended");
   } finally { rmSync(dir, { recursive: true, force: true }); }
