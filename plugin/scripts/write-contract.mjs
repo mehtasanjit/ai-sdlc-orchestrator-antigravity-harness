@@ -5,10 +5,12 @@
  *   --freeze   at Gate 0: writes .sdlc/local/write-contract.json and the run's
  *              contract.lock.json (the SHA-256 of the exact bytes, and the test
  *              commands Gate 0 confirmed), so an edit to the contract later in
- *              the run refuses every write.
+ *              the run refuses every write. Each --conditional file is in scope
+ *              only once a Gate 0 approved-conditional record opens it.
  *   --close    at close-out, after Gate 4: records the run's end in
  *              .sdlc/runs/<run-id>/run-end.json, then switches the contract off.
- *              `completed` needs a passing run of a frozen test command (lib/test-record.mjs);
+ *              `completed` needs a passing run of a frozen test command (lib/test-record.mjs)
+ *              and every gate-approved artifact as approved (lib/gate-record.mjs);
  *              `stopped` carries the stop record: why, and what the person must do.
  *   --abandon  ends a run that will never end by itself (its chat closed, it
  *              crashed after Gate 0): the person's decision, never the run's.
@@ -16,6 +18,7 @@
  * Usage:
  *   node write-contract.mjs --freeze --run-id <id> --allowlist '<JSON array>' [--off-limits '<JSON array>']
  *                           --test-command '<command>' [--test-command '<command>' ...] | --test-command none
+ *                           [--conditional '<glob>' --condition '<when it is in scope>' ...]
  *                           [--strict-write=off] [--project-root <dir>]
  *   node write-contract.mjs --close --run-id <id> [--outcome completed|aborted] [--project-root <dir>]
  *   node write-contract.mjs --close --run-id <id> --outcome stopped --reason "<what failed>" --needs "<what the person must do>"
@@ -28,13 +31,14 @@ import { mkdirSync, renameSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 
 import { CONTRACT_REL_PATH, RUN_ID, contractState, endRelPath, fingerprint, gitRoot, liveLocks, lockRelPath, readContract, readLock, runEnd, runEnded } from "./lib/contract-state.mjs";
+import { approvalVerdict } from "./lib/gate-record.mjs";
 import { isMain } from "./lib/is-main.mjs";
 import { testVerdict } from "./lib/test-record.mjs";
 
 export const OUTCOMES = new Set(["completed", "aborted", "stopped"]);
 
 function parseArgs(argv) {
-  const out = { mode: null, runId: null, allowlist: null, offLimits: "[]", testCommands: [], strict: true, reason: null, needs: null, outcome: "completed", projectRoot: process.cwd() };
+  const out = { mode: null, runId: null, allowlist: null, offLimits: "[]", testCommands: [], conditional: [], strayCondition: false, strict: true, reason: null, needs: null, outcome: "completed", projectRoot: process.cwd() };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     const val = () => (a.includes("=") ? a.slice(a.indexOf("=") + 1) : argv[++i]);
@@ -45,6 +49,12 @@ function parseArgs(argv) {
     else if (a.startsWith("--allowlist")) out.allowlist = val();
     else if (a.startsWith("--off-limits")) out.offLimits = val();
     else if (a.startsWith("--test-command")) out.testCommands.push(val());
+    else if (a.startsWith("--conditional")) out.conditional.push({ path: val(), condition: null });
+    else if (a.startsWith("--condition")) {
+      const open = out.conditional.at(-1);
+      if (open && open.condition === null) open.condition = val();
+      else { val(); out.strayCondition = true; }
+    }
     else if (a === "--strict-write=off") out.strict = false;
     else if (a.startsWith("--reason")) out.reason = val();
     else if (a.startsWith("--needs")) out.needs = val();
@@ -66,6 +76,15 @@ function testCommands(values) {
   if (!commands.length || commands.includes(null)) return null;
   if (commands.some((c) => /^none$/i.test(c))) return commands.length === 1 ? [] : null;
   return [...new Set(commands)];
+}
+
+const CONDITIONAL_USAGE = "--conditional '<glob>' --condition '<when it is in scope, as Gate 0 showed it>', one pair per file Gate 0 showed as in scope only on a condition";
+
+/** The conditional entries, each with its condition; null when a pair is incomplete. */
+function conditionalEntries(pairs, stray) {
+  if (stray) return null;
+  const entries = pairs.map((e) => ({ path: filled(e.path), condition: filled(e.condition) }));
+  return entries.every((e) => e.path && e.condition) ? entries : null;
 }
 
 function globs(text) {
@@ -128,7 +147,7 @@ export function main(argv = process.argv.slice(2), { log = (m) => process.stdout
   const a = parseArgs(argv);
   const root = resolve(a.projectRoot);
   const refuse = (m) => { fail(m); return 2; };
-  if (!a.mode) return refuse("usage: --freeze --run-id <id> --allowlist '<JSON array>' [--off-limits '<JSON array>'] --test-command '<command>'|none [--strict-write=off], --close --run-id <id>, or --abandon --run-id <id> [--reason \"<text>\"]");
+  if (!a.mode) return refuse("usage: --freeze --run-id <id> --allowlist '<JSON array>' [--off-limits '<JSON array>'] --test-command '<command>'|none [--conditional '<glob>' --condition '<text>' ...] [--strict-write=off], --close --run-id <id>, or --abandon --run-id <id> [--reason \"<text>\"]");
   if (typeof a.runId !== "string" || !RUN_ID.test(a.runId)) return refuse("--run-id must be the run's id (letters, digits, '.', '_', '-')");
   if (gitRoot(root) !== root) {
     const top = gitRoot(root);
@@ -142,13 +161,15 @@ export function main(argv = process.argv.slice(2), { log = (m) => process.stdout
     if (!offLimits) return refuse("--off-limits must be a JSON array of path globs");
     const tests = testCommands(a.testCommands);
     if (!tests) return refuse(`${TEST_COMMAND_USAGE}. Nothing is written.`);
+    const conditional = conditionalEntries(a.conditional, a.strayCondition);
+    if (!conditional) return refuse(`${CONDITIONAL_USAGE}. Nothing is written.`);
     if (readLock(root, a.runId)) return refuse(`run ${a.runId} has already frozen its contract: a run freezes once, at its Gate 0. ${PERSON_DECIDES}`);
     if (runEnded(root, a.runId)) return refuse(`run ${a.runId} has ended, and a run that ended never freezes again. ${PERSON_DECIDES}`);
     const state = contractState(root);
     if (state.binding) return refuse(`run ${state.runId} is live and holds this project's contract. Ending it is the person's decision: write-contract.mjs --abandon --run-id ${state.runId} --reason "<why>".`);
-    const sha256 = writeContract(root, { schema_version: 1, active: true, mode: "brownfield", run_id: a.runId, strict: a.strict, allowlist, off_limits: offLimits });
+    const sha256 = writeContract(root, { schema_version: 1, active: true, mode: "brownfield", run_id: a.runId, strict: a.strict, allowlist, off_limits: offLimits, ...(conditional.length ? { conditional } : {}) });
     writeWhole(join(root, lockRelPath(a.runId)), JSON.stringify({ run_id: a.runId, sha256, test_commands: tests, frozen_at: new Date().toISOString(), written_by: "plugin/scripts/write-contract.mjs" }, null, 2) + "\n");
-    log(`write-contract: frozen for run ${a.runId} (${allowlist.length} allowlist, ${offLimits.length} off-limits pattern(s), test command ${tests.length ? tests.map((c) => JSON.stringify(c)).join(", ") : "none"}${a.strict ? "" : ", strict off"})`);
+    log(`write-contract: frozen for run ${a.runId} (${allowlist.length} allowlist, ${conditional.length ? `${conditional.length} conditional, ` : ""}${offLimits.length} off-limits pattern(s), test command ${tests.length ? tests.map((c) => JSON.stringify(c)).join(", ") : "none"}${a.strict ? "" : ", strict off"})`);
     return 0;
   }
 
@@ -165,6 +186,10 @@ export function main(argv = process.argv.slice(2), { log = (m) => process.stdout
       const tests = testVerdict(join(root, ".sdlc", "runs", a.runId), a.runId, { projectRoot: root });
       if (tests.required && !tests.passed) {
         return refuse(`run ${a.runId} cannot end as completed: ${tests.reason}. A run completes only on a passing run of the test command Gate 0 froze, or when Gate 0 froze none. Nothing is written. End it as stopped: ${stopWith}`);
+      }
+      const approvals = approvalVerdict(join(root, ".sdlc", "runs", a.runId), a.runId, { projectRoot: root });
+      if (!approvals.held) {
+        return refuse(`run ${a.runId} cannot end as completed: ${approvals.reason}. An approved artifact changes only on the person's revise, recorded with plugin/scripts/record-gate.mjs, and its gate approving it again. Nothing is written. Show the person what changed and record their answer, or end the run as stopped: ${stopWith}`);
       }
     }
     endRun(root, a.runId, { outcome: a.outcome, reason: filled(a.reason), needs: filled(a.needs) });

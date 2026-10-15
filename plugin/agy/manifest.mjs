@@ -37,6 +37,7 @@ import { driverRange, driverRangeNote, driverRangeNotes } from "./telemetry/driv
 import { isMain } from "../scripts/lib/is-main.mjs";
 import { conductorWork, runMode } from "./telemetry/conductorWork.mjs";
 import { testVerdict } from "../scripts/lib/test-record.mjs";
+import { approvalVerdict } from "../scripts/lib/gate-record.mjs";
 import { inferRunId, readGates, readRunMarkers, runOutcome, sessionWindow } from "./telemetry/runWindow.mjs";
 import { studiesConsoleFields } from "./telemetry/consoleFields.mjs";
 
@@ -361,7 +362,8 @@ export function buildHarnessManifest({ runDir, policyName, runId, env = process.
   const tests = mode === "brownfield" ? testVerdict(runDir, pass) : null;
   const endRecord = readJson(join(runDir, "run-end.json"));
   const end = endRecord?.run_id === pass ? endRecord : null;
-  const outcome = runOutcome({ runDir, gates, launcher: driverManifest, markers, since: markers.start ?? driverManifest?.started_at ?? null, tests, end });
+  const approvals = approvalVerdict(runDir, pass);
+  const outcome = runOutcome({ runDir, gates, launcher: driverManifest, markers, since: markers.start ?? driverManifest?.started_at ?? null, tests, end, approvals });
 
   let pin = null;
   try { pin = policy ? readPin(policy) : null; } catch { pin = null; }
@@ -417,11 +419,14 @@ export function buildHarnessManifest({ runDir, policyName, runId, env = process.
     ...(outcome.incomplete_reason ? { incomplete_reason: outcome.incomplete_reason } : {}),
     ...(outcome.stop ? { stop: outcome.stop } : {}),
     ...(tests ? { tests } : {}),
+    ...(approvals.changed.length ? { approved_artifact_changed: approvals.changed } : {}),
+    ...(approvals.unchecked ? { approved_artifacts_unchecked: approvals.unchecked } : {}),
     write_guard: driverManifest
       ? (driverManifest.write_guard ?? { state: "off", reason: "headless run recorded before write_guard existed, so whether the write hook ran is not known" })
       : { state: "hook", reason: "interactive session: plugin/agy/hooks/write-contract-check.mjs runs before every file write (plugin/hooks.json)" },
     gate_mode: driverManifest ? driverManifest.gates ?? null : "prompt",
     gates,
+    ...(outcome.gate_lines_ignored ? { gate_lines_ignored: outcome.gate_lines_ignored } : {}),
     pin_rejection: driverManifest?.pin_rejection ?? null,
     ...conductorWork({ runDir, telemetry: dispatched, mode: driverManifest?.mode, completed: outcome.completed }),
     ...(otherRuns.length ? { other_runs_in_directory: otherRuns } : {}),

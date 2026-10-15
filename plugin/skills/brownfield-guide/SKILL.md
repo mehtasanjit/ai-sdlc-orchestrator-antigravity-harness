@@ -271,7 +271,10 @@ instead of inferring it from context. A policy can then route `doc_update` diffe
 `task_type` is already a routing key.
 
 Fill in "Files in scope" and "Files off-limits" with your best guess based on discovery + intent
-+ the user's description. These are proposals; Gate 0 lets the user adjust before commit.
++ the user's description. These are proposals; Gate 0 lets the user adjust before commit. A file
+in scope only on a condition ("`src/index.js` — if route error-handling is needed") keeps its
+condition next to it: Gate 0 shows it as conditional, and the freeze records it with
+`--conditional`, never in the allowlist.
 
 # 5. Gate 0 — Discovery Confirmation
 
@@ -299,7 +302,8 @@ template from [plugin/skills/pipeline/SKILL.md](/plugin/skills/pipeline/SKILL.md
 - **Existing AI setup** — verbatim list from `baseline.ai_configs_detected`. Default is
   **OFF-LIMITS** for all of them. User can move any into the allowlist by naming it explicitly.
 - **Intent** — from step 4a. Re-confirm, even when the handover pre-set it.
-- **File scope** — the allowlist and off-limits proposed from step 4b. Let the user edit.
+- **File scope** — the allowlist, the conditional files with their conditions, and off-limits
+  proposed from step 4b. Let the user edit.
 
 Reply options: `approved` / `revise: <comments>` / `abort`.
 
@@ -315,6 +319,13 @@ extra confirmation lines with the plugin's default behavior. Example:
 >   into them. Continue? [assumed yes unless you say otherwise]
 
 On `approved`:
+0. Record the answer by code, with the reply word for word:
+   ```bash
+   node "${MMO_PLUGIN_ROOT}/scripts/record-gate.mjs" --run-id=<run-id> --gate=0 --decision=approved \
+     --artifact=.sdlc/runs/<run-id>/discovery.md --reply="<the user's reply, verbatim>" --project-root="$(pwd)"
+   ```
+   Every later gate is recorded the same way (pipeline "Gate delivery"); never write `gates.jsonl`
+   yourself.
 1. Check this chat against the pin of the policy Gate 0 confirmed, and snapshot that policy into
    the run folder (interactive only). It writes `.sdlc/runs/<run-id>/policy_snapshot.yaml`, which
    the manifest reads the pin from:
@@ -329,8 +340,13 @@ On `approved`:
    ```bash
    node "${MMO_PLUGIN_ROOT}/scripts/write-contract.mjs" --freeze --run-id=<run-id> \
      --allowlist='<JSON array of globs>' --off-limits='<JSON array of globs>' \
-     --test-command='<the confirmed test command>' --project-root="$(pwd)"
+     --test-command='<the confirmed test command>' \
+     --conditional='<path>' --condition='<the condition Gate 0 showed>' --project-root="$(pwd)"
    ```
+   Pass one `--conditional`/`--condition` pair per file Gate 0 showed as in scope only on a
+   condition, and none when there are none. The hook refuses such a file until the user says the
+   condition holds: ask them, quoting the condition, and record a yes with
+   `record-gate.mjs --gate=0 --decision=approved-conditional --artifact=<path>`.
    Pass `--test-command` once per package command in a monorepo, each as it runs from the repo root
    (`pnpm --filter api test`), or `--test-command=none` when the user confirmed the project has no
    tests; `--freeze` refuses a freeze without one. Phase 7 runs
@@ -390,7 +406,10 @@ Follow [plugin/skills/pipeline/SKILL.md](../pipeline/SKILL.md) with:
 
 You then drive phases 1 through 9 with gates 1, 2, 3, 4 as usual — but branched by
 intent (see the Intent matrix in SKILL.md). At each gate, relay the gate prompt to the user; do
-not answer on their behalf.
+not answer on their behalf. A reviewer or refinement that asks for the user's approval is a gate
+too: stop, ask, and record the answer with `record-gate.mjs`. Never write an approval,
+resolution or escalation note yourself, and never edit an approved artifact without a recorded
+`revise`; the hook refuses the write.
 
 # 7. Close out
 
@@ -406,6 +425,9 @@ After the final report:
    passing run of the frozen test command, and the hook allowed no project write after that run
    started; or Gate 0 froze `none`. When a project write came after it, run the recorder again
    (pipeline Phase 7 step 2). When the tests do not pass, stop the run as pipeline Phase 7 says.
+   It also refuses while an approved artifact differs from the SHA-256 its gate recorded, or a
+   `revise` re-opened one and no approval followed: show the user what changed and record their
+   answer.
 2. Append a row to `.sdlc/ledger.md` (human-readable) and `.sdlc/ledger.json` (machine mirror).
    Any cost in the row is the labelled lines the manifest rebuild after `run.end` printed, copied;
    never a single total. Those carry the complete driver line; `SUMMARY.md`'s stops before Gate 4.

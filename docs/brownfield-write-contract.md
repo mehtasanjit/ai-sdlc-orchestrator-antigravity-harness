@@ -11,8 +11,12 @@ touch X?" questions.
 **The orchestrator MAY NOT write to any path unless:**
 
 - The path is in the run's `allowlist` (confirmed by you at Gate 0), OR
+- The path is one Gate 0 froze as conditional, and you said its condition holds, OR
 - The path did not exist at discovery time (a new file), OR
 - You re-opened Gate 0 to explicitly expand scope.
+
+**An artifact you approved at a gate stays as you approved it** until you answer `revise`
+([Approved artifacts](#approved-artifacts)).
 
 **Off-limits paths are hard-rejected** at the tool boundary — before any file-system change
 happens.
@@ -62,10 +66,12 @@ Behavior, in order:
    matches — widened, switched off, deleted, replaced — refuses every write, with the reason. So do
    two live freeze records.
 6. **A live run's contract binds:**
-   - The contract file, the run's `contract.lock.json`, its `run-end.json` and its test record
-     `test-run.json` are refused to file tools, whatever the allowlist says. Only
-     `write-contract.mjs` and `test-run.mjs` write them.
+   - The contract file, the run's `contract.lock.json`, its `run-end.json`, its test record
+     `test-run.json` and its gate record `gates.jsonl` are refused to file tools, whatever the
+     allowlist says. Only `write-contract.mjs`, `test-run.mjs` and `record-gate.mjs` write them.
    - The always-off-limits list is refused, under every contract, `strict: false` included.
+   - An artifact a gate approved is refused, under every contract, `strict: false` included, until
+     a recorded `revise` re-opens it. The refusal tells the conductor to stop and ask you.
    - The run's own folder `.sdlc/runs/<run-id>/` is allowed: its requirements, design, packets and
      reports.
    - A package manager's own `node_modules/` is allowed. `node_modules/**` in `off_limits` keeps
@@ -75,6 +81,9 @@ Behavior, in order:
      command rewrites (`npm install` with no `--no-package-lock`, `yarn install` with no
      `--frozen-lockfile`), when you named it at Gate 0.
    - A package manager's lockfile, otherwise — allow. `package.json` is judged like any other path.
+   - A conditional file — deny until a Gate 0 `approved-conditional` record names it, then allow.
+     The refusal quotes the condition and tells the conductor to ask you. A conditional entry
+     wins over a wider allowlist glob.
    - The `allowlist` — allow if hit.
    - Otherwise — deny.
 7. Off-limits patterns (the always list and the contract's) match in any letter case: on macOS's
@@ -82,8 +91,9 @@ Behavior, in order:
    resolves through links: both must pass, and a link that leads out of the project is a write
    outside it.
 8. `contract.strict = false` (`--strict-write=off`, passed by you at the start) downgrades the
-   contract's off-limits and allowlist refusals to warnings. It never opens the always-off-limits
-   list or the contract's own files, and does not lift step 2.
+   contract's off-limits, conditional and allowlist refusals to warnings. It never opens the
+   always-off-limits list, the contract's own files, the gate record or an approved artifact, and
+   does not lift step 2.
 
 Fail-safe: a bug in the hook itself (an input it cannot parse, a field it cannot read) → allow. A
 contract that does not parse is not such a bug: under a live freeze record it refuses every write
@@ -95,8 +105,10 @@ All three files are written by [`plugin/scripts/write-contract.mjs`](../plugin/s
 
 | When | Command | Writes |
 |---|---|---|
-| Gate 0 approved | `write-contract.mjs --freeze --run-id <id> --allowlist '<JSON>' --off-limits '<JSON>' --test-command '<command>'` (once per package command in a monorepo, or `--test-command none`) | `.sdlc/local/write-contract.json`, `.sdlc/runs/<id>/contract.lock.json` |
-| Close-out, after Gate 4 is accepted | `write-contract.mjs --close --run-id <id>` | `.sdlc/runs/<id>/run-end.json` (`completed`), then `active: false`. Refused unless `.sdlc/runs/<id>/test-run.json` records a passing run of a frozen test command, from the project root, and the hook allowed no project write after that run started; or Gate 0 froze `none` |
+| Gate 0 approved | `write-contract.mjs --freeze --run-id <id> --allowlist '<JSON>' --off-limits '<JSON>' --test-command '<command>'` (once per package command in a monorepo, or `--test-command none`), plus `--conditional '<glob>' --condition '<text>'` per file Gate 0 showed as in scope only on a condition | `.sdlc/local/write-contract.json` (with `conditional: [{path, condition}]`), `.sdlc/runs/<id>/contract.lock.json` |
+| You answer a gate | `record-gate.mjs --run-id <id> --gate <N> --decision <decision> --artifact <path> --reply "<your reply>"` | one line in `.sdlc/runs/<id>/gates.jsonl` |
+| You say a conditional file's condition holds | `record-gate.mjs --run-id <id> --gate 0 --decision approved-conditional --artifact <path> --reply "<your reply>"` | one line in `gates.jsonl`; the hook allows the file from then on |
+| Close-out, after Gate 4 is accepted | `write-contract.mjs --close --run-id <id>` | `.sdlc/runs/<id>/run-end.json` (`completed`), then `active: false`. Refused unless `.sdlc/runs/<id>/test-run.json` records a passing run of a frozen test command, from the project root, and the hook allowed no project write after that run started; or Gate 0 froze `none`. Refused too while an approved artifact differs from the SHA-256 its gate recorded |
 | A gate answered `abort` after the freeze | `write-contract.mjs --close --run-id <id> --outcome=aborted` | the same, `aborted` |
 | Phase 7 stops the run: its tests cannot run, or still fail after the debug retries | `write-contract.mjs --close --run-id <id> --outcome=stopped --reason "<what failed>" --needs "<what you must do>"` | the same, `stopped`, with `reason` and `needs` |
 | A headless run's driver loop ends | `plugin/agy/run.mjs`, for the run it launched | the same, `completed` (`SUMMARY.md` and a passing test record) or `stopped`. A run that recorded its own end is not resumed |
@@ -105,6 +117,43 @@ All three files are written by [`plugin/scripts/write-contract.mjs`](../plugin/s
 `--freeze` refuses a project root that is not a git project's root, a run that already froze or
 ended, a project another live run holds, and a freeze with no `--test-command`. Ending a run never
 deletes its folder.
+
+## Approved artifacts
+
+Every gate answer is a line [`plugin/scripts/record-gate.mjs`](../plugin/scripts/record-gate.mjs)
+writes to `.sdlc/runs/<run-id>/gates.jsonl`:
+
+| Field | Value |
+|---|---|
+| `gate` | `0`–`4` |
+| `decision` | `approved`, `accepted`, `revise`, `reject`, `abort` or `approved-conditional` (your answer); `auto-approved` or `auto-aborted` (a headless gate mode, no reply) |
+| `artifact` | The file the gate reviewed, relative to the project root; a run-folder file is `.sdlc/runs/<run-id>/<file>` |
+| `sha256` | The artifact's SHA-256 when the answer was recorded |
+| `condition` | `approved-conditional` only: the condition Gate 0 froze for the file |
+| `reply` | Your reply, word for word as the conductor relayed it; `null` for a headless gate mode |
+| `ts`, `run_id`, `written_by` | When, which run, and `plugin/scripts/record-gate.mjs` |
+
+| Your answer | Effect on the artifact |
+|---|---|
+| `approved`, `accepted` (and a headless `auto-approved`) | Locked: while the contract binds, the hook refuses every write to it. `record-gate.mjs` refuses a second approval of bytes that changed with no `revise` in between |
+| `revise: <comments>`, Gate 4 `reject: <comments>` | Re-opened until its gate approves it again |
+| `approved-conditional` | The hook allows the conditional file it names from then on; that file is not locked |
+
+The close-out checks the lock independently of the hook, since a write the hook does not model
+still reaches disk. `write-contract.mjs --close`, `manifest.mjs` and the headless launcher compare
+every approved artifact with the SHA-256 its approval recorded. A changed or deleted one, or one a
+`revise` re-opened with no approval after it, is listed in `manifest.json` →
+`harness.approved_artifact_changed`, and the run does not end `completed`. A greenfield run has no
+contract and no hook lock, and gets the same close-out check.
+
+A `gates.jsonl` line without `written_by` is hand-written, the way runs wrote it before
+`record-gate.mjs` existed. It still loads into `harness.gates`, but locks nothing and opens no conditional file;
+once a run has `record-gate.mjs` lines, a hand-written one does not count toward the run's outcome.
+
+In a chat, the conductor relays your reply to `record-gate.mjs`, so a conductor that invents a
+reply can still record it. The code makes an edit to an approved artifact refused and detectable,
+and keeps the claimed reply verbatim in `gates.jsonl` and `manifest.json` for you to audit. Like
+every file, `gates.jsonl` itself is open to a shell write the hook does not model.
 
 ## Headless runs
 
@@ -190,6 +239,8 @@ This is the concrete answer to the "the plugin doesn't know how you use Gemini /
 | What if I have `commit_strategy: per-gate`? | The plugin refuses to run on a dirty tree so your uncommitted work does not tangle with the plugin's commits. Defaults are safe: `branch_strategy: current`, `commit_strategy: none`, `pr: off`. | `--allow-dirty` bypasses the git-clean check. |
 | Can the AI bypass the hook? | Interactive: not through a file tool. The hook is an agy `PreToolUse` matcher, refusals happen before the tool executes, and editing the frozen contract refuses every later write. A shell command is checked for redirects, `tee`, `touch`, `cp` and `mv`, for the literal paths an inline `node -e` / `python -c` script writes through `fs`, `open()` or `Path`, and for package commands (`npm`, `pnpm`, `yarn`, `bun`), judged in every project whose contract binds. The project's own install (`npm ci`, and `install` naming no package) writes `node_modules/` and the lockfile, which a live contract allows unless its `off_limits` names the lockfile. A named install, `add`, `update` or `remove` is also a `package.json` write, judged by the contract. The quoted values of `--reason` and `--needs` are prose, not commands, and are not judged, unless the shell expands them (`$`, a backtick). While a contract binds, an inline script write whose path is not a literal is refused. Any other shell write is not seen; the run record's `after_run_check.unjudged_changes` lists every changed file no hook decision named. A command that rewrites the contract changes its bytes and locks the run. Headless: on agy 1.3.5 `agy -p` loads the hook and refuses the same writes ([check 1](verification/p1-agy-runtime.md)); the record's `write_guard.state` is `hook` when it judged the run's writes and `off` when it judged none, and the after-run check lists what the run changed outside the contract either way. | `--strict-write=off` at run start, passed by you. Mid-run: none; a wider scope is a new run with its own Gate 0. |
 | A run stopped after Gate 0 and the project stays held | `node plugin/scripts/write-contract.mjs --abandon --run-id <run-id> --reason "<why>"` records the run's end (aborted) and switches its contract off. Deleting the contract does not free it: under the live freeze record that refuses every write. | Your decision. |
+| Can the conductor change requirements I approved? | Not through a file tool while the run's contract binds: the hook refuses the write and tells the conductor to ask you. On your `revise: <comments>`, it records your answer with `record-gate.mjs` and revises the artifact through its phase; you approve it again at its gate. An edit that reaches disk another way stops the run from ending `completed`. | None. Answer `revise` at the gate. |
+| A reviewer asks for my approval mid-run | That request is a gate: the conductor stops, asks you, and records your answer with `record-gate.mjs`. It never writes an approval, resolution or escalation note itself. | None. |
 | How do I override off-limits for one specific run? | Re-open Gate 0 with `revise:` and move the specific path from `off_limits` to `allowlist`. Ephemeral — applies to this run only. | None. `.sdlc/project.json.off_limits_default` is unchanged by this. |
 | My repo has files with unusual characters — will pattern matching work? | Yes. The hook uses glob-style pattern matching (`*`, `**`, `?`, literal `/`). No shell-out, no eval on paths. Unicode, spaces, and exotic characters all work. | None needed. |
 | What if I run `git checkout` or `git reset --hard` mid-run? | The plugin observes git state between phases via `git status`. If HEAD moved unexpectedly, it halts with a clear message before continuing. | None. The halt is the safety guarantee — better to stop than write against a repo that changed under it. |

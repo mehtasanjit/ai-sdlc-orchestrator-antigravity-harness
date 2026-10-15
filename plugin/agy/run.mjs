@@ -53,6 +53,7 @@ import { finishWriteGuard, gitStatus, loadLaunchSnapshot, saveLaunchSnapshot } f
 import { resumeRun } from "../scripts/write-contract.mjs";
 import { runEnd } from "../scripts/lib/contract-state.mjs";
 import { testVerdict } from "../scripts/lib/test-record.mjs";
+import { approvalVerdict } from "../scripts/lib/gate-record.mjs";
 import { runMode } from "./telemetry/conductorWork.mjs";
 import { agyHome, readConversationRecord } from "./telemetry/conversationUsage.mjs";
 import { DEFAULT_POLICY, loadPolicyFile as loadProjectPolicyFile, policyPath as projectPolicyPath, resolvePolicy as resolveProjectPolicy } from "./projectPolicy.mjs";
@@ -103,7 +104,7 @@ export const GATE_MODES = {
     "in the gate record and in your final report rather than passing it silently.",
   "auto-abort":
     "You are running UNATTENDED with gates set to abort. At each gate, print what was " +
-    "produced, record the decision as `aborted`, and stop the run there. Use this to produce " +
+    "produced, record the decision as `auto-aborted`, and stop the run there. Use this to produce " +
     "one phase's artifact for inspection without proceeding.",
 };
 
@@ -276,11 +277,19 @@ export function runIsComplete(outputDir, since = null, { before = null, exists =
 
 /**
  * A session that wrote its SUMMARY.md completes a brownfield run only on a
- * passing test record, unless Gate 0 froze no test command.
+ * passing test record, unless Gate 0 froze no test command; any run, only
+ * with every gate-approved artifact as its gate approved it.
  */
 export function headlessVerdict({ outputDir, runId, mode = null, summaryWritten, projectRoot = null }) {
   const tests = runMode(outputDir, mode) === "brownfield" ? testVerdict(outputDir, runId, { projectRoot }) : null;
-  return { completed: summaryWritten && (!tests?.required || tests.passed === true), tests };
+  const approvals = approvalVerdict(outputDir, runId, { projectRoot });
+  const testsHeld = !tests?.required || tests.passed === true;
+  return {
+    completed: summaryWritten && testsHeld && approvals.held,
+    tests,
+    ...(approvals.held ? {} : { approved_artifact_changed: approvals.changed }),
+    ...(summaryWritten && !(testsHeld && approvals.held) ? { reason: testsHeld ? approvals.reason : tests.reason } : {}),
+  };
 }
 
 /** SUMMARY.md as a fresh launch found it, or null when there was none. */
@@ -700,7 +709,7 @@ async function main(args) {
       provisional(conversationId);
     }
     const summaryWritten = runIsComplete(outputDir, started, { before: staleSummary });
-    const { completed, tests } = headlessVerdict({ outputDir, runId, mode, summaryWritten, projectRoot });
+    const { completed, reason: incomplete } = headlessVerdict({ outputDir, runId, mode, summaryWritten, projectRoot });
     const ownEnd = runEnd(projectRoot, runId);
     if (!completed && ownEnd) {
       console.log(
@@ -710,7 +719,7 @@ async function main(args) {
     } else if (!completed) {
       console.log(
         `run ${runId}: stopped after ${invocations} invocation(s) ` +
-          (summaryWritten ? `with this run's SUMMARY.md, but ${tests.reason}. ` : `without this run's SUMMARY.md — ` +
+          (summaryWritten ? `with this run's SUMMARY.md, but ${incomplete}. ` : `without this run's SUMMARY.md — ` +
           (interrupted ? `interrupted (${interrupted}).` : invocations >= maxTurns ? `hit --max-turns=${maxTurns}.` : quotaStop(result) ? `agy's model was still over its quota after ${quotaRetries} wait(s).` : `agy exited ${result.status}.`)) +
           ` Artifacts so far are in the output directory; re-run with --resume=${conversationId ?? "<conversation-id>"} --run-id=${runId} to continue.`,
       );
