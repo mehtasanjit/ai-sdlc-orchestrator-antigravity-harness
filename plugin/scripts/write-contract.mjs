@@ -3,17 +3,19 @@
  * Writes a brownfield run's write contract by code, and ends it.
  *
  *   --freeze   at Gate 0: writes .sdlc/local/write-contract.json and the run's
- *              contract.lock.json (the SHA-256 of the exact bytes), so an edit
- *              to the contract later in the run refuses every write.
+ *              contract.lock.json (the SHA-256 of the exact bytes, and the test
+ *              commands Gate 0 confirmed), so an edit to the contract later in
+ *              the run refuses every write.
  *   --close    at close-out, after Gate 4: records the run's end in
  *              .sdlc/runs/<run-id>/run-end.json, then switches the contract off.
- *              `completed` needs a passing test record (lib/test-record.mjs);
+ *              `completed` needs a passing run of a frozen test command (lib/test-record.mjs);
  *              `stopped` carries the stop record: why, and what the person must do.
  *   --abandon  ends a run that will never end by itself (its chat closed, it
  *              crashed after Gate 0): the person's decision, never the run's.
  *
  * Usage:
  *   node write-contract.mjs --freeze --run-id <id> --allowlist '<JSON array>' [--off-limits '<JSON array>']
+ *                           --test-command '<command>' [--test-command '<command>' ...] | --test-command none
  *                           [--strict-write=off] [--project-root <dir>]
  *   node write-contract.mjs --close --run-id <id> [--outcome completed|aborted] [--project-root <dir>]
  *   node write-contract.mjs --close --run-id <id> --outcome stopped --reason "<what failed>" --needs "<what the person must do>"
@@ -32,7 +34,7 @@ import { testVerdict } from "./lib/test-record.mjs";
 export const OUTCOMES = new Set(["completed", "aborted", "stopped"]);
 
 function parseArgs(argv) {
-  const out = { mode: null, runId: null, allowlist: null, offLimits: "[]", strict: true, reason: null, needs: null, outcome: "completed", projectRoot: process.cwd() };
+  const out = { mode: null, runId: null, allowlist: null, offLimits: "[]", testCommands: [], strict: true, reason: null, needs: null, outcome: "completed", projectRoot: process.cwd() };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     const val = () => (a.includes("=") ? a.slice(a.indexOf("=") + 1) : argv[++i]);
@@ -42,6 +44,7 @@ function parseArgs(argv) {
     else if (a.startsWith("--run-id")) out.runId = val();
     else if (a.startsWith("--allowlist")) out.allowlist = val();
     else if (a.startsWith("--off-limits")) out.offLimits = val();
+    else if (a.startsWith("--test-command")) out.testCommands.push(val());
     else if (a === "--strict-write=off") out.strict = false;
     else if (a.startsWith("--reason")) out.reason = val();
     else if (a.startsWith("--needs")) out.needs = val();
@@ -54,6 +57,16 @@ function parseArgs(argv) {
 const PERSON_DECIDES = "A wider scope is the person's decision, for a new run with its own Gate 0: stop and tell the person which path is needed and why.";
 
 const filled = (v) => (typeof v === "string" && v.trim() ? v.trim() : null);
+
+const TEST_COMMAND_USAGE = "--test-command '<the command Gate 0 confirmed>' (once per package's command in a monorepo), or --test-command none when the person confirmed the project has no tests";
+
+/** The frozen test commands: [] for none, null when the flags do not say. */
+function testCommands(values) {
+  const commands = values.map(filled);
+  if (!commands.length || commands.includes(null)) return null;
+  if (commands.some((c) => /^none$/i.test(c))) return commands.length === 1 ? [] : null;
+  return [...new Set(commands)];
+}
 
 function globs(text) {
   try {
@@ -115,7 +128,7 @@ export function main(argv = process.argv.slice(2), { log = (m) => process.stdout
   const a = parseArgs(argv);
   const root = resolve(a.projectRoot);
   const refuse = (m) => { fail(m); return 2; };
-  if (!a.mode) return refuse("usage: --freeze --run-id <id> --allowlist '<JSON array>' [--off-limits '<JSON array>'] [--strict-write=off], --close --run-id <id>, or --abandon --run-id <id> [--reason \"<text>\"]");
+  if (!a.mode) return refuse("usage: --freeze --run-id <id> --allowlist '<JSON array>' [--off-limits '<JSON array>'] --test-command '<command>'|none [--strict-write=off], --close --run-id <id>, or --abandon --run-id <id> [--reason \"<text>\"]");
   if (typeof a.runId !== "string" || !RUN_ID.test(a.runId)) return refuse("--run-id must be the run's id (letters, digits, '.', '_', '-')");
   if (gitRoot(root) !== root) {
     const top = gitRoot(root);
@@ -127,13 +140,15 @@ export function main(argv = process.argv.slice(2), { log = (m) => process.stdout
     const offLimits = globs(a.offLimits);
     if (!allowlist) return refuse("--allowlist must be a JSON array of path globs");
     if (!offLimits) return refuse("--off-limits must be a JSON array of path globs");
+    const tests = testCommands(a.testCommands);
+    if (!tests) return refuse(`${TEST_COMMAND_USAGE}. Nothing is written.`);
     if (readLock(root, a.runId)) return refuse(`run ${a.runId} has already frozen its contract: a run freezes once, at its Gate 0. ${PERSON_DECIDES}`);
     if (runEnded(root, a.runId)) return refuse(`run ${a.runId} has ended, and a run that ended never freezes again. ${PERSON_DECIDES}`);
     const state = contractState(root);
     if (state.binding) return refuse(`run ${state.runId} is live and holds this project's contract. Ending it is the person's decision: write-contract.mjs --abandon --run-id ${state.runId} --reason "<why>".`);
     const sha256 = writeContract(root, { schema_version: 1, active: true, mode: "brownfield", run_id: a.runId, strict: a.strict, allowlist, off_limits: offLimits });
-    writeWhole(join(root, lockRelPath(a.runId)), JSON.stringify({ run_id: a.runId, sha256, frozen_at: new Date().toISOString(), written_by: "plugin/scripts/write-contract.mjs" }, null, 2) + "\n");
-    log(`write-contract: frozen for run ${a.runId} (${allowlist.length} allowlist, ${offLimits.length} off-limits pattern(s)${a.strict ? "" : ", strict off"})`);
+    writeWhole(join(root, lockRelPath(a.runId)), JSON.stringify({ run_id: a.runId, sha256, test_commands: tests, frozen_at: new Date().toISOString(), written_by: "plugin/scripts/write-contract.mjs" }, null, 2) + "\n");
+    log(`write-contract: frozen for run ${a.runId} (${allowlist.length} allowlist, ${offLimits.length} off-limits pattern(s), test command ${tests.length ? tests.map((c) => JSON.stringify(c)).join(", ") : "none"}${a.strict ? "" : ", strict off"})`);
     return 0;
   }
 
@@ -147,9 +162,9 @@ export function main(argv = process.argv.slice(2), { log = (m) => process.stdout
       return refuse(`a stopped run records why it stopped and what it needs from the person: ${stopWith}`);
     }
     if (a.outcome === "completed") {
-      const tests = testVerdict(join(root, ".sdlc", "runs", a.runId), a.runId);
+      const tests = testVerdict(join(root, ".sdlc", "runs", a.runId), a.runId, { projectRoot: root });
       if (tests.required && !tests.passed) {
-        return refuse(`run ${a.runId} cannot end as completed: ${tests.reason}. A run completes only on a passing test record, or when its intent brief's test command is none. Nothing is written. End it as stopped: ${stopWith}`);
+        return refuse(`run ${a.runId} cannot end as completed: ${tests.reason}. A run completes only on a passing run of the test command Gate 0 froze, or when Gate 0 froze none. Nothing is written. End it as stopped: ${stopWith}`);
       }
     }
     endRun(root, a.runId, { outcome: a.outcome, reason: filled(a.reason), needs: filled(a.needs) });

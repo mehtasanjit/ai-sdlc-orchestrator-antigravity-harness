@@ -24,7 +24,7 @@ The table's "handled by" column names the script or playbook that owns each issu
 
 | # | Issue | Handled by | Behavior |
 |---|---|---|---|
-| 6 | No test infrastructure detected | `discovery` + `pre-check.mjs` | Discovery notes `test_command_proposed: "unknown"`; Gate 0 warns *"proceed without test phase? [y/n]"*. If yes, the intent brief records `none` under `## Test command`, Phase 7 is skipped, and the run completes without a test run. |
+| 6 | No test infrastructure detected | `discovery` + `pre-check.mjs` | Discovery notes `test_command_proposed: "unknown"`; Gate 0 warns *"proceed without test phase? [y/n]"*. If yes, Gate 0 freezes `--test-command none`, Phase 7 is skipped, and the run completes without a test run. |
 | 7 | Failing tests before the run starts | `pre-check.mjs` step 2 | The test-command probe uses `--collect-only`/`--dry-run` so it does not run the suite. If you run the full suite first and it fails, Gate 0 shows a warning: *"Repo has N pre-existing failing tests. This run will not cause these, but Phase 7 may fail approval on them. Continue? [y/n]"* |
 | 8 | Encrypted secrets manager (Vault, Doppler, `.env.enc`) | `discovery` | Detect the marker file. Gate 0 notes: *"Secrets appear to be in `<X>`. Off-limits does not cover them, but the plugin does not touch them either. No `.env` work in this run."* |
 | 9 | Git-LFS files | `discovery` | Detect from `.gitattributes` (`filter=lfs` / `diff=lfs` / `merge=lfs`). Skip `Read` on LFS-marked patterns (would blow token budget). Gate 0 lists what is skipped. |

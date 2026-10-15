@@ -11,8 +11,9 @@
  *                     [--cwd=<dir>] [--timeout-sec=<n>]
  *
  * Each call is one attempt; the last decides. An earlier attempt's output is
- * kept as test-output.<n>.txt. Exit 0 = passed, 1 = failed or could not run,
- * 2 = usage.
+ * kept as test-output.<n>.txt. A command the run's freeze record does not
+ * hold, or a folder other than the project root, is refused before it runs. Exit 0 =
+ * passed, 1 = failed or could not run, 2 = usage or refused.
  */
 import { closeSync, existsSync, mkdirSync, openSync, readFileSync, renameSync, statSync, writeFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
@@ -20,7 +21,7 @@ import { basename, dirname, join, resolve } from "node:path";
 
 import { RUN_ID } from "./lib/contract-state.mjs";
 import { isMain } from "./lib/is-main.mjs";
-import { readTestRecord, TEST_OUTPUT_FILE, TEST_RECORD_FILE, TEST_RECORD_WRITER } from "./lib/test-record.mjs";
+import { frozenTestCommands, projectRootOf, readTestRecord, testRunMismatch, TEST_OUTPUT_FILE, TEST_RECORD_FILE, TEST_RECORD_WRITER } from "./lib/test-record.mjs";
 
 export const DEFAULT_TIMEOUT_SEC = 30 * 60;
 const TAIL_LINES = 40;
@@ -126,6 +127,9 @@ export function main(argv = process.argv.slice(2), { log = (m) => process.stdout
   if (!Number.isFinite(timeoutSec) || timeoutSec <= 0) { fail("--timeout-sec must be a positive number of seconds"); return 2; }
   const cwd = typeof a.cwd === "string" && a.cwd ? a.cwd : process.cwd();
   if (!existsSync(cwd)) { fail(`--cwd ${cwd} does not exist`); return 2; }
+  const root = projectRootOf(a["output-dir"], a["run-id"]);
+  const mismatch = testRunMismatch({ command: a.command, cwd: resolve(cwd) }, { frozen: frozenTestCommands(root, a["run-id"]), root });
+  if (mismatch) { fail(`refused, nothing ran: ${mismatch}. Run the frozen command from the project root; a different one is the person's decision, for a new run with its own Gate 0.`); return 2; }
 
   const record = runTests({ runId: a["run-id"], outputDir: a["output-dir"], command: a.command, cwd, timeoutSec });
   const outputPath = join(resolve(a["output-dir"]), TEST_OUTPUT_FILE);

@@ -234,6 +234,48 @@ export function packageInstallTargets(command) {
   return { output: [...output], manifest: [...manifest] };
 }
 
+const PROSE_FLAG = /--(?:reason|needs)(?:=|\s+)(?=['"])/y;
+
+/** Index of the quote that closes the one at `open`, or -1. */
+function closingQuote(s, open) {
+  for (let j = open + 1; j < s.length; j++) {
+    if (s[open] === '"' && s[j] === "\\") j++;
+    else if (s[j] === s[open]) return j;
+  }
+  return -1;
+}
+
+/**
+ * The command line with the quoted values of --reason and --needs emptied: a
+ * stop record's prose names commands (npm install express) it never runs. A
+ * double-quoted value the shell expands ($, `, \) is kept, and so is a flag
+ * inside another quoted string.
+ */
+export function withoutProse(command) {
+  if (typeof command !== "string") return command;
+  let out = "";
+  for (let i = 0; i < command.length; ) {
+    PROSE_FLAG.lastIndex = i;
+    const flag = (i === 0 || /\s/.test(command[i - 1])) && PROSE_FLAG.exec(command);
+    if (flag) {
+      const open = i + flag[0].length;
+      const close = closingQuote(command, open);
+      const inert = close !== -1 && (command[open] === "'" || !/[$`\\]/.test(command.slice(open + 1, close)));
+      if (inert && /^[\s;&|)]?$/.test(command[close + 1] ?? "")) {
+        out += flag[0] + command[open] + command[open];
+        i = close + 1;
+        continue;
+      }
+    }
+    const c = command[i];
+    const last = c === "'" || c === '"' ? closingQuote(command, i) : c === "\\" ? i + 1 : i;
+    if (last === -1) return out + command.slice(i);
+    out += command.slice(i, last + 1);
+    i = last + 1;
+  }
+  return out;
+}
+
 
 // ── agy-specific: target extraction ─────────────────────────────────────
 
@@ -263,7 +305,7 @@ export const READ_ONLY_TOOLS = new Set([
 export function extractTargets(call) {
   const name = call?.toolCall?.name ?? call?.tool_name;
   const args = call?.toolCall?.args ?? call?.tool_input ?? {};
-  if (name === "run_command") return extractBashRedirectTargets(args.CommandLine ?? args.command);
+  if (name === "run_command") return extractBashRedirectTargets(withoutProse(args.CommandLine ?? args.command));
   if (READ_ONLY_TOOLS.has(name)) return [];
   return extractPathArgs(args);
 }
@@ -411,7 +453,7 @@ async function main() {
   }
 
   if (toolName === "run_command") {
-    const line = call?.toolCall?.args?.CommandLine ?? call?.tool_input?.command;
+    const line = withoutProse(call?.toolCall?.args?.CommandLine ?? call?.tool_input?.command);
     const roots = bindingRoots(call);
     if (roots.length && scriptWriteTargets(line).unresolved) {
       const { root, state } = roots[0];

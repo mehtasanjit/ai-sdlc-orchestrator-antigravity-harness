@@ -362,8 +362,8 @@ If codegen introduced new required env vars (via `existing_file_edit` on `.env.e
 2. Print the list of new keys to the operator with a mini-gate: *"Codegen introduced N new required env vars: X, Y, Z. Populate them in your .env before Phase 7 continues, or say `skip` to run Phase 7 anyway (tests requiring these keys will fail)."*
 3. Wait for the user's response before invoking the test command.
 
-The test command in brownfield is the one Gate 0 confirmed, recorded on the first line under
-`## Test command` in `<output_dir>/intent_brief.md`, not hardcoded `npm test`. Working directory is the repo root (not `<output_dir>`); in monorepos, use the per-package scope from `baseline.monorepo.packages[].test_command` for whichever package the changed files belong to. When `## Test command` is `none` (the user confirmed at Gate 0 that the project has no tests), skip this phase: log it with `--log-phase=test_run --task-type=skipped` and go to Phase 8.
+The test command in brownfield is the one Gate 0 confirmed and froze, in `test_commands` of
+`<output_dir>/contract.lock.json` (`## Test command` in the intent brief is a copy), not hardcoded `npm test`. Working directory is the repo root (not `<output_dir>`); in monorepos, use the frozen per-package command for whichever package the changed files belong to. When `test_commands` is empty (the user confirmed at Gate 0 that the project has no tests), skip this phase: log it with `--log-phase=test_run --task-type=skipped` and go to Phase 8.
 
 **1. Install the project's dependencies** when the test's working directory has a `package.json`
 and no `node_modules/`. The pre-check's test-command probe does not prove they are installed: it
@@ -391,7 +391,9 @@ that changes `package.json`, and the hook judges it as a `package.json` write.
 node "${MMO_PLUGIN_ROOT}/scripts/test-run.mjs" --run-id=<run_id> --output-dir="<output_dir>" --cwd="<repo-root>" --command="<test command>"
 ```
 
-It runs the command, writes its output to `<output_dir>/test-output.txt`, records the status
+`--command` is a frozen test command, as frozen, and `--cwd` the repo root; the recorder refuses
+anything else before it runs. It runs the command, writes its output to
+`<output_dir>/test-output.txt`, records the status
 (`passed`, `failed`, or `not_run` when the command could not start) and the exit code in
 `<output_dir>/test-run.json`, and exits 0 only on a pass. That record decides whether the run can
 complete; while the contract binds, the write hook refuses any tool's write to `test-run.json`.
@@ -443,10 +445,13 @@ Phase 6.
 
 ### Phase 9 — generate_final_report
 
-**Brownfield: the tests decide first.** Read `<output_dir>/test-run.json`. Unless the intent
-brief's test command is `none`, its `status` must be `passed`; otherwise stop the run as Phase 7
-says and write no report. `write-contract.mjs --close` refuses to end a run as `completed` without
-a passing record, and `manifest.mjs` marks such a run `incomplete`.
+**Brownfield: the tests decide first.** Read `<output_dir>/test-run.json`. Unless Gate 0 froze
+`none`, its `status` must be `passed`; otherwise stop the run as Phase 7 says and write no report.
+A pass stops counting once the hook allows a project write after the test run started: after a
+Gate 3 `revise` or a Gate 4 `reject` changes project files, run the recorder again (Phase 7 step 2)
+before the report, and stop the run as Phase 7 says if it fails. `write-contract.mjs --close`
+refuses to end a run as `completed` without a passing record that counts, and `manifest.mjs` marks
+such a run `incomplete`.
 
 **Brownfield: close the undo record**, after the last project write and before the report:
 
@@ -610,8 +615,8 @@ mid-gate, session-hydrate detects a non-terminal state and re-prompts on the nex
 > Reply: `approved`, `revise: <comments>`, or `abort`.
 
 On `approved`, freeze the write contract by code with
-`node "${MMO_PLUGIN_ROOT}/scripts/write-contract.mjs" --freeze --run-id=<run_id> --allowlist='<JSON>' --off-limits='<JSON>' --project-root="$(pwd)"`
-(the brownfield guide's step 5); never write `.sdlc/local/write-contract.json` yourself. Build `off_limits` by concatenating `.sdlc/project.json.off_limits_default`
+`node "${MMO_PLUGIN_ROOT}/scripts/write-contract.mjs" --freeze --run-id=<run_id> --allowlist='<JSON>' --off-limits='<JSON>' --test-command='<test command>' --project-root="$(pwd)"`
+(the brownfield guide's step 5; `--test-command=none` when the user answered `none`); never write `.sdlc/local/write-contract.json` yourself. Build `off_limits` by concatenating `.sdlc/project.json.off_limits_default`
 (the project-level constants — `.env*`, `.mcp.json`, `node_modules/**`, etc., written by setup)
 with the AI-configs from `baseline.ai_configs_detected` and any ticket-specific paths the user
 added at Gate 0. The PreToolUse hook and the packet validator both read the merged list — the

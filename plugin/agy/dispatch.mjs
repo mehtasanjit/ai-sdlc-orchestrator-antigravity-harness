@@ -31,6 +31,7 @@ import { readMmoSelectFile } from "./mmoSelect.mjs";
 import { isMain } from "../scripts/lib/is-main.mjs";
 import { staleBuild, staleBuildWarning } from "../scripts/lib/stale-build.mjs";
 import { readTestRecord, TEST_RECORD_FILE, TEST_RECORD_WRITER } from "../scripts/lib/test-record.mjs";
+import { runMode } from "./telemetry/conductorWork.mjs";
 
 const BRIDGE_CLIENT = resolve(
   dirname(fileURLToPath(import.meta.url)),
@@ -158,8 +159,9 @@ export function buildLogEventArgs({ phase, taskType, module, reason, policyName,
   if (kind !== "skipped" && kind !== "in_session") {
     throw new Error(`dispatch: --task-type must be 'skipped' or 'in_session', got '${kind}'.`);
   }
-  const testRow = phase === "test_run" && kind === "in_session";
-  if (testRow && testRun && runId && testRun.run_id !== runId) testRun = null;
+  if (phase === "test_run" && testRun && runId && testRun.run_id !== runId) testRun = null;
+  // Greenfield Phase 7 runs its tests by hand: its row has no record to copy.
+  const testRow = phase === "test_run" && kind === "in_session" && (testRun || runMode(dirname(resolve(telemetryPath))) === "brownfield");
   if (testRow && !testRun) {
     throw new Error(
       `dispatch: a test_run row records the test run ${TEST_RECORD_WRITER} wrote, and ${join(dirname(resolve(telemetryPath)), TEST_RECORD_FILE)} holds none for this run. ` +

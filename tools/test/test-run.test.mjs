@@ -13,8 +13,8 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { briefTestCommand, readTestRecord, testVerdict } from "../../plugin/scripts/lib/test-record.mjs";
-import { testStatus } from "../../plugin/scripts/test-run.mjs";
+import { readTestRecord, testVerdict } from "../../plugin/scripts/lib/test-record.mjs";
+import { runTests, testStatus } from "../../plugin/scripts/test-run.mjs";
 import { buildLogEventArgs, logReceipt, runDispatch } from "../../plugin/agy/dispatch.mjs";
 import { buildHarnessManifest } from "../../plugin/agy/manifest.mjs";
 import { headlessVerdict } from "../../plugin/agy/run.mjs";
@@ -23,8 +23,12 @@ const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const TEST_RUN = join(ROOT, "plugin", "scripts", "test-run.mjs");
 const WRITE_CONTRACT = join(ROOT, "plugin", "scripts", "write-contract.mjs");
 const MMO_LOG = join(ROOT, "plugin", "scripts", "mmo-log.mjs");
+const HOOK = join(ROOT, "plugin", "agy", "hooks", "write-contract-check.mjs");
 const POLICY = "antigravity-flash38-plus-opus5";
 const RUN = "20261014-154942-bugfix-login-500";
+/** The test command Gate 0 confirmed and froze; each test writes the suite it runs. */
+const SUITE = "sh suite.sh";
+const PASS = "echo '3 passing'";
 
 const BRIEF = (testCommand) => [
   "# Intent Brief — bugfix — login 500",
@@ -33,34 +37,42 @@ const BRIEF = (testCommand) => [
   "POST /login returns 500 on a missing password.",
   "## Files in scope",
   "- src/auth.js",
-  ...(testCommand === undefined ? [] : ["## Test command", testCommand]),
+  "## Test command",
+  testCommand,
   "## Acceptance criteria",
   "- 400 on a missing password",
 ].join("\n") + "\n";
 
-/** A git project with a frozen brownfield contract and the run's folder holding its brief. */
-function project({ testCommand = "`npm test`" } = {}) {
+/** A git project with a contract frozen at Gate 0 with its test command, and the run's folder holding its brief. */
+function project({ testCommand = SUITE } = {}) {
   const root = mkdtempSync(join(tmpdir(), "test-run-"));
   mkdirSync(join(root, ".git"));
   const runDir = join(root, ".sdlc", "runs", RUN);
-  const fz = spawnSync(process.execPath, [WRITE_CONTRACT, "--freeze", `--run-id=${RUN}`, '--allowlist=["src/**"]', '--off-limits=["node_modules/**",".sdlc/**"]', `--project-root=${root}`], { encoding: "utf8" });
+  const fz = spawnSync(process.execPath, [WRITE_CONTRACT, "--freeze", `--run-id=${RUN}`, '--allowlist=["src/**"]', '--off-limits=["node_modules/**",".sdlc/**"]', `--test-command=${testCommand}`, `--project-root=${root}`], { encoding: "utf8" });
   assert.equal(fz.status, 0, fz.stderr);
   writeFileSync(join(runDir, "intent_brief.md"), BRIEF(testCommand));
   return { root, runDir };
 }
 
-const testRun = (root, command, extra = []) =>
+const testRun = (root, command = SUITE, extra = []) =>
   spawnSync(process.execPath, [TEST_RUN, `--run-id=${RUN}`, `--output-dir=${join(root, ".sdlc", "runs", RUN)}`, `--cwd=${root}`, `--command=${command}`, ...extra], { encoding: "utf8" });
+/** Runs the frozen command against a suite that does `script`. */
+const runSuite = (root, script) => {
+  writeFileSync(join(root, "suite.sh"), script + "\n");
+  return testRun(root);
+};
 const close = (root, ...args) => spawnSync(process.execPath, [WRITE_CONTRACT, "--close", `--run-id=${RUN}`, ...args, `--project-root=${root}`], { encoding: "utf8" });
 const mmoLog = (root, ...args) => {
   const r = spawnSync(process.execPath, [MMO_LOG, ...args, `--project-root=${root}`], { encoding: "utf8" });
   assert.equal(r.status, 0, r.stderr);
 };
+const hookWrite = (root, path) =>
+  JSON.parse(spawnSync(process.execPath, [HOOK], { input: JSON.stringify({ toolCall: { name: "write_to_file", args: { TargetFile: path } }, workspacePaths: [root] }), encoding: "utf8", cwd: root }).stdout);
 
 test("test-run.mjs records the command's real status, exit code and output, and keeps every attempt", () => {
   const { root, runDir } = project();
   try {
-    const failing = testRun(root, `node -e "console.log('1 failing'); process.exit(3)"`);
+    const failing = runSuite(root, "echo '1 failing'; exit 3");
     assert.equal(failing.status, 1, "it exits 1 when the tests fail");
     assert.match(failing.stdout, /test-run: failed \(exit 3\)/);
     assert.match(failing.stdout, /1 failing/, "the failure's output is shown");
@@ -68,13 +80,13 @@ test("test-run.mjs records the command's real status, exit code and output, and 
     assert.deepEqual([record.run_id, record.status, record.exit_code, record.attempt], [RUN, "failed", 3, 1]);
     assert.match(readFileSync(join(runDir, "test-output.txt"), "utf8"), /1 failing/);
 
-    const missing = testRun(root, "no-such-test-runner-xyz");
+    const missing = runSuite(root, "no-such-test-runner-xyz");
     assert.equal(missing.status, 1);
     record = readTestRecord(runDir);
     assert.deepEqual([record.status, record.exit_code], ["not_run", 127], "the shell could not find the command");
     assert.match(record.error, /could not find the command/);
 
-    const passing = testRun(root, `node -e "console.log('3 passing')"`);
+    const passing = runSuite(root, PASS);
     assert.equal(passing.status, 0, passing.stderr);
     record = readTestRecord(runDir);
     assert.deepEqual([record.status, record.exit_code, record.attempt], ["passed", 0, 3]);
@@ -95,19 +107,88 @@ test("testStatus tells a run that could not start from a failing one", () => {
   assert.equal(testStatus({ status: 126 }), "not_run");
 });
 
-test("the brief's test command is read from its own heading, and only `none` lifts the test requirement", () => {
-  const dir = mkdtempSync(join(tmpdir(), "test-brief-"));
+test("test-run.mjs refuses, before it runs, a command Gate 0 did not freeze or a folder other than the project root", () => {
+  const { root, runDir } = project();
+  const elsewhere = mkdtempSync(join(tmpdir(), "test-run-elsewhere-"));
   try {
-    assert.deepEqual(briefTestCommand(dir), { declared: false }, "no brief");
-    writeFileSync(join(dir, "intent_brief.md"), BRIEF(undefined));
-    assert.deepEqual(briefTestCommand(dir), { declared: false });
-    assert.equal(testVerdict(dir).required, true, "a brief that says nothing still needs a test run");
-    writeFileSync(join(dir, "intent_brief.md"), BRIEF("`npm test -- src/auth.spec.js`"));
-    assert.deepEqual(briefTestCommand(dir), { declared: true, command: "npm test -- src/auth.spec.js" });
-    writeFileSync(join(dir, "intent_brief.md"), BRIEF("none — the project has no tests (confirmed at Gate 0)"));
-    assert.deepEqual(briefTestCommand(dir), { declared: true, command: null });
-    assert.deepEqual([testVerdict(dir).required, testVerdict(dir).status], [false, "none"]);
-  } finally { rmSync(dir, { recursive: true, force: true }); }
+    writeFileSync(join(root, "suite.sh"), PASS + "\n");
+    for (const command of ["true", `${SUITE} || true`, "sh other.sh"]) {
+      const r = testRun(root, command);
+      assert.equal(r.status, 2, command);
+      assert.match(r.stderr, /refused, nothing ran: .* is not the test command Gate 0 froze \("sh suite\.sh"\)/, command);
+    }
+    for (const cwd of [elsewhere, join(root, "src")]) {
+      mkdirSync(cwd, { recursive: true });
+      const out = testRun(root, SUITE, [`--cwd=${cwd}`]);
+      assert.equal(out.status, 2, cwd);
+      assert.match(out.stderr, /not the project root/, "a subfolder could hold a package.json of its own");
+    }
+    assert.equal(existsSync(join(runDir, "test-run.json")), false, "nothing is recorded");
+    assert.equal(testRun(root, `  sh   suite.sh `).status, 0, "the frozen command, spaced differently, runs");
+  } finally { rmSync(root, { recursive: true, force: true }); rmSync(elsewhere, { recursive: true, force: true }); }
+});
+
+test("a passing record of another command, or from another folder, does not let the run complete", () => {
+  const { root, runDir } = project();
+  const elsewhere = mkdtempSync(join(tmpdir(), "test-run-elsewhere-"));
+  try {
+    runTests({ runId: RUN, outputDir: runDir, command: "true", cwd: root });
+    let verdict = testVerdict(runDir, RUN);
+    assert.deepEqual([verdict.status, verdict.passed, verdict.frozen_commands], ["passed", false, [SUITE]]);
+    assert.match(verdict.reason, /does not count: "true" is not the test command Gate 0 froze/);
+    let r = close(root);
+    assert.equal(r.status, 2);
+    assert.match(r.stderr, /cannot end as completed: the last test run does not count/);
+
+    writeFileSync(join(elsewhere, "suite.sh"), PASS + "\n");
+    runTests({ runId: RUN, outputDir: runDir, command: SUITE, cwd: elsewhere });
+    verdict = testVerdict(runDir, RUN);
+    assert.equal(verdict.passed, false);
+    assert.match(verdict.reason, /not the project root/);
+
+    assert.equal(runSuite(root, PASS).status, 0);
+    assert.equal(testVerdict(runDir, RUN).passed, true);
+    r = close(root);
+    assert.equal(r.status, 0, r.stderr);
+  } finally { rmSync(root, { recursive: true, force: true }); rmSync(elsewhere, { recursive: true, force: true }); }
+});
+
+test("only the freeze record lifts the test requirement: a brief edited to none changes nothing", () => {
+  const { root, runDir } = project();
+  try {
+    runSuite(root, "exit 1");
+    assert.equal(hookWrite(root, join(runDir, "intent_brief.md")).decision, "allow", "the run's own folder is writable");
+    writeFileSync(join(runDir, "intent_brief.md"), BRIEF("none"));
+    assert.deepEqual([testVerdict(runDir, RUN).required, testVerdict(runDir, RUN).passed], [true, false]);
+    const r = close(root);
+    assert.equal(r.status, 2);
+    assert.match(r.stderr, /cannot end as completed: the last test run \("sh suite\.sh"\) failed, exit code 1/);
+  } finally { rmSync(root, { recursive: true, force: true }); }
+  const none = project({ testCommand: "none" });
+  try {
+    assert.deepEqual(testVerdict(none.runDir, RUN), { required: false, passed: null, status: "none", frozen_commands: [], reason: "Gate 0 froze no test command (none)" });
+  } finally { rmSync(none.root, { recursive: true, force: true }); }
+});
+
+test("a project write the hook allows after the test run started voids the pass", () => {
+  const { root, runDir } = project();
+  try {
+    assert.equal(runSuite(root, PASS).status, 0);
+    assert.equal(hookWrite(root, join(runDir, "final_report.md")).decision, "allow");
+    assert.equal(testVerdict(runDir, RUN).passed, true, "a write to the run's own folder is no code change");
+
+    assert.equal(hookWrite(root, join(root, "src", "auth.js")).decision, "allow");
+    const verdict = testVerdict(runDir, RUN);
+    assert.equal(verdict.passed, false);
+    assert.match(verdict.reason, /the project changed after the last test run started .*src\/auth\.js.*run the tests again/);
+    let r = close(root);
+    assert.equal(r.status, 2);
+    assert.match(r.stderr, /the project changed after the last test run started/);
+
+    assert.equal(testRun(root).status, 0);
+    r = close(root);
+    assert.equal(r.status, 0, r.stderr);
+  } finally { rmSync(root, { recursive: true, force: true }); }
 });
 
 test("a test record the conductor wrote, or one from another run, is no test record", () => {
@@ -130,10 +211,10 @@ test("--close refuses to end a run as completed without a passing test record, a
     assert.match(r.stderr, /--outcome=stopped --reason="<what failed>" --needs="<what the person must do>"/);
     assert.equal(existsSync(join(runDir, "run-end.json")), false, "nothing is written");
 
-    testRun(root, `node -e "process.exit(1)"`);
+    runSuite(root, "exit 1");
     r = close(root);
     assert.equal(r.status, 2);
-    assert.match(r.stderr, /the last test run \("node -e \\"process\.exit\(1\)\\""\) failed, exit code 1/);
+    assert.match(r.stderr, /the last test run \("sh suite\.sh"\) failed, exit code 1/);
 
     assert.match(close(root, "--outcome=stopped", "--reason=tests fail").stderr, /records why it stopped and what it needs/, "a stop without needs is refused");
     r = close(root, "--outcome=stopped", "--reason=src/auth.spec.js fails with exit code 1", "--needs=decide whether the expected status is still right");
@@ -143,11 +224,11 @@ test("--close refuses to end a run as completed without a passing test record, a
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
 
-test("--close ends a run as completed on a passing record, or when the brief has no test command", () => {
-  for (const [label, testCommand, command] of [["passing", "`npm test`", `node -e "process.exit(0)"`], ["none", "none", null]]) {
+test("--close ends a run as completed on a passing record, or when Gate 0 froze no test command", () => {
+  for (const [label, testCommand] of [["passing", SUITE], ["none", "none"]]) {
     const { root, runDir } = project({ testCommand });
     try {
-      if (command) assert.equal(testRun(root, command).status, 0);
+      if (testCommand !== "none") assert.equal(runSuite(root, PASS).status, 0);
       const r = close(root);
       assert.equal(r.status, 0, `${label}: ${r.stderr}`);
       assert.equal(JSON.parse(readFileSync(join(runDir, "run-end.json"), "utf8")).outcome, "completed", label);
@@ -174,12 +255,12 @@ test("the manifest marks a brownfield run incomplete when its tests did not pass
     assert.equal(m.harness.tests.status, "not_run");
     assert.match(m.harness.incomplete_reason, /tests did not pass/);
 
-    testRun(root, `node -e "process.exit(1)"`);
+    runSuite(root, "exit 1");
     mmoLog(root, "--event=run.end", `--run-id=${RUN}`, "--outcome=completed");
     m = manifest(runDir);
     assert.deepEqual([m.harness.completed, m.harness.status, m.harness.tests.status, m.harness.tests.exit_code], [false, "incomplete", "failed", 1]);
 
-    testRun(root, `node -e "process.exit(0)"`);
+    runSuite(root, PASS);
     m = manifest(runDir);
     assert.deepEqual([m.harness.completed, m.harness.status, m.harness.tests.passed], [true, "completed", true]);
     assert.equal(m.harness.incomplete_reason, undefined);
@@ -190,7 +271,7 @@ test("a run Phase 7 stopped is recorded as stopped, with its reason and needs", 
   const { root, runDir } = project();
   try {
     acceptedRun(root, runDir);
-    testRun(root, "no-such-test-runner-xyz");
+    runSuite(root, "no-such-test-runner-xyz");
     mmoLog(root, "--event=run.end", `--run-id=${RUN}`, "--outcome=stopped", "--reason=the test runner is not installed", "--needs=run npm ci in the repo root");
     const m = manifest(runDir);
     assert.deepEqual([m.harness.completed, m.harness.status], [false, "stopped"]);
@@ -198,7 +279,7 @@ test("a run Phase 7 stopped is recorded as stopped, with its reason and needs", 
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
 
-test("a brownfield run whose brief has no test command completes without a test record; a greenfield run is not asked for one", () => {
+test("a brownfield run whose Gate 0 froze no test command completes without a test record; a greenfield run is not asked for one", () => {
   const { root, runDir } = project({ testCommand: "none" });
   try {
     acceptedRun(root, runDir);
@@ -217,7 +298,7 @@ test("the headless launcher completes a brownfield run only on a passing test re
     const verdict = () => headlessVerdict({ outputDir: runDir, runId: RUN, mode: "brownfield", summaryWritten: true });
     assert.equal(verdict().completed, false);
     assert.match(verdict().tests.reason, /never ran through plugin\/scripts\/test-run\.mjs/);
-    testRun(root, `node -e "process.exit(0)"`);
+    runSuite(root, PASS);
     assert.equal(verdict().completed, true);
     assert.equal(headlessVerdict({ outputDir: runDir, runId: RUN, mode: "brownfield", summaryWritten: false }).completed, false);
   } finally { rmSync(root, { recursive: true, force: true }); }
@@ -233,7 +314,7 @@ test("a test_run row and its receipt carry the recorded status and exit code, ne
     await assert.rejects(() => runDispatch(args, { connect }), /a test_run row records the test run plugin\/scripts\/test-run\.mjs wrote/);
     assert.equal(logged.length, 0, "nothing is logged without a record");
 
-    testRun(root, `node -e "process.exit(1)"`);
+    runSuite(root, "exit 1");
     await runDispatch({ ...args, reason: "npm test passed (3/3 tests)" }, { connect });
     const event = logged[0].event;
     assert.deepEqual([event.success, event.test_status, event.test_exit_code], [false, "failed", 1]);
@@ -243,5 +324,31 @@ test("a test_run row and its receipt carry the recorded status and exit code, ne
 
     assert.equal(buildLogEventArgs({ phase: "test_run", taskType: "skipped", telemetryPath: telemetry }).event.success, true, "a skipped test phase needs no record");
     assert.deepEqual(logReceipt(buildLogEventArgs({ phase: "discovery", taskType: "in_session", telemetryPath: telemetry }), "ok"), { logged: "discovery", task_type: "in_session", success: true, telemetry_path: telemetry, reply: "ok" });
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test("a greenfield test_run row needs no test record; a brownfield one does", () => {
+  const green = mkdtempSync(join(tmpdir(), "test-run-green-"));
+  try {
+    const telemetryPath = join(green, "telemetry.jsonl");
+    const row = buildLogEventArgs({ phase: "test_run", taskType: "in_session", telemetryPath, runId: "g1" }).event;
+    assert.equal(row.success, true, "greenfield Phase 7 runs its tests by hand, as before");
+    assert.equal("test_status" in row, false);
+    writeFileSync(join(green, "intent_brief.md"), BRIEF(SUITE));
+    assert.throws(() => buildLogEventArgs({ phase: "test_run", taskType: "in_session", telemetryPath, runId: "g1" }), /holds none for this run/, "a brownfield run folder is read as one");
+  } finally { rmSync(green, { recursive: true, force: true }); }
+});
+
+test("a headless run whose session wrote SUMMARY.md but whose tests failed says why it is incomplete", () => {
+  const { root, runDir } = project();
+  try {
+    copyFileSync(join(ROOT, "plugin", "config", "policies", `${POLICY}.yaml`), join(runDir, "policy_snapshot.yaml"));
+    writeFileSync(join(runDir, "telemetry.jsonl"), "");
+    writeFileSync(join(runDir, "SUMMARY.md"), "# Summary\n");
+    runSuite(root, "exit 1");
+    writeFileSync(join(runDir, "driver-manifest.json"), JSON.stringify({ harness: "antigravity", run_id: RUN, mode: "brownfield", completed: false, started_at: new Date(Date.now() - 60_000).toISOString(), ended_at: new Date().toISOString() }));
+    const m = manifest(runDir);
+    assert.deepEqual([m.harness.completed, m.harness.status, m.harness.tests.status], [false, "incomplete", "failed"]);
+    assert.match(m.harness.incomplete_reason, /tests did not pass: the last test run \("sh suite\.sh"\) failed, exit code 1/);
   } finally { rmSync(root, { recursive: true, force: true }); }
 });

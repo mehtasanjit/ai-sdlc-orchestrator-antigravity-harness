@@ -11,7 +11,7 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { extractTargets, extractPathArgs, READ_ONLY_TOOLS, findCredentialLiteral, packageInstallTargets } from "../../plugin/agy/hooks/write-contract-check.mjs";
+import { extractTargets, extractPathArgs, READ_ONLY_TOOLS, findCredentialLiteral, packageInstallTargets, withoutProse } from "../../plugin/agy/hooks/write-contract-check.mjs";
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const HOOK = join(ROOT, "plugin", "agy", "hooks", "write-contract-check.mjs");
@@ -287,6 +287,32 @@ test("a redirect to an install's output path is judged as itself, not as the ins
     assert.equal(lock.decision, "deny");
     assert.match(lock.reason, /package-lock\.json is not in the confirmed allowlist for run t1/);
   } finally { rmSync(dir, { recursive: true, force: true }); rmSync(harness, { recursive: true, force: true }); }
+});
+
+test("a stop record's quoted --reason and --needs are prose, never judged as commands", () => {
+  const dir = repoWithContract(CONTRACT);
+  const harness = mkdtempSync(join(tmpdir(), "wc-harness-"));
+  try {
+    const stop = [
+      `node "$MMO_PLUGIN_ROOT/scripts/mmo-log.mjs" --event=run.end --run-id=t1 --outcome=stopped --reason="the hook refused npm install express: package.json is not in the allowlist" --needs="add express to package.json, then re-run" --project-root="${dir}"`,
+      `node "$MMO_PLUGIN_ROOT/scripts/write-contract.mjs" --close --run-id=t1 --outcome=stopped --reason "src/auth.spec.js fails > 0 times" --needs='run npm install in the repo root' --project-root="${dir}"`,
+    ];
+    for (const line of stop) assert.deepEqual(shell(harness, line, [harness, dir]), { decision: "allow" }, line);
+    for (const line of [
+      `node m.mjs --reason="$(npm install express)"`,
+      `node m.mjs --reason="tests fail" && npm install express`,
+      `node m.mjs --reason="tests fail" > ${join(dir, "notes.txt")}`,
+      `echo "x --reason='" > ${join(dir, "notes.txt")} "'"`,
+    ]) assert.equal(shell(harness, line, [harness, dir]).decision, "deny", line);
+  } finally { rmSync(dir, { recursive: true, force: true }); rmSync(harness, { recursive: true, force: true }); }
+});
+
+test("withoutProse empties only quoted --reason and --needs values the shell does not expand", () => {
+  assert.equal(withoutProse(`x --reason="npm install a" --needs='npm i b' --other="npm i c"`), `x --reason="" --needs='' --other="npm i c"`);
+  assert.equal(withoutProse(`x --reason="$(npm i a)"`), `x --reason="$(npm i a)"`);
+  assert.equal(withoutProse(`x --reason="a"b`), `x --reason="a"b`, "a value glued to more of the word is kept");
+  assert.equal(withoutProse(`x --reason="open`), `x --reason="open`);
+  assert.equal(withoutProse(undefined), undefined);
 });
 
 test("packageInstallTargets splits an install's own output from a package.json change", () => {

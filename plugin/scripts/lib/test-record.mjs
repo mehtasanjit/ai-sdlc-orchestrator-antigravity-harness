@@ -3,12 +3,19 @@
  * the run completed: plugin/scripts/write-contract.mjs --close, the manifest
  * (plugin/agy/manifest.mjs), the headless launcher and dispatch.mjs.
  *
- *   <run folder>/test-run.json     what plugin/scripts/test-run.mjs saw the test command do
- *   <run folder>/test-output.txt   the command's output
- *   <run folder>/intent_brief.md   `## Test command`: the command Gate 0 confirmed, or `none`
+ *   <run folder>/test-run.json        what plugin/scripts/test-run.mjs saw the test command do
+ *   <run folder>/test-output.txt      the command's output
+ *   <run folder>/contract.lock.json   `test_commands`: what Gate 0 confirmed, frozen with the contract; [] for none
+ *   .sdlc/local/guard-decisions.jsonl the hook's allowed writes, each with its time
+ *
+ * A passing record counts only when it ran a frozen test command from the
+ * project's root, and no project write was allowed after it started. A
+ * monorepo freezes one command per package, each run from the root.
  */
-import { readFileSync, statSync } from "node:fs";
-import { join } from "node:path";
+import { readFileSync, realpathSync, statSync } from "node:fs";
+import { basename, dirname, join, resolve } from "node:path";
+
+import { guardDecisions, readLock } from "./contract-state.mjs";
 
 export const TEST_RECORD_FILE = "test-run.json";
 export const TEST_OUTPUT_FILE = "test-output.txt";
@@ -38,46 +45,82 @@ export function readTestRecord(runDir) {
   }
 }
 
+/** The project a run folder at `<root>/.sdlc/runs/<run-id>` belongs to, or null for a folder elsewhere. */
+export function projectRootOf(runDir, runId) {
+  const dir = resolve(runDir);
+  if (!runId || basename(dir) !== runId) return null;
+  const runs = dirname(dir);
+  return basename(runs) === "runs" && basename(dirname(runs)) === ".sdlc" ? dirname(dirname(runs)) : null;
+}
+
 /**
- * The `## Test command` section of the run's intent brief: `{ declared: false }`
- * when the brief has none, `{ declared: true, command: null }` when it says
- * `none`, otherwise the command.
+ * The test commands the run's freeze record holds: [] when Gate 0 confirmed
+ * the project has none, null when there is no freeze record or it was written
+ * before --freeze took --test-command.
  */
-export function briefTestCommand(runDir) {
-  const text = readText(join(runDir, "intent_brief.md"));
-  const heading = text === null ? null : /^##[ \t]+Test command[ \t]*$/im.exec(text);
-  if (!heading) return { declared: false };
-  const rest = text.slice(heading.index + heading[0].length);
-  const end = rest.search(/^#{1,2}[ \t]/m);
-  const first = (end === -1 ? rest : rest.slice(0, end)).split("\n").map((l) => l.trim()).find(Boolean) ?? "";
-  const value = first.replace(/^[-*][ \t]+/, "").replace(/^`+|`+$/g, "").trim();
-  if (!value) return { declared: false };
-  return /^none\b/i.test(value) ? { declared: true, command: null } : { declared: true, command: value };
+export function frozenTestCommands(root, runId) {
+  const commands = root && runId ? readLock(root, runId)?.test_commands : undefined;
+  return Array.isArray(commands) && commands.every((c) => typeof c === "string") ? commands : null;
+}
+
+const sameCommand = (a, b) => String(a ?? "").trim().replace(/\s+/g, " ") === String(b ?? "").trim().replace(/\s+/g, " ");
+
+const real = (p) => { try { return realpathSync(p); } catch { return resolve(p); } };
+
+/** Why a test run of `command` in `cwd` cannot stand for the run's tests, or null. */
+export function testRunMismatch({ command, cwd }, { frozen = null, root = null } = {}) {
+  if (frozen?.length && !frozen.some((c) => sameCommand(c, command))) {
+    return `${JSON.stringify(command ?? "?")} is not the test command Gate 0 froze (${frozen.map((c) => JSON.stringify(c)).join(", ")})`;
+  }
+  if (root && cwd && real(cwd) !== real(root)) return `it ran in ${cwd}, not the project root ${root}`;
+  return null;
+}
+
+/** The first write the hook allowed for the run, outside its own folder, after `since`; null when none. */
+export function projectWriteAfter(root, runId, since) {
+  const after = Date.parse(since);
+  if (!root || !runId || !Number.isFinite(after)) return null;
+  const own = `/.sdlc/runs/${runId}/`;
+  for (const d of guardDecisions(root, runId)) {
+    if (d.decision !== "allow" || !(Date.parse(d.ts) > after)) continue;
+    const path = [...(d.paths ?? []), ...(d.path ? [d.path] : [])].find((p) => typeof p === "string" && !p.replaceAll("\\", "/").includes(own));
+    if (path) return { ts: d.ts, path };
+  }
+  return null;
 }
 
 /**
  * Whether the run's tests allow it to complete. `required` is false only when
- * the brief says the run has no test command; then `passed` is null.
+ * Gate 0 froze `none`; then `passed` is null. `projectRoot` defaults to the
+ * project the run folder sits in.
  */
-export function testVerdict(runDir, runId = null) {
-  const brief = briefTestCommand(runDir);
-  if (brief.declared && brief.command === null) {
-    return { required: false, passed: null, status: "none", reason: "the intent brief's test command is none" };
+export function testVerdict(runDir, runId = null, { projectRoot = null } = {}) {
+  const root = projectRoot ? resolve(projectRoot) : projectRootOf(runDir, runId);
+  const frozen = frozenTestCommands(root, runId);
+  if (frozen?.length === 0) {
+    return { required: false, passed: null, status: "none", frozen_commands: [], reason: "Gate 0 froze no test command (none)" };
   }
-  const base = { required: true, record: TEST_RECORD_FILE, brief_command: brief.command ?? null };
+  const base = { required: true, record: TEST_RECORD_FILE, frozen_commands: frozen };
   const record = readTestRecord(runDir);
   if (!record || (runId && record.run_id !== runId)) {
     return { ...base, passed: false, status: "not_run", exit_code: null, command: null, reason: `no ${TEST_RECORD_FILE} for this run: the test command never ran through ${TEST_RECORD_WRITER}` };
   }
-  const passed = record.status === "passed" && record.exit_code === 0;
+  const ran = record.status === "passed" && record.exit_code === 0;
+  const mismatch = testRunMismatch(record, { frozen, root });
+  const stale = ran && !mismatch ? projectWriteAfter(root, runId, record.started_at) : null;
+  const reason = mismatch ? `the last test run does not count: ${mismatch}`
+    : stale ? `the project changed after the last test run started (${record.started_at}): the hook allowed a write to ${stale.path} at ${stale.ts}; run the tests again`
+    : ran ? null
+    : `the last test run (${JSON.stringify(record.command ?? "?")}) ${record.status === "not_run" ? "could not run" : "failed"}, exit code ${record.exit_code ?? "none"}${record.error ? `: ${record.error}` : ""}`;
   return {
     ...base,
-    passed,
+    passed: reason === null,
     status: record.status ?? null,
     exit_code: record.exit_code ?? null,
     command: record.command ?? null,
+    cwd: record.cwd ?? null,
     attempt: record.attempt ?? 1,
     ended_at: record.ended_at ?? null,
-    ...(passed ? {} : { reason: `the last test run (${JSON.stringify(record.command ?? "?")}) ${record.status === "not_run" ? "could not run" : "failed"}, exit code ${record.exit_code ?? "none"}${record.error ? `: ${record.error}` : ""}` }),
+    ...(reason ? { reason } : {}),
   };
 }

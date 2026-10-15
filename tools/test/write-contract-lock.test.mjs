@@ -29,7 +29,7 @@ function repo() {
 }
 const wc = (dir, ...args) => spawnSync(process.execPath, [WRITE_CONTRACT, ...args, `--project-root=${dir}`], { encoding: "utf8" });
 const freeze = (dir, runId = "r1", extra = []) =>
-  wc(dir, "--freeze", `--run-id=${runId}`, `--allowlist=${JSON.stringify(["src/**"])}`, `--off-limits=${JSON.stringify([".env", ".sdlc/**", "secrets/**"])}`, ...extra);
+  wc(dir, "--freeze", `--run-id=${runId}`, `--allowlist=${JSON.stringify(["src/**"])}`, `--off-limits=${JSON.stringify([".env", ".sdlc/**", "secrets/**"])}`, "--test-command=node -e 0", ...extra);
 const passingTests = (dir, runId) => {
   const r = spawnSync(process.execPath, [join(ROOT, "plugin", "scripts", "test-run.mjs"), `--run-id=${runId}`, `--output-dir=${join(dir, ".sdlc", "runs", runId)}`, `--cwd=${dir}`, `--command=node -e 0`], { encoding: "utf8" });
   assert.equal(r.status, 0, r.stderr + r.stdout);
@@ -163,6 +163,27 @@ test("freeze refuses a second freeze, a run that ended, and a project another li
     wc(dir, "--close", "--run-id=r1", "--outcome=aborted");
     assert.match(freeze(dir, "r1").stderr, /already frozen|has ended/);
     assert.equal(freeze(dir, "r2").status, 0, "a new run freezes after the last one ended");
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test("freeze records the test commands Gate 0 confirmed, and refuses a freeze that names none", () => {
+  const lock = (dir, runId) => JSON.parse(readFileSync(join(dir, ".sdlc", "runs", runId, "contract.lock.json"), "utf8"));
+  const dir = repo();
+  try {
+    for (const extra of [[], ["--test-command="], ["--test-command=none", "--test-command=npm test"]]) {
+      const r = wc(dir, "--freeze", "--run-id=r1", '--allowlist=["src/**"]', ...extra);
+      assert.equal(r.status, 2, extra.join(" "));
+      assert.match(r.stderr, /--test-command '<the command Gate 0 confirmed>'.*or --test-command none/, extra.join(" "));
+    }
+    assert.equal(existsSync(join(dir, ".sdlc", "local", "write-contract.json")), false, "nothing is written");
+
+    const r = wc(dir, "--freeze", "--run-id=r1", '--allowlist=["src/**"]', "--test-command=pnpm --filter api test", "--test-command", "pnpm --filter web test");
+    assert.equal(r.status, 0, r.stderr);
+    assert.match(r.stdout, /test command "pnpm --filter api test", "pnpm --filter web test"/);
+    assert.deepEqual(lock(dir, "r1").test_commands, ["pnpm --filter api test", "pnpm --filter web test"], "one per package in a monorepo");
+    wc(dir, "--close", "--run-id=r1", "--outcome=aborted");
+    assert.equal(wc(dir, "--freeze", "--run-id=r2", '--allowlist=["src/**"]', "--test-command=None").status, 0);
+    assert.deepEqual(lock(dir, "r2").test_commands, [], "none: the project has no tests");
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 

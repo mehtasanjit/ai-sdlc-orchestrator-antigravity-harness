@@ -128,7 +128,7 @@ export function runOutcome({ runDir, gates, launcher = null, markers = {}, since
     : completed ? "completed"
     : summary && testsHeld ? "awaiting_acceptance"
     : "incomplete";
-  return { completed, status, summary_written: summary, ...(stop ? { stop } : {}), ...(finished && !testsHeld ? { incomplete_reason: `the run's tests did not pass: ${tests.reason}` } : {}) };
+  return { completed, status, summary_written: summary, ...(stop ? { stop } : {}), ...(summary && !testsHeld ? { incomplete_reason: `the run's tests did not pass: ${tests.reason}` } : {}) };
 }
 
 /**

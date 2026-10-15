@@ -252,8 +252,9 @@ Write the brief to `.sdlc/runs/<run-id>/intent_brief.md` with this heading contr
 ```
 
 "Test command" holds, on its first line, the command Gate 0 confirmed, or `none` when the user
-confirmed the project has no tests. Code reads it: a run whose brief names a command completes only
-when `plugin/scripts/test-run.mjs` recorded a passing test run (pipeline Phase 7).
+confirmed the project has no tests. It is the reader's copy: Gate 0 freezes the command with the
+contract (`--test-command`, section 5), and code reads only the frozen one. A run with a test command
+completes only when `plugin/scripts/test-run.mjs` recorded a passing run of it (pipeline Phase 7).
 
 "Task type" holds the chosen `id` verbatim (e.g. `doc_update`), not the label — Phase 4 in
 `pipeline/SKILL.md` reads it back to set the generated TaskPacket's `task_type` field directly,
@@ -315,12 +316,18 @@ On `approved`:
    The exits are step 1's. On exit 1 stop: nothing is frozen yet, so there is nothing to end. On
    exit 3, tell the user the conductor's model could not be checked and ask whether to continue
    (`continue` / `abort`).
-2. Freeze the confirmed allowlist + off-limits by code — never write the contract yourself:
+2. Freeze the confirmed allowlist, off-limits and test command by code — never write the contract
+   yourself:
    ```bash
    node "${MMO_PLUGIN_ROOT}/scripts/write-contract.mjs" --freeze --run-id=<run-id> \
-     --allowlist='<JSON array of globs>' --off-limits='<JSON array of globs>' --project-root="$(pwd)"
+     --allowlist='<JSON array of globs>' --off-limits='<JSON array of globs>' \
+     --test-command='<the confirmed test command>' --project-root="$(pwd)"
    ```
-   Add `--strict-write=off` only when the user passed it. It writes `.sdlc/local/write-contract.json`
+   Pass `--test-command` once per package command in a monorepo, each as it runs from the repo root
+   (`pnpm --filter api test`), or `--test-command=none` when the user confirmed the project has no
+   tests; `--freeze` refuses a freeze without one. Phase 7 runs
+   only a frozen command: `test-run.mjs` refuses any other before it runs, and the close-out
+   counts a pass of no other. Add `--strict-write=off` only when the user passed it. It writes `.sdlc/local/write-contract.json`
    and the run's freeze record `.sdlc/runs/<run-id>/contract.lock.json`. The PreToolUse hook
    (`plugin/agy/hooks/write-contract-check.mjs`, wired in `plugin/hooks.json`) reads the contract
    before every file write and refuses off-limits or not-in-allowlist paths at the tool boundary.
@@ -388,8 +395,9 @@ After the final report:
    node "${MMO_PLUGIN_ROOT}/scripts/write-contract.mjs" --close --run-id=<run-id> --project-root="$(pwd)"
    ```
    It refuses to end the run as `completed` unless `.sdlc/runs/<run-id>/test-run.json` records a
-   passing test run, or the brief's test command is `none`. On that refusal, stop the run as
-   pipeline Phase 7 says.
+   passing run of the frozen test command, and the hook allowed no project write after that run
+   started; or Gate 0 froze `none`. When a project write came after it, run the recorder again
+   (pipeline Phase 7 step 2). When the tests do not pass, stop the run as pipeline Phase 7 says.
 2. Append a row to `.sdlc/ledger.md` (human-readable) and `.sdlc/ledger.json` (machine mirror).
    Any cost in the row is the labelled lines the manifest rebuild after `run.end` printed, copied;
    never a single total. Those carry the complete driver line; `SUMMARY.md`'s stops before Gate 4.

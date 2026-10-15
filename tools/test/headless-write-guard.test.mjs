@@ -61,7 +61,7 @@ test("with this run's contract, the record lists what the run changed outside it
   const dir = mkdtempSync(join(tmpdir(), "hwg-"));
   try {
     mkdirSync(join(dir, ".git"));
-    const fz = spawnSync(process.execPath, [WRITE_CONTRACT, "--freeze", "--run-id=r1", `--allowlist=${JSON.stringify(CONTRACT.allowlist)}`, `--off-limits=${JSON.stringify(CONTRACT.off_limits)}`, `--project-root=${dir}`], { encoding: "utf8" });
+    const fz = spawnSync(process.execPath, [WRITE_CONTRACT, "--freeze", "--run-id=r1", `--allowlist=${JSON.stringify(CONTRACT.allowlist)}`, `--off-limits=${JSON.stringify(CONTRACT.off_limits)}`, "--test-command=npm test", `--project-root=${dir}`], { encoding: "utf8" });
     assert.equal(fz.status, 0, fz.stderr);
     const g = finishWriteGuard({ projectRoot: dir, runId: "r1", statusBefore: new Map(), outcome: "stopped", status: () => new Map([["src/a.ts", "??|1|1"], ["package.json", " M|1|1"], ["secrets/k", "??|1|1"]]) });
     assert.deepEqual(g.after_run_check, { files_changed: 3, outside_contract: ["package.json", "secrets/k"], unjudged_changes: ["package.json", "secrets/k", "src/a.ts"] }, "no hook decision named any of them");
@@ -85,7 +85,7 @@ test("an interactive run's manifest records the hook; a headless one records the
 
 function frozen(dir, runId = "r1") {
   mkdirSync(join(dir, ".git"), { recursive: true });
-  const fz = spawnSync(process.execPath, [WRITE_CONTRACT, "--freeze", `--run-id=${runId}`, `--allowlist=${JSON.stringify(CONTRACT.allowlist)}`, `--off-limits=${JSON.stringify(CONTRACT.off_limits)}`, `--project-root=${dir}`], { encoding: "utf8" });
+  const fz = spawnSync(process.execPath, [WRITE_CONTRACT, "--freeze", `--run-id=${runId}`, `--allowlist=${JSON.stringify(CONTRACT.allowlist)}`, `--off-limits=${JSON.stringify(CONTRACT.off_limits)}`, "--test-command=npm test", `--project-root=${dir}`], { encoding: "utf8" });
   assert.equal(fz.status, 0, fz.stderr);
 }
 

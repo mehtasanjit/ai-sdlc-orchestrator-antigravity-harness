@@ -276,10 +276,10 @@ export function runIsComplete(outputDir, since = null, { before = null, exists =
 
 /**
  * A session that wrote its SUMMARY.md completes a brownfield run only on a
- * passing test record, unless the intent brief has no test command.
+ * passing test record, unless Gate 0 froze no test command.
  */
-export function headlessVerdict({ outputDir, runId, mode = null, summaryWritten }) {
-  const tests = runMode(outputDir, mode) === "brownfield" ? testVerdict(outputDir, runId) : null;
+export function headlessVerdict({ outputDir, runId, mode = null, summaryWritten, projectRoot = null }) {
+  const tests = runMode(outputDir, mode) === "brownfield" ? testVerdict(outputDir, runId, { projectRoot }) : null;
   return { completed: summaryWritten && (!tests?.required || tests.passed === true), tests };
 }
 
@@ -700,7 +700,7 @@ async function main(args) {
       provisional(conversationId);
     }
     const summaryWritten = runIsComplete(outputDir, started, { before: staleSummary });
-    const { completed, tests } = headlessVerdict({ outputDir, runId, mode, summaryWritten });
+    const { completed, tests } = headlessVerdict({ outputDir, runId, mode, summaryWritten, projectRoot });
     const ownEnd = runEnd(projectRoot, runId);
     if (!completed && ownEnd) {
       console.log(
