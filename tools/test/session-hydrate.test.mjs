@@ -4,6 +4,7 @@
  *
  * Verifies: null-safe when no .sdlc/ present; reads project.json fields
  * (including default_policy); detects mid-setup resume from setup-status.json;
+ * detects an interrupted run from its own .sdlc/runs/<run-id>/state.json;
  * emits the one-line marker via --marker.
  */
 import { test } from "node:test";
@@ -129,5 +130,62 @@ test("tolerates corrupt project.json — treats it as absent, does not crash", a
     assert.equal(r.code, 0, "must not crash on corrupt project.json");
     const payload = JSON.parse(r.stdout);
     assert.equal(payload.project, null, "corrupt project.json → project null");
+  } finally { cleanup(dir); }
+});
+
+function writeRunState(dir, runId, state) {
+  const runDir = join(dir, ".sdlc", "runs", runId);
+  mkdirSync(runDir, { recursive: true });
+  writeFileSync(join(runDir, "state.json"), JSON.stringify(state));
+}
+
+test("offers to resume a run from the gate state in its own run folder", async () => {
+  const dir = makeRepo({ project: { schema_version: 1 } });
+  try {
+    writeRunState(dir, "20261014-154942-bugfix-login-500", {
+      run_id: "20261014-154942-bugfix-login-500", phase: "requirements", gate: 1, status: "gate_pending", at: "2026-10-14T16:02:00Z",
+    });
+    const payload = JSON.parse(run(dir).stdout);
+    assert.equal(payload.resume?.kind, "run");
+    assert.equal(payload.resume.run_id, "20261014-154942-bugfix-login-500");
+    assert.equal(payload.resume.phase, "requirements");
+    assert.equal(payload.resume.gate, 1);
+    assert.equal(payload.resume.state_path, ".sdlc/runs/20261014-154942-bugfix-login-500/state.json");
+    assert.match(payload.marker, /resume: run 20261014-154942-bugfix-login-500 at requirements/);
+  } finally { cleanup(dir); }
+});
+
+test("no run resume once the run's state is terminal, or the run recorded its end", async () => {
+  const dir = makeRepo({ project: { schema_version: 1 } });
+  try {
+    writeRunState(dir, "r1", { phase: "final_acceptance", gate: 4, status: "complete" });
+    assert.equal(JSON.parse(run(dir).stdout).resume, null);
+    writeRunState(dir, "r1", { phase: "final_acceptance", gate: 4, status: "gate_pending" });
+    writeFileSync(join(dir, ".sdlc", "runs", "r1", "run-end.json"), JSON.stringify({ run_id: "r1", outcome: "aborted" }));
+    assert.equal(JSON.parse(run(dir).stdout).resume, null, "an ended run is over whatever its state file says");
+  } finally { cleanup(dir); }
+});
+
+test("the run that wrote its state last decides; an older interrupted run is not offered over it", async () => {
+  const dir = makeRepo({ project: { schema_version: 1 } });
+  try {
+    writeRunState(dir, "20261014-090000-docs-a", { phase: "design", gate: 2, status: "gate_pending", at: "2026-10-14T09:10:00Z" });
+    writeRunState(dir, "20261014-120000-docs-b", { phase: "requirements", gate: 1, status: "gate_pending", at: "2026-10-14T12:10:00Z" });
+    assert.equal(JSON.parse(run(dir).stdout).resume.run_id, "20261014-120000-docs-b");
+    writeRunState(dir, "20261014-120000-docs-b", { phase: "final_acceptance", gate: 4, status: "complete", at: "2026-10-14T12:50:00Z" });
+    assert.equal(JSON.parse(run(dir).stdout).resume, null);
+  } finally { cleanup(dir); }
+});
+
+test("reads .sdlc/local/state.json only while no run folder holds a state file", async () => {
+  const dir = makeRepo({ project: { schema_version: 1 } });
+  try {
+    mkdirSync(join(dir, ".sdlc", "local"), { recursive: true });
+    writeFileSync(join(dir, ".sdlc", "local", "state.json"), JSON.stringify({ run_id: "old-run", phase: "design", status: "gate_pending" }));
+    const legacy = JSON.parse(run(dir).stdout).resume;
+    assert.equal(legacy.run_id, "old-run");
+    assert.equal(legacy.state_path, ".sdlc/local/state.json");
+    writeRunState(dir, "new-run", { phase: "requirements", gate: 1, status: "gate_pending" });
+    assert.equal(JSON.parse(run(dir).stdout).resume.run_id, "new-run");
   } finally { cleanup(dir); }
 });
