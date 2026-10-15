@@ -28,6 +28,7 @@ function liveRun() {
     WRITE_CONTRACT, "--freeze", `--run-id=${RUN}`,
     `--allowlist=${JSON.stringify(["src/**", "test/**"])}`,
     `--off-limits=${JSON.stringify(OFF_LIMITS_DEFAULT)}`,
+    "--test-command=none",
     `--project-root=${dir}`,
   ], { encoding: "utf8" });
   assert.equal(r.status, 0, r.stderr);
