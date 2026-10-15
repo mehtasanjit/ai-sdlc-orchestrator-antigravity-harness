@@ -167,6 +167,7 @@ The pricing preflight (`preflight_dispatch` with `auth_mode: vendor`, Rule 0 in 
 | Driver tokens | `input_tokens` taken as holding `cache_read_tokens`, thinking added to output, for every result | Each result booked under the layout whose parts sum to agy's `total_tokens`; unproven results at the dearest layout, flagged |
 | Driver price | The `driver:` block's card, whatever the day | The dated price list on the day each agy process started; the block is checked against it. A run on or after 1 Jan 2027 bills Gemini 3.8 Flash's next card |
 | Interactive driver | `NOT MEASURED` | Modeled from agy's local conversation record (`collect-driver-usage.mjs`, check 18) |
+| Chat's conductor model | Not compared with the pin; a chat started as plain `agy` ran on agy's default, seen only as `pin.verified: false` afterwards | `check-driver-pin.mjs` refuses an off-pin chat before anything is dispatched, and writes the run's `policy_snapshot.yaml` |
 | Run scope | Every line in the output directory, every run's | The run's own lines (`pass`); one folder per run by default; the cost cap per run |
 | Opus timeout | $0 booked; 300 s default | The usage the stream reported before the stop; 1,740 s default |
 | Gemini vendor error | The prompt billed as input | $0 when Google answered with an error status or the request never left the machine |

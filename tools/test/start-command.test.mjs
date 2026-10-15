@@ -1,7 +1,7 @@
 /**
  * The command that starts an interactive run carries the policy's driver pin.
- * A chat started with plain `agy` conducts on agy's default model, while the
- * run prices the conductor at the pin and checks it, so the pin check fails.
+ * A chat started with plain `agy` conducts on agy's default model, and the
+ * run refuses to start on it.
  * The slug must be the one run.mjs passes as --model for the same project.
  */
 import { test } from "node:test";
@@ -100,7 +100,7 @@ test("the reason names the model the run checks, not the slug: agy's local recor
   const pin = { model: "gemini-3.8-flash", effort: "medium" };
   assert.deepEqual(offPinModels(["gemini-3.8-flash"], pin, driverSlug(pin)), [], "a chat at another effort still passes");
   const why = whyThePin(pin.model);
-  assert.match(why, /^Without --model the chat runs on agy's default model, .*checks the model it ran on against gemini-3\.8-flash, so the model check fails\.$/);
+  assert.match(why, /^Without --model the chat runs on agy's default model, and the run refuses to start on it: .*checks the model it ran on against gemini-3\.8-flash\.$/);
   assert.doesNotMatch(why, /-medium|-high|-low/);
 });
 

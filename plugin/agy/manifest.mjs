@@ -183,9 +183,9 @@ export const GEMINI_WORKER_ADAPTERS = new Set(["mcp:model-dispatch", "antigravit
 /**
  * The cost line one bridge event belongs to, from what the event itself
  * recorded: its adapter, else its leaf or model in the policy, else the
- * vendor prefix of its model name. Interactive runs leave no policy
- * snapshot and events older than the adapter stamp carry none, so the name
- * is the last word for them.
+ * vendor prefix of its model name. A run folder without a policy snapshot
+ * and events older than the adapter stamp carry none, so the name is the
+ * last word for them.
  */
 export function workerLineOf(event, policy = null) {
   const models = policy?.models ?? [];

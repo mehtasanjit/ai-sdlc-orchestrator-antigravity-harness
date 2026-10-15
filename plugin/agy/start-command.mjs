@@ -2,10 +2,10 @@
 /**
  * The command that starts an interactive run: `agy --model <slug>`, with the
  * slug derived from the project's policy the way run.mjs derives its --model.
- * A chat started with plain `agy` conducts on agy's default model, while
- * collect-driver-usage.mjs prices the conductor at the pin and checks the
- * model agy recorded against the pin's model. agy's local record names no
- * effort, so that check cannot catch a chat started at another effort.
+ * A chat started with plain `agy` conducts on agy's default model, and
+ * check-driver-pin.mjs refuses the run at its start: it checks the model agy
+ * recorded against the pin's model. agy's local record names no effort, so
+ * that check cannot catch a chat started at another effort.
  *
  * Usage:
  *   node plugin/agy/start-command.mjs [--project-root=<path>]
@@ -27,7 +27,7 @@ export function chatStartCommand(pin) {
 }
 
 export function whyThePin(model) {
-  return `Without --model the chat runs on agy's default model, while the run prices the conductor at the pin's rates and checks the model it ran on against ${model}, so the model check fails.`;
+  return `Without --model the chat runs on agy's default model, and the run refuses to start on it: before anything is dispatched, it checks the model it ran on against ${model}.`;
 }
 
 const real = (p) => {

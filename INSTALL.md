@@ -72,7 +72,7 @@ Tell the user to start a **new** `agy` session in the project — plugins, rules
 agy --model gemini-3.8-flash-high
 ```
 
-Give the reason in one sentence: without `--model` the chat runs on agy's default model, while the run prices the conductor at the pin's rates and checks the model it ran on against the pin's model, so the model check fails. For another policy the slug differs; this prints the project's own command:
+Give the reason in one sentence: without `--model` the chat runs on agy's default model, and the run refuses to start on it, because `plugin/agy/check-driver-pin.mjs` checks the model it ran on against the pin's model before anything is dispatched. For another policy the slug differs (the `driver:` block's `model_name` and `reasoning.effort`); this prints the project's own command:
 
 ```bash
 node ../ai-sdlc-orchestrator-antigravity-harness/plugin/agy/start-command.mjs --project-root "$(pwd)"

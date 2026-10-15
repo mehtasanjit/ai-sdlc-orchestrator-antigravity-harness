@@ -75,7 +75,7 @@ test("the hand-over gives the exact start command with the project's own driver 
     const lines = handoverLines({ projectRoot: dir, start: projectStartCommand({ projectRoot: dir }) });
     assert.match(lines[0], /^Start a NEW agy session in /);
     assert.equal(lines[1], `  cd "${dir}" && agy --model gemini-3.8-flash-high`);
-    assert.match(lines[2], /^Without --model the chat runs on agy's default model.*checks the model it ran on against gemini-3\.8-flash, so the model check fails\.$/);
+    assert.match(lines[2], /^Without --model the chat runs on agy's default model, and the run refuses to start on it: .*checks the model it ran on against gemini-3\.8-flash\.$/);
     assert.ok(lines.some((l) => l.includes("/mmo:greenfield")));
     assert.ok(lines.some((l) => /run\.mjs" --brief=.*--dry-run$/.test(l)));
 

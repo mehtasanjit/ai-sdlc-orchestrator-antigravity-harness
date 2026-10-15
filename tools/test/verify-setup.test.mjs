@@ -173,7 +173,7 @@ test("the next-steps banner names the repo-discovery route and the sign-in cavea
 test("the banner starts the chat on the project's driver pin, and gives none without one", () => {
   const banner = nextStepsBanner("/nonexistent", true);
   assert.ok(banner.includes(`cd "/nonexistent" && agy --model gemini-3.8-flash-high\n`), banner);
-  assert.match(banner, /Without --model the chat runs on agy's default model.*against gemini-3\.8-flash, so/);
+  assert.match(banner, /Without --model the chat runs on agy's default model, and the run refuses to start on it: .*against gemini-3\.8-flash\./);
   assert.doesNotMatch(banner, /open `agy` in the repo root/);
   assert.match(banner, /No policy set yet — the launcher defaults to antigravity-flash38-plus-opus5\./);
   const other = nextStepsBanner("/p", true, { command: "agy --model gemini-3.8-flash-low", slug: "gemini-3.8-flash-low", model: "gemini-3.8-flash", policy: "team-low", source: ".sdlc/project.json" });

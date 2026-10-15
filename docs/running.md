@@ -14,7 +14,7 @@ Run `node tools/setup.mjs --project-root /path/to/your/project` once (README, "S
 cd /path/to/your/project && agy --model gemini-3.8-flash-high
 ```
 
-Without `--model` the chat runs on agy's default model, while the run prices the conductor at the pin's rates and checks the model it ran on against the pin's model, so the model check fails (`pin.unverified_reason: model_mismatch`). `gemini-3.8-flash-high` is the default policy's slug. For the project's own policy, either command below prints the slug derived from its `driver:` block the way `run.mjs` derives `--model`. Run them in the harness clone; `npm run verify` without `--project-root` checks the clone itself and prints no start command.
+Without `--model` the chat runs on agy's default model, and the run refuses to start on it: [the chat's pin check](#the-chats-pin-check) checks the model it ran on against the pin's model before anything is dispatched. `gemini-3.8-flash-high` is the default policy's slug. For the project's own policy, either command below prints the slug derived from its `driver:` block the way `run.mjs` derives `--model`. Run them in the harness clone; `npm run verify` without `--project-root` checks the clone itself and prints no start command.
 
 ```bash
 node plugin/agy/start-command.mjs --project-root=/path/to/your/project
@@ -31,6 +31,21 @@ What an interactive run's pin check can see:
 Whether a chat started with `--model` conducts on that slug is [check 19](verification/p1-agy-runtime.md), pending: a plain `agy` chat on agy 1.3.5 conducted on `gemini-4-argon`, and no interactive run started with `--model` is recorded yet. Until it is, `pin.verified` in the run's manifest is what shows the chat held the pin's model.
 
 `/skills` lists `mmo:greenfield`, `mmo:brownfield`, `mmo:pass` and the rest; the bridge's tools are reached through `call_mcp_tool`. Invoke a skill and answer the gates yourself. Credentials come from the shell that launched `agy` (see [SETUP.md](../SETUP.md)).
+
+### The chat's pin check
+
+A chat runs on the model agy was started with, and plain `agy` starts on agy's own default. So the interactive skills run `plugin/agy/check-driver-pin.mjs` before anything is dispatched: at brownfield step 1, at greenfield step 3, again with the run id at Gate 0 (brownfield) or before Phase -1 (greenfield), and when a brownfield run resumes. It reads the model calls agy's local conversation record holds for the project's conversations active since the run started ([check 18](verification/p1-agy-runtime.md)) and compares their model names with the policy's `driver:` block.
+
+| Exit | Meaning | The skill |
+|---|---|---|
+| `0` | Every recorded call is the pinned model (`gemini-3.8-flash` or its slug) | Continues |
+| `1` | A call ran on another model, or the pin has no price today | Prints the message and stops before any dispatch. The message names the model seen, the pin, and the restart command, `agy --model gemini-3.8-flash-high` |
+| `3` | No conversation or no model call recorded yet | Says the model is not checked, never that it passed, and checks again before the first paid dispatch |
+| `2` | Usage or policy error, or `--run-id` names a run started under another policy | Stops |
+
+With `--run-id` it copies the resolved policy to `.sdlc/runs/<run-id>/policy_snapshot.yaml`, which `manifest.mjs` reads the pin from, so an interactive run's `pin.verified` is computed. A run that already has a snapshot (a resumed run) is checked against it and keeps it.
+
+Effort is not checked. agy's record names the model without its effort (`gemini-3.8-flash` for the slug `gemini-3.8-flash-high`, [check 14](verification/p1-agy-runtime.md)), and the label line in agy's `cli.log` (`Propagating selected model override to backend: label="…"`) is written when an agy process starts, not per conversation, while `cli.log` itself points at the newest process's log. Start the chat with the slug so the effort is the pinned one.
 
 ## Headless
 
@@ -87,7 +102,7 @@ Passed checks open the gate; they do not prove the run held the pin. `pin.verifi
 | `pending_checks` | A check in `pin.pending_checks` is pending, and the run went ahead under `--allow-unverified-pin` |
 | `no_model_observed` | Neither the stream nor agy's local conversation record named a model, so nothing shows which model conducted |
 
-`pin.observed_models` lists the names read: the stream's (`driver_reported_models`) and, on a headless run, the `.1.19` field of agy's local conversation record (`driver_usage.local_record.models`). An interactive run reads them from `driver-collector.json`; without a collection its pin stays `no_model_observed`.
+`pin.observed_models` lists the names read: the stream's (`driver_reported_models`) and, on a headless run, the `.1.19` field of agy's local conversation record (`driver_usage.local_record.models`). An interactive run reads them from `driver-collector.json`; without a collection its pin stays `no_model_observed`. It reads the pin itself from `policy_snapshot.yaml`, which [the chat's pin check](#the-chats-pin-check) writes; without one, `harness.pin` is `null`.
 
 ### What print mode loads
 
@@ -187,7 +202,7 @@ node tools/report.mjs /tmp/smoke/.sdlc/runs/smoke1
 
 | File | Written by | What |
 |---|---|---|
-| `policy_snapshot.yaml` | `run.mjs` at launch | The policy as it was when the run started |
+| `policy_snapshot.yaml` | `run.mjs` at launch; `check-driver-pin.mjs --run-id` at an interactive run's start | The policy as it was when the run started |
 | `skills/pipeline.md`, `skills/brownfield-guide.md` | `run.mjs` at launch | The playbook with real paths rendered in |
 | `preflight.json` | the conductor, from `preflight_dispatch` | Rule 0's verdict |
 | `telemetry.jsonl` | the bridge | Every dispatched call, vendor-metered |

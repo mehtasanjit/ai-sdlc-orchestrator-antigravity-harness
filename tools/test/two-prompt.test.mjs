@@ -22,6 +22,7 @@ test("README carries prompt 1 (the repo URL, verbatim) and prompt 2 (a new sessi
   assert.match(readme, /## Setup — the two-prompt flow/);
   assert.match(readme, /Set up this plugin from this repo - https:\/\/github\.com\/tl-ai-labs\/ai-sdlc-orchestrator-antigravity-harness/);
   assert.match(readme, /\*\*Prompt 2 — run\.\*\* Start a \*\*new `agy` session in the same folder\*\*/);
+  assert.match(readme, /\ncd ~\/my-first-app && agy --model gemini-3\.8-flash-high\n/, "prompt 2 starts the chat on the driver pin");
   assert.match(readme, /\/mmo:greenfield/);
   assert.match(readme, /\/mmo:brownfield/);
   assert.match(readme, /node tools\/setup\.mjs --project-root/);

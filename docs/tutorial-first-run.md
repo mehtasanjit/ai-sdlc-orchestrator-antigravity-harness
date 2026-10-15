@@ -49,7 +49,7 @@ Skills, rules, hooks and the bridge load when a session starts, in a trusted wor
 cd ../first-run && agy --model gemini-3.8-flash-high
 ```
 
-Without `--model` the chat runs on agy's default model, while the run prices the conductor at the pin's rates and checks the model it ran on against `gemini-3.8-flash`, so the model check fails. That check sees the model, not the effort, so type the slug exactly as printed.
+Without `--model` the chat runs on agy's default model, and the run refuses to start on it: it checks the model the chat ran on against `gemini-3.8-flash`, the model of the policy's `driver:` block. That check sees the model, not the effort, so type the slug exactly as printed.
 
 Answer **yes** when agy asks whether you trust the folder. `/skills` now lists the `mmo:` entries.
 

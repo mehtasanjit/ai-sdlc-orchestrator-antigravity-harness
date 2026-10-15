@@ -126,6 +126,19 @@ expected depth is unclear.
 Record when this run started, `date -u +%Y-%m-%dT%H:%M:%SZ`, and keep it as `run_started_at`: the
 driver-usage collector at Phase 9 counts your own model calls from that moment.
 
+Then check that this chat runs on the policy's driver pin, before anything is dispatched:
+
+```bash
+node "${MMO_PLUGIN_ROOT}/agy/check-driver-pin.mjs" --since=<run_started_at> --project-root="$(pwd)"
+```
+
+- **Exit 0** — every model call agy recorded for this chat is the pin. Continue.
+- **Exit 1** — refused. Print its message verbatim and stop. It names the model this chat runs on,
+  the pin, and the command to restart agy on the pin (`agy --model <slug>`); the user quits this
+  chat, restarts agy with that command in this folder, and runs `/mmo:greenfield` again.
+- **Exit 3** — not checked: agy's record holds no call for this chat yet. Say so in one line,
+  never as a pass, and continue; the pipeline runs the check again before Phase -1.
+- **Exit 2** — print the error and stop.
 
 Unless the user says otherwise:
 

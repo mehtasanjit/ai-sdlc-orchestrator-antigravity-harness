@@ -159,10 +159,10 @@ Current policy: <policyName>   (change: `/mmo:policy` change)
 ```
 
 Give the start command exactly as printed, never plain `agy`. Say plainly why, in one sentence:
-without `--model` the chat runs on agy's default model, while the run prices the conductor at the
-pin's rates and checks the model it ran on against the pin's model, so the model check fails. If
-the script exits non-zero, print its error and STOP: the policy has no usable driver pin, and no
-run can start on it.
+without `--model` the chat runs on agy's default model, and the run's first step
+(`check-driver-pin.mjs`) refuses a chat whose model is not the policy's driver pin. If the script
+exits non-zero, print its error and STOP: the policy has no usable driver pin, and no run can
+start on it.
 
 Say plainly why a NEW session is required: agy loads a plugin's skills, rules, hooks and MCP
 servers when a session begins. In this session the setup changes are on disk but not live.

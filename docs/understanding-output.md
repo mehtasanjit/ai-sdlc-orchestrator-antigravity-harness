@@ -11,7 +11,7 @@ Around them:
 
 - `manifest.json` — the code-written rollup ([plugin/agy/manifest.mjs](../plugin/agy/manifest.mjs)): totals, per-phase, per-module and per-task-type breakdowns of the dispatched work, plus `harness`, `usage` and `cost` blocks that carry the three labeled cost lines. The conductor never writes it.
 - `driver-manifest.json`, `driver-events.jsonl`, `driver-stderr.log` — the launcher's own record of a headless run: the pin it asserted, agy's exit status, every raw stream-json event, agy's stderr (where soft-denials and hook notices land).
-- `policy_snapshot.yaml`, `preflight.json`, `gates.jsonl` — the policy as it was at launch; Rule 0's pricing verdict; one line per gate with the decision and its mode.
+- `policy_snapshot.yaml`, `preflight.json`, `gates.jsonl` — the policy as it was at launch (written by `run.mjs`, or in a chat by `plugin/agy/check-driver-pin.mjs` at the run's start; the manifest reads the pin from it); Rule 0's pricing verdict; one line per gate with the decision and its mode.
 - `skills/pipeline.md`, `skills/brownfield-guide.md` — the playbook the conductor was given, with real paths rendered in. What the model read, exactly.
 - `SUMMARY.md` — the conductor's completion signal and its own summary. Its cost section copies the labelled lines `manifest.mjs` printed (interactive) or points at `manifest.json` (headless); it never adds them up, and it is not the record.
 - Generated source under `src/` (greenfield) or the files named at Gate 0 (brownfield).

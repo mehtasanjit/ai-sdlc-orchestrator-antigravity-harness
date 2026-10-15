@@ -137,9 +137,9 @@ node "${MMO_PLUGIN_ROOT}/agy/start-command.mjs" --project-root "$(pwd)"
 
 Tell the user: `Start a NEW agy session in this folder with: <the printed command>` if it differs
 from the command this session was started with, before the next `/mmo:greenfield` or
-`/mmo:brownfield`. Say why: this chat stays on the slug it started with. A chat on another model
-fails the run's model check, and one at another effort passes it unnoticed, because agy's record
-does not show the effort. If the script exits non-zero, print its error: the new policy has no
+`/mmo:brownfield`. Say why: this chat stays on the slug it started with. The run's pin check
+(`check-driver-pin.mjs`) refuses a chat on another model at the run's start, and one at another
+effort passes it unnoticed, because agy's record does not show the effort. If the script exits non-zero, print its error: the new policy has no
 usable driver pin, and no run can start on it until it is fixed.
 
 # Notes
