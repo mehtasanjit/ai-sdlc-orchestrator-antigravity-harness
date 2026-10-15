@@ -198,20 +198,40 @@ export function scriptWriteTargets(command) {
   return { targets, unresolved: Math.max(0, calls - targets.length) };
 }
 
-const INSTALL_RE = /(?:^|[\s;&|(])(npm|pnpm|yarn|bun)\s+(install|i|ci|add|update|up|upgrade|remove|rm|uninstall|un)\b/g;
+const INSTALL_RE = /(?:^|[\s;&|(])(npm|pnpm|yarn|bun)\s+(install|i|ci|add|update|up|upgrade|remove|rm|uninstall|un)\b([^;&|()<>\n]*)/g;
 const LOCKFILES = { npm: "package-lock.json", pnpm: "pnpm-lock.yaml", yarn: "yarn.lock", bun: "bun.lockb" };
+const INSTALL_LOCKFILES = new Set(Object.values(LOCKFILES));
 
-/** What a package manager's install or dependency change writes, relative to the project it runs in. */
-export function packageInstallTargets(command) {
-  if (typeof command !== "string") return [];
-  const out = new Set();
-  for (const [, tool, sub] of command.matchAll(INSTALL_RE)) {
-    out.add("node_modules/.package-lock.json");
-    out.add(LOCKFILES[tool]);
-    if (/^(?:add|remove|rm|uninstall|un)$/.test(sub)) out.add("package.json");
-  }
-  return [...out];
+/** Whether a package-manager command installs the project's own dependencies: `ci`, or `install` naming no package. */
+function projectInstall(command, match) {
+  const [whole, , sub, rest] = match;
+  if (sub === "ci") return true;
+  if (sub !== "install" && sub !== "i") return false;
+  const words = rest.trim().split(/\s+/).filter(Boolean);
+  // `npm ci 2>&1`: the digit belongs to the redirect, not to the install.
+  if (/[<>]/.test(command[match.index + whole.length] ?? "") && /^\d+$/.test(words.at(-1) ?? "")) words.pop();
+  return words.every((w) => w.startsWith("-"));
 }
+
+/**
+ * What a package manager writes, relative to the project it runs in.
+ * `output` is the install's own: node_modules/ and the lockfile. `manifest`
+ * is package.json, for every command except the project's own install.
+ */
+export function packageInstallTargets(command) {
+  const output = new Set();
+  const manifest = new Set();
+  if (typeof command !== "string") return { output: [], manifest: [] };
+  for (const match of command.matchAll(INSTALL_RE)) {
+    const [, tool, sub] = match;
+    output.add("node_modules/.package-lock.json");
+    if (sub !== "ci") output.add(LOCKFILES[tool]);
+    if (!projectInstall(command, match)) manifest.add("package.json");
+  }
+  return { output: [...output], manifest: [...manifest] };
+}
+
+const isInstallOutput = (rel) => rel.startsWith("node_modules/") || INSTALL_LOCKFILES.has(rel);
 
 
 // ── agy-specific: target extraction ─────────────────────────────────────
@@ -364,6 +384,7 @@ async function main() {
 
   const toolName = call?.toolCall?.name ?? call?.tool_name;
   const targets = [...extractTargets(call)];
+  const installOutput = new Set();
 
   const credential = findCredentialLiteral(call);
   if (credential) {
@@ -400,14 +421,22 @@ async function main() {
       );
     }
     // agy names no working folder for a command: a package manager is judged in every project whose contract binds.
-    for (const rel of packageInstallTargets(line)) for (const { root } of roots) targets.push(join(root, rel));
+    const pkg = packageInstallTargets(line);
+    for (const { root } of roots) {
+      for (const rel of pkg.manifest) targets.push(join(root, rel));
+      for (const rel of pkg.output) {
+        const target = join(root, rel);
+        targets.push(target);
+        installOutput.add(target);
+      }
+    }
   }
 
   if (targets.length === 0) return allow("no write target extracted from this tool call");
 
   let judgedBy = null;
   for (const target of targets) {
-    const verdict = await checkOneTarget(target, call);
+    const verdict = await checkOneTarget(target, call, { installOutput: installOutput.has(target) });
     if (verdict.deny) return deny(verdict.msg, { ...verdict.ctx, toolName });
     judgedBy ??= verdict.judgedBy?.[0] ?? null;
   }
@@ -427,9 +456,10 @@ function hardcodedHit(path) {
 /**
  * The decision for one repo-relative path under a live contract, or null to
  * allow. Rules in order: the run's own control files, the always-off-limits
- * list, the run's own folder, the contract's off_limits, its allowlist.
+ * list, the run's own folder, a dependency install's own output, the
+ * contract's off_limits, its allowlist.
  */
-function judgeUnderContract(rel, state) {
+function judgeUnderContract(rel, state, { installOutput = false } = {}) {
   const { contract, runId } = state;
   const strict = contract?.strict !== false;
   const control = [CONTRACT_REL_PATH, lockRelPath(runId), endRelPath(runId)];
@@ -439,6 +469,8 @@ function judgeUnderContract(rel, state) {
   const hard = hardcodedHit(rel);
   if (hard) return { rule: hard, msg: `${rel} matches always-off-limits pattern "${hard}" (run ${runId}); no contract can open it. ${NOT_YOURS}` };
   if (matchGlob(rel, `.sdlc/runs/${runId}/**`)) return null;
+  // node_modules/** in off_limits keeps the run's own edits out of installed code; it is no bar to installing it.
+  if (installOutput && isInstallOutput(rel)) return null;
   const off = firstMatch(rel, contract?.off_limits, { anyCase: true });
   if (off) {
     if (!strict) {
@@ -456,7 +488,7 @@ function judgeUnderContract(rel, state) {
 }
 
 /** Returns { deny: boolean, msg?, ctx? } for a single candidate path. */
-async function checkOneTarget(target, call) {
+async function checkOneTarget(target, call, { installOutput = false } = {}) {
   const cwd = callCwd(call);
   const absTarget = isAbsolute(target) ? target : resolve(cwd, target);
   const realAbs = realTarget(absTarget);
@@ -525,7 +557,7 @@ async function checkOneTarget(target, call) {
     // Judged as written too, when the written form lies under the root: an
     // off-limits name reached through a link is refused either way.
     for (const rel of new Set([real, relUnder(root, absTarget)].filter((x) => x !== null))) {
-      const verdict = judgeUnderContract(rel, state);
+      const verdict = judgeUnderContract(rel, state, { installOutput });
       if (verdict) return { deny: true, msg: verdict.msg, ctx: { root, path: rel, runId: state.runId, matchedRule: verdict.rule, strict: state.contract?.strict } };
     }
   }

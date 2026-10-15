@@ -363,13 +363,32 @@ If codegen introduced new required env vars (via `existing_file_edit` on `.env.e
 
 The test command in brownfield is `baseline.test_command` (confirmed at Gate 0), not hardcoded `npm test`. Working directory is the repo root (not `<output_dir>`); in monorepos, use the per-package scope from `baseline.monorepo.packages[].test_command` for whichever package the changed files belong to.
 
+**Install the project's dependencies first** when the test's working directory has a `package.json`
+and no `node_modules/`. The pre-check's test-command probe does not prove they are installed: it
+passes whenever the runner starts, whatever its exit code. Pick the command by the lockfile in
+that folder:
+
+| Lockfile | Install command |
+|---|---|
+| `package-lock.json` | `npm ci` |
+| `yarn.lock` | `yarn install --frozen-lockfile` |
+| `pnpm-lock.yaml` | `pnpm install --frozen-lockfile` |
+| `bun.lockb` | `bun install --frozen-lockfile` |
+| none | `npm install --no-package-lock` |
+
+Every command in the table leaves the lockfile as it is, so the install needs no provenance step.
+Run it as its own command, not inside the test command. Under the live contract the write hook
+allows an install that names no package: it writes `node_modules/` and the lockfile, never
+`package.json`. `node_modules/**` in the contract's off-limits keeps your own edits out of
+installed code; it does not stop this install. Never install a named package here
+(`npm install <pkg>`, `yarn add <pkg>`): that changes `package.json`, and the hook judges it as a
+`package.json` write.
+
 **Both modes:**
 
 On failure:
 - If the error is `Config validation error: "X" is required` or equivalent → the codegen phase missed keys. In greenfield build a debug TaskPacket routed to codegen to add the missing keys with schema-valid values. In brownfield, ask the user via the mini-gate above; do NOT patch `.env` from the harness.
 - Any other failure → parse the output, build a `debug` TaskPacket with the failing test name + error + relevant source slice. Route via policy. Retry up to 2 cost-efficient tier attempts; the policy escalates to the premium tier from there.
-
-**Test-command probe (optional Phase 0.5 in brownfield).** The pipeline pre-check (§7.4) already ran the discovered test command with `--collect-only` / `--dry-run` at prompt 1 to prove deps are installed. If pre-check step 2 failed for this run, Phase 7 halts with the recorded error rather than attempting the real run.
 
 ### Phase 8 — security_review
 
