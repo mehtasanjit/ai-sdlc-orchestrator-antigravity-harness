@@ -118,6 +118,7 @@ The plugin's per-project state. Split into committed (team-shared) and gitignore
 │       ├── change_plan.md
 │       ├── packets.jsonl
 │       ├── provenance.json
+│       ├── state.json        — gate state (phase, gate, status); session-hydrate offers a resume from it
 │       ├── backups/          — first-snapshot copies for /mmo:revert
 │       ├── telemetry.jsonl
 │       ├── senior-review.md
@@ -128,7 +129,6 @@ The plugin's per-project state. Split into committed (team-shared) and gitignore
 │   ├── discovery.md
 │   └── stack-profile.md  — only when adaptive profile ran
 └── local/                — gitignored: personal per-developer state
-    ├── state.json        — live state machine
     ├── setup-status.json — shepherd resume state
     ├── write-contract.json — active run's allowlist/off-limits
     ├── user-policy.yaml  — personal policy override

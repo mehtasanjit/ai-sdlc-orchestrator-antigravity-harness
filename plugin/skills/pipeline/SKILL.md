@@ -517,9 +517,14 @@ Every gate is a fenced `> ⏸ **HITL Gate <N> — <Title>**` block (templates be
 verbatim. Headless, the conductor prompt names the gate mode (`auto-approve` or `auto-abort`):
 print the block anyway, apply the mode's decision, and append the line to `<output_dir>/gates.jsonl`
 that the conductor prompt specifies — a run whose gates were not reviewed by a person must say so. **Persist
-the gate-pending state to `.sdlc/local/state.json` before printing** — if the session dies
-mid-gate, session-hydrate detects a non-terminal state and re-prompts on the next
-`/mmo:brownfield` invocation. No new command needed.
+the gate-pending state to `<output_dir>/state.json` before printing** — the run's own folder,
+`.sdlc/runs/<run-id>/state.json`, the one place under `.sdlc/` a live write contract lets the run
+write. Write the whole file, one object:
+`{"run_id": "<run-id>", "phase": "<phase>", "gate": <N>, "status": "gate_pending", "at": "<ISO-8601 now>"}`.
+After appending the decision to `gates.jsonl`, rewrite it with a new `at` and the status the decision
+leaves: `"complete"` once Gate 4 is accepted (or auto-approved), `"aborted"` after any abort,
+`"running"` otherwise. If the session dies mid-gate, session-hydrate finds the non-terminal state and
+re-prompts on the next `/mmo:brownfield` invocation. No new command needed.
 
 ### Gate 0 — Brownfield only, before Gate 1
 

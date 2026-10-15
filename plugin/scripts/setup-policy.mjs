@@ -24,7 +24,7 @@
  *   node setup-policy.mjs --print-only              # print resolved default_policy from project.json; no writes
  *   node setup-policy.mjs --list-json               # enumerate policies as JSON (no writes)
  *   node setup-policy.mjs --check-creds --policy=X  # verify creds for a policy; JSON out
- *   node setup-policy.mjs --guard-active-run        # check .sdlc/local/state.json; JSON out
+ *   node setup-policy.mjs --guard-active-run        # check the latest run's .sdlc/runs/<run-id>/state.json; JSON out
  */
 
 import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, watch, writeFileSync } from "node:fs";
@@ -35,6 +35,7 @@ import { fileURLToPath } from "node:url";
 import { createConnection } from "node:net";
 import { platform } from "node:os";
 import { OFF_LIMITS_DEFAULT } from "./lib/off-limits.mjs";
+import { pendingRunState } from "./lib/run-state.mjs";
 
 export { OFF_LIMITS_DEFAULT };
 
@@ -406,27 +407,12 @@ function checkCredsFor(policyName) {
 // task packets already dispatched under it. Changing default_policy
 // underneath would surface as inconsistent telemetry rows and confused
 // resumers, so /mmo:policy change refuses until the run reaches a
-// terminal state. session-hydrate.mjs treats `complete`/`aborted` as
-// terminal; we accept `completed` and `failed` as well since callers may
-// spell it either way.
-
-const TERMINAL_RUN_STATUSES = new Set(["complete", "completed", "aborted", "failed"]);
+// terminal state (lib/run-state.mjs, the reader session-hydrate.mjs shares).
 
 function checkActiveRun(projectRoot) {
-  const path = join(projectRoot, ".sdlc", "local", "state.json");
-  if (!existsSync(path)) return { active: false };
-  let parsed;
-  try { parsed = JSON.parse(readFileSync(path, "utf8")); }
-  catch { return { active: false }; }
-  if (!parsed || typeof parsed !== "object") return { active: false };
-  const status = parsed.status;
-  if (!status || TERMINAL_RUN_STATUSES.has(status)) return { active: false };
-  return {
-    active: true,
-    run_id: parsed.run_id ?? null,
-    phase: parsed.phase ?? null,
-    status,
-  };
+  const run = pendingRunState(projectRoot);
+  if (!run) return { active: false };
+  return { active: true, run_id: run.run_id, phase: run.phase, status: run.status };
 }
 
 // ── main flows ───────────────────────────────────────────────────────

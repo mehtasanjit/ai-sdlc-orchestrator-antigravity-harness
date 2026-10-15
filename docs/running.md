@@ -207,6 +207,7 @@ node tools/report.mjs /tmp/smoke/.sdlc/runs/smoke1
 | `preflight.json` | the conductor, from `preflight_dispatch` | Rule 0's verdict |
 | `telemetry.jsonl` | the bridge | Every dispatched call, vendor-metered |
 | `gates.jsonl` | the conductor | One line per gate with the decision mode |
+| `state.json` | the conductor, before each gate and after its decision | The gate the run is at and its status (`gate_pending`, `running`, `complete`, `aborted`). Until it reads `complete` or `aborted`, the next `/mmo:brownfield` offers to resume the run and `/mmo:policy change` refuses |
 | `driver-events.jsonl` | `run.mjs` | The raw stream-json, every invocation |
 | `driver-stderr.log` | `run.mjs` | agy's stderr, where soft-denials and hook notices land |
 | `driver-cost-modeled.jsonl` | `run.mjs` | One `provenance: "modeled"` event per turn at the driver card |

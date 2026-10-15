@@ -89,7 +89,10 @@ Read the JSON. Three cases:
   If `discard`, end the interrupted run so its contract stops holding the project — ask first,
   since ending a run is the user's decision:
   `node "${MMO_PLUGIN_ROOT}/scripts/write-contract.mjs" --abandon --run-id=<run_id> --reason="discarded at resume" --project-root="$(pwd)"`
-  — then clear `.sdlc/local/state.json` and continue to step 2.
+  — an exit 2 saying there is no freeze record means the run stopped before Gate 0 froze a
+  contract; carry on. Then rewrite that run's state file (`resume.state_path`, normally
+  `.sdlc/runs/<run_id>/state.json`) with `"status": "aborted"` and a new `at`, so it is not offered
+  again, and continue to step 2.
 
 - **`resume.pending: null`** — normal flow. Print the one-line `marker` from the hydrate
   output (e.g. *"SDLC: 3 prior runs (last: docs, 2d ago); baseline at abc1234; no open resume
