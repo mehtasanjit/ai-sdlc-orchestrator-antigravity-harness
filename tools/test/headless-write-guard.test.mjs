@@ -185,3 +185,20 @@ test("the record lists changed files no hook decision named", async () => {
     assert.match(g.reason, /1 changed file\(s\) reached disk without a hook decision/);
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
+
+test("node_modules/ is the output of an install the hook allowed, not a write outside the contract", () => {
+  const offModules = { allowlist: ["src/**"], off_limits: ["node_modules/**"] };
+  assert.deepEqual(outsideContract(["node_modules/", "node_modules/x/i.js", "src/a.ts"], offModules), ["node_modules/", "node_modules/x/i.js"], "with no install, it is outside");
+  assert.deepEqual(outsideContract(["node_modules/", "node_modules/x/i.js", "src/a.ts", "package-lock.json"], offModules, { installed: true }), ["package-lock.json"], "a lockfile change is still listed");
+
+  const dir = mkdtempSync(join(tmpdir(), "hwg-"));
+  try {
+    mkdirSync(join(dir, ".git"));
+    const fz = spawnSync(process.execPath, [WRITE_CONTRACT, "--freeze", "--run-id=r1", '--allowlist=["src/**"]', '--off-limits=["node_modules/**"]', "--test-command=npm test", `--project-root=${dir}`], { encoding: "utf8" });
+    assert.equal(fz.status, 0, fz.stderr);
+    const hook = spawnSync(process.execPath, [join(ROOT, "plugin", "agy", "hooks", "write-contract-check.mjs")], { input: JSON.stringify({ toolCall: { name: "run_command", args: { CommandLine: "npm install --no-package-lock" } }, workspacePaths: [dir] }), encoding: "utf8", cwd: dir });
+    assert.deepEqual(JSON.parse(hook.stdout), { decision: "allow" });
+    const g = finishWriteGuard({ projectRoot: dir, runId: "r1", statusBefore: new Map(), outcome: "completed", status: () => new Map([["node_modules/", "!!|1|1"]]) });
+    assert.deepEqual(g.after_run_check, { files_changed: 1, outside_contract: [], unjudged_changes: [] });
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});

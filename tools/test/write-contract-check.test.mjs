@@ -249,7 +249,8 @@ test("installing or removing a named package is judged as a package.json write",
   const dir = repoWithContract(CONTRACT);
   const harness = mkdtempSync(join(tmpdir(), "wc-harness-"));
   try {
-    for (const line of ["npm install express", "npm i -D jest", "npm ci && npm install lodash", "yarn add lodash", "pnpm add -D vitest", "npm uninstall express", "npm update"]) {
+    for (const line of ["npm install express", "npm i -D jest", "npm ci && npm install lodash", "yarn add lodash", "pnpm add -D vitest", "npm uninstall express", "npm update",
+      "npm install >/dev/null express", "npm install 2>/dev/null express", "npm i --silent >install.log lodash", "npm install &>/dev/null express"]) {
       const r = shell(harness, line, [harness, dir]);
       assert.equal(r.decision, "deny", line);
       assert.match(r.reason, /package\.json is not in the confirmed allowlist for run t1/, line);
@@ -260,9 +261,39 @@ test("installing or removing a named package is judged as a package.json write",
   } finally { rmSync(dir, { recursive: true, force: true }); rmSync(harness, { recursive: true, force: true }); }
 });
 
+test("a lockfile the contract's off_limits names is refused to an install that rewrites it", () => {
+  const dir = repoWithContract({ ...CONTRACT, off_limits: [...CONTRACT.off_limits, "node_modules/**", "package-lock.json", "yarn.lock"] });
+  const harness = mkdtempSync(join(tmpdir(), "wc-harness-"));
+  try {
+    for (const [line, rule] of [["npm install", "package-lock.json"], ["yarn install", "yarn.lock"]]) {
+      const r = shell(harness, line, [harness, dir]);
+      assert.equal(r.decision, "deny", line);
+      assert.match(r.reason, new RegExp(`${rule.replace(".", "\\.")} matches off-limits pattern "${rule.replace(".", "\\.")}"`), line);
+    }
+    for (const line of ["npm ci", "npm install --no-package-lock", "yarn install --frozen-lockfile"]) {
+      assert.deepEqual(shell(harness, line, [harness, dir]), { decision: "allow" }, `${line} leaves the lockfile as it is`);
+    }
+  } finally { rmSync(dir, { recursive: true, force: true }); rmSync(harness, { recursive: true, force: true }); }
+});
+
+test("a redirect to an install's output path is judged as itself, not as the install", () => {
+  const dir = repoWithContract({ ...CONTRACT, off_limits: [...CONTRACT.off_limits, "node_modules/**"] });
+  const harness = mkdtempSync(join(tmpdir(), "wc-harness-"));
+  try {
+    const modules = shell(harness, `npm ci && echo hacked > ${join(dir, "node_modules", ".package-lock.json")}`, [harness, dir]);
+    assert.equal(modules.decision, "deny");
+    assert.match(modules.reason, /node_modules\/\.package-lock\.json matches off-limits pattern "node_modules\/\*\*"/);
+    const lock = shell(harness, `npm install && echo '{"forged":1}' > ${join(dir, "package-lock.json")}`, [harness, dir]);
+    assert.equal(lock.decision, "deny");
+    assert.match(lock.reason, /package-lock\.json is not in the confirmed allowlist for run t1/);
+  } finally { rmSync(dir, { recursive: true, force: true }); rmSync(harness, { recursive: true, force: true }); }
+});
+
 test("packageInstallTargets splits an install's own output from a package.json change", () => {
   assert.deepEqual(packageInstallTargets("npm ci"), { output: ["node_modules/.package-lock.json"], manifest: [] });
-  assert.deepEqual(packageInstallTargets("npm install --no-package-lock"), { output: ["node_modules/.package-lock.json", "package-lock.json"], manifest: [] });
+  assert.deepEqual(packageInstallTargets("npm install --no-package-lock"), { output: ["node_modules/.package-lock.json"], manifest: [] }, "it leaves the lockfile as it is");
+  assert.deepEqual(packageInstallTargets("pnpm install --frozen-lockfile 2>&1 | tail -5"), { output: ["node_modules/.package-lock.json"], manifest: [] });
+  assert.deepEqual(packageInstallTargets("npm install 2>/dev/null express"), { output: ["node_modules/.package-lock.json", "package-lock.json"], manifest: ["package.json"] }, "a redirect before the name is no end to it");
   assert.deepEqual(packageInstallTargets("cd app && yarn install"), { output: ["node_modules/.package-lock.json", "yarn.lock"], manifest: [] });
   assert.deepEqual(packageInstallTargets("npm install express"), { output: ["node_modules/.package-lock.json", "package-lock.json"], manifest: ["package.json"] });
   assert.deepEqual(packageInstallTargets("npm test && npm run build"), { output: [], manifest: [] });

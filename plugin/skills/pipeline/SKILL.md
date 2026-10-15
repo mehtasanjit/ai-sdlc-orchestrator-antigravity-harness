@@ -380,11 +380,10 @@ that folder:
 
 Every command in the table leaves the lockfile as it is, so the install needs no provenance step.
 Run it as its own command, not inside the test command. Under the live contract the write hook
-allows an install that names no package: it writes `node_modules/` and the lockfile, never
-`package.json`. `node_modules/**` in the contract's off-limits keeps your own edits out of
-installed code; it does not stop this install. Never install a named package here
-(`npm install <pkg>`, `yarn add <pkg>`): that changes `package.json`, and the hook judges it as a
-`package.json` write.
+allows an install that names no package: it writes `node_modules/`, never `package.json`.
+`node_modules/**` in the contract's off-limits keeps your own edits out of installed code; it does
+not stop this install. Never install a named package here (`npm install <pkg>`, `yarn add <pkg>`):
+that changes `package.json`, and the hook judges it as a `package.json` write.
 
 **2. Run the test command through the test recorder**, never by hand:
 

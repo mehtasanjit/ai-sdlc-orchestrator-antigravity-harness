@@ -8,6 +8,8 @@
  *   .sdlc/runs/<run-id>/contract.lock.json the SHA-256 of the contract's bytes at --freeze
  *   .sdlc/runs/<run-id>/run-end.json       the run's end (--close, --abandon, run.mjs)
  *
+ * The hook records each decision it takes in .sdlc/local/guard-decisions.jsonl.
+ *
  * A contract binds while its run has no end record. A run whose lock is live
  * and whose contract no longer matches it (edited, switched off, deleted,
  * replaced by another run's) is tampered: every write is refused until the
@@ -20,6 +22,8 @@ import { dirname, join, resolve } from "node:path";
 export const CONTRACT_REL_PATH = ".sdlc/local/write-contract.json";
 export const CONTRACT_MAX_BYTES = 128 * 1024;
 export const RUN_ID = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
+
+export const GUARD_DECISIONS_REL_PATH = ".sdlc/local/guard-decisions.jsonl";
 
 export const lockRelPath = (runId) => `.sdlc/runs/${runId}/contract.lock.json`;
 export const endRelPath = (runId) => `.sdlc/runs/${runId}/run-end.json`;
@@ -108,4 +112,11 @@ export function contractState(root) {
     return { binding: true, runId: contract.run_id, contract, tampered: null };
   }
   return { binding: false };
+}
+
+/** The hook's decisions that name `runId`, in the order it took them. */
+export function guardDecisions(root, runId) {
+  let text = "";
+  try { text = readFileSync(join(root, GUARD_DECISIONS_REL_PATH), "utf8"); } catch { return []; }
+  return text.split("\n").flatMap((l) => { try { const d = JSON.parse(l); return d?.run_id === runId ? [d] : []; } catch { return []; } });
 }
