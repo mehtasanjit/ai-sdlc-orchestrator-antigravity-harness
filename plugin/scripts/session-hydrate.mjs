@@ -23,10 +23,11 @@
  *     recent_runs: [{ run_id, intent, started_at, outcome, files_touched, spend_usd }, …],
  *     recent_runs_total: N,
  *     resume: { pending: bool, kind, section, at } (setup) or
- *             { pending: bool, kind, run_id, phase, gate, checkpoint, status, at, state_path } (run) | null,
+ *             { pending: bool, kind, run_id, state_path, phase, gate, checkpoint, status, at, contract_live? } (run) | null,
  *     concurrent: { possible: bool, pid, run_id, started_at } | null }
  *
- * A run's resume state is its own `.sdlc/runs/<run-id>/state.json` (lib/run-state.mjs).
+ * A run's resume state is its own `.sdlc/runs/<run-id>/state.json` (lib/run-state.mjs);
+ * `contract_live: true` marks the run whose write contract still binds the project.
  */
 
 import { existsSync, readFileSync, statSync } from "node:fs";

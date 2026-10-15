@@ -86,6 +86,11 @@ Read the JSON. Three cases:
   `policy_snapshot.yaml`), with the same exits as above:
   `node "${MMO_PLUGIN_ROOT}/agy/check-driver-pin.mjs" --since=<run_started_at> --run-id=<run_id> --project-root="$(pwd)"`
   — then follow the resume path in [plugin/skills/pipeline/SKILL.md](/plugin/skills/pipeline/SKILL.md).
+  `resume.contract_live: true` means that run still holds the project's write contract: until it
+  is resumed or discarded, that contract judges every write, so a new run cannot even write its
+  own run folder; say so. With `status: "complete"` it passed Gate 4 and stopped before its
+  close-out; `resume` then means finishing that close-out: the pipeline's run-end markers, then
+  step 7.
   If `discard`, end the interrupted run so its contract stops holding the project — ask first,
   since ending a run is the user's decision:
   `node "${MMO_PLUGIN_ROOT}/scripts/write-contract.mjs" --abandon --run-id=<run_id> --reason="discarded at resume" --project-root="$(pwd)"`

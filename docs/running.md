@@ -207,7 +207,7 @@ node tools/report.mjs /tmp/smoke/.sdlc/runs/smoke1
 | `preflight.json` | the conductor, from `preflight_dispatch` | Rule 0's verdict |
 | `telemetry.jsonl` | the bridge | Every dispatched call, vendor-metered |
 | `gates.jsonl` | the conductor | One line per gate with the decision mode |
-| `state.json` | the conductor, before each gate and after its decision | The gate the run is at and its status (`gate_pending`, `running`, `complete`, `aborted`). Until it reads `complete` or `aborted`, the next `/mmo:brownfield` offers to resume the run and `/mmo:policy change` refuses |
+| `state.json` | the conductor, before each gate and after its decision | The gate the run is at and its status (`gate_pending`, `running`, `complete`, `aborted`). It is one of the inputs to [when a run counts as unfinished](#when-a-run-counts-as-unfinished) |
 | `driver-events.jsonl` | `run.mjs` | The raw stream-json, every invocation |
 | `driver-stderr.log` | `run.mjs` | agy's stderr, where soft-denials and hook notices land |
 | `driver-cost-modeled.jsonl` | `run.mjs` | One `provenance: "modeled"` event per turn at the driver card |
@@ -216,3 +216,15 @@ node tools/report.mjs /tmp/smoke/.sdlc/runs/smoke1
 | `SUMMARY.md` | the conductor | The completion signal |
 
 `node tools/report.mjs <dir>` prints the cost report, keeping the modeled driver line apart from the cash lines.
+
+### When a run counts as unfinished
+
+The next `/mmo:brownfield` offers to resume an unfinished run, and `/mmo:policy change` refuses while one exists. `plugin/scripts/lib/run-state.mjs` decides, in this order:
+
+| The run | Unfinished |
+|---|---|
+| Its write contract still binds: Gate 0 froze it and the run has no `run-end.json` | Yes, whatever its `state.json` says. Until you resume or discard it, its contract judges every write, so a new run cannot write its own run folder |
+| Otherwise, it wrote the latest `state.json` of any run folder, its status is not `complete`, `completed`, `aborted` or `failed`, and it has no `run-end.json` | Yes |
+| Any other run | No |
+
+A headless brownfield run that stops after Gate 0 gets its `run-end.json` from `run.mjs`, so it is not offered: continue it with the `--resume=` command `run.mjs` printed.
