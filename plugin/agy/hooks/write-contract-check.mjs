@@ -28,12 +28,11 @@ import { appendFile, mkdir } from "node:fs/promises";
 import { existsSync, realpathSync } from "node:fs";
 import { resolve, relative, sep, dirname, isAbsolute, join, basename } from "node:path";
 import { HARDCODED_OFF_LIMITS } from "../../scripts/lib/off-limits.mjs";
-import { CONTRACT_REL_PATH, contractState, endRelPath, gitRoot, lockRelPath } from "../../scripts/lib/contract-state.mjs";
+import { CONTRACT_REL_PATH, GUARD_DECISIONS_REL_PATH, contractState, endRelPath, gitRoot, lockRelPath } from "../../scripts/lib/contract-state.mjs";
+import { testRecordRelPath } from "../../scripts/lib/test-record.mjs";
 import { log, redactText } from "../../scripts/lib/log.mjs";
 import { isMain } from "../../scripts/lib/is-main.mjs";
 import { scan } from "../../scripts/dispatch-sanitize.mjs";
-
-const GUARD_DECISIONS_REL_PATH = ".sdlc/local/guard-decisions.jsonl";
 
 async function readStdinJson() {
   return await new Promise((resolveP) => {
@@ -198,19 +197,83 @@ export function scriptWriteTargets(command) {
   return { targets, unresolved: Math.max(0, calls - targets.length) };
 }
 
+export const INSTALL_OUTPUT = "node_modules/.package-lock.json";
 const INSTALL_RE = /(?:^|[\s;&|(])(npm|pnpm|yarn|bun)\s+(install|i|ci|add|update|up|upgrade|remove|rm|uninstall|un)\b/g;
+// `2>&1` and `&>log` are redirects, not the end of the command.
+const COMMAND_END = /;|\n|\|\|?|&&|(?<![>&])&(?!>)|[()]/;
+const REDIRECT = /(?:\d*|&)(?:>>?|<)&?\s*\S+/g;
 const LOCKFILES = { npm: "package-lock.json", pnpm: "pnpm-lock.yaml", yarn: "yarn.lock", bun: "bun.lockb" };
+const INSTALL_LOCKFILES = new Set(Object.values(LOCKFILES));
+const KEEPS_LOCKFILE = /^(?:--no-package-lock|--package-lock=false|--frozen-lockfile|--immutable)$/;
 
-/** What a package manager's install or dependency change writes, relative to the project it runs in. */
+/** The words of one package-manager command after its subcommand, redirects aside. */
+function installWords(command, match) {
+  const rest = command.slice(match.index + match[0].length);
+  const end = rest.search(COMMAND_END);
+  return (end === -1 ? rest : rest.slice(0, end)).replace(REDIRECT, " ").trim().split(/\s+/).filter(Boolean);
+}
+
+/**
+ * What a package manager writes, relative to the project it runs in.
+ * `output` is the install's own: node_modules/, and the lockfile unless the
+ * command keeps it as it is. `manifest` is package.json, for every command
+ * except the project's own install (`ci`, or `install` naming no package).
+ */
 export function packageInstallTargets(command) {
-  if (typeof command !== "string") return [];
-  const out = new Set();
-  for (const [, tool, sub] of command.matchAll(INSTALL_RE)) {
-    out.add("node_modules/.package-lock.json");
-    out.add(LOCKFILES[tool]);
-    if (/^(?:add|remove|rm|uninstall|un)$/.test(sub)) out.add("package.json");
+  const output = new Set();
+  const manifest = new Set();
+  if (typeof command !== "string") return { output: [], manifest: [] };
+  for (const match of command.matchAll(INSTALL_RE)) {
+    const [, tool, sub] = match;
+    const words = installWords(command, match);
+    output.add(INSTALL_OUTPUT);
+    if (sub !== "ci" && !words.some((w) => KEEPS_LOCKFILE.test(w))) output.add(LOCKFILES[tool]);
+    const own = sub === "ci" || ((sub === "install" || sub === "i") && words.every((w) => w.startsWith("-")));
+    if (!own) manifest.add("package.json");
   }
-  return [...out];
+  return { output: [...output], manifest: [...manifest] };
+}
+
+const PROSE_FLAG = /--(?:reason|needs)(?:=|\s+)(?=['"])/y;
+
+/** Index of the quote that closes the one at `open`, or -1. */
+function closingQuote(s, open) {
+  for (let j = open + 1; j < s.length; j++) {
+    if (s[open] === '"' && s[j] === "\\") j++;
+    else if (s[j] === s[open]) return j;
+  }
+  return -1;
+}
+
+/**
+ * The command line with the quoted values of --reason and --needs emptied: a
+ * stop record's prose names commands (npm install express) it never runs. A
+ * double-quoted value the shell expands ($, `, \) is kept, and so is a flag
+ * inside another quoted string.
+ */
+export function withoutProse(command) {
+  if (typeof command !== "string") return command;
+  let out = "";
+  for (let i = 0; i < command.length; ) {
+    PROSE_FLAG.lastIndex = i;
+    const flag = (i === 0 || /\s/.test(command[i - 1])) && PROSE_FLAG.exec(command);
+    if (flag) {
+      const open = i + flag[0].length;
+      const close = closingQuote(command, open);
+      const inert = close !== -1 && (command[open] === "'" || !/[$`\\]/.test(command.slice(open + 1, close)));
+      if (inert && /^[\s;&|)]?$/.test(command[close + 1] ?? "")) {
+        out += flag[0] + command[open] + command[open];
+        i = close + 1;
+        continue;
+      }
+    }
+    const c = command[i];
+    const last = c === "'" || c === '"' ? closingQuote(command, i) : c === "\\" ? i + 1 : i;
+    if (last === -1) return out + command.slice(i);
+    out += command.slice(i, last + 1);
+    i = last + 1;
+  }
+  return out;
 }
 
 
@@ -242,7 +305,7 @@ export const READ_ONLY_TOOLS = new Set([
 export function extractTargets(call) {
   const name = call?.toolCall?.name ?? call?.tool_name;
   const args = call?.toolCall?.args ?? call?.tool_input ?? {};
-  if (name === "run_command") return extractBashRedirectTargets(args.CommandLine ?? args.command);
+  if (name === "run_command") return extractBashRedirectTargets(withoutProse(args.CommandLine ?? args.command));
   if (READ_ONLY_TOOLS.has(name)) return [];
   return extractPathArgs(args);
 }
@@ -364,6 +427,7 @@ async function main() {
 
   const toolName = call?.toolCall?.name ?? call?.tool_name;
   const targets = [...extractTargets(call)];
+  const installTargets = [];
 
   const credential = findCredentialLiteral(call);
   if (credential) {
@@ -389,7 +453,7 @@ async function main() {
   }
 
   if (toolName === "run_command") {
-    const line = call?.toolCall?.args?.CommandLine ?? call?.tool_input?.command;
+    const line = withoutProse(call?.toolCall?.args?.CommandLine ?? call?.tool_input?.command);
     const roots = bindingRoots(call);
     if (roots.length && scriptWriteTargets(line).unresolved) {
       const { root, state } = roots[0];
@@ -400,21 +464,26 @@ async function main() {
       );
     }
     // agy names no working folder for a command: a package manager is judged in every project whose contract binds.
-    for (const rel of packageInstallTargets(line)) for (const { root } of roots) targets.push(join(root, rel));
+    const pkg = packageInstallTargets(line);
+    for (const { root } of roots) {
+      for (const rel of pkg.manifest) targets.push(join(root, rel));
+      for (const rel of pkg.output) installTargets.push(join(root, rel));
+    }
   }
 
-  if (targets.length === 0) return allow("no write target extracted from this tool call");
+  if (targets.length + installTargets.length === 0) return allow("no write target extracted from this tool call");
 
+  // A redirect or file tool naming an install's output path is judged as itself, never as the install.
   let judgedBy = null;
-  for (const target of targets) {
-    const verdict = await checkOneTarget(target, call);
+  for (const [target, installOutput] of [...targets.map((t) => [t, false]), ...installTargets.map((t) => [t, true])]) {
+    const verdict = await checkOneTarget(target, call, { installOutput });
     if (verdict.deny) return deny(verdict.msg, { ...verdict.ctx, toolName });
     judgedBy ??= verdict.judgedBy?.[0] ?? null;
   }
   // Logged where a refusal under the same contract would be, with its run id: a
   // headless run counts these to show the hook judged its writes (writeGuard.mjs).
-  const paths = targets.map((t) => toPosix(isAbsolute(t) ? t : resolve(callCwd(call), t)));
-  return allow(`all ${targets.length} target(s) cleared`, judgedBy ? { root: judgedBy.root, runId: judgedBy.runId, paths } : { root: gitRoot(callCwd(call)), paths });
+  const paths = [...targets, ...installTargets].map((t) => toPosix(isAbsolute(t) ? t : resolve(callCwd(call), t)));
+  return allow(`all ${paths.length} target(s) cleared`, judgedBy ? { root: judgedBy.root, runId: judgedBy.runId, paths } : { root: gitRoot(callCwd(call)), paths });
 }
 
 const NOT_YOURS = "A wider scope is the person's decision, for a new run with its own Gate 0: stop and tell the person which path is needed and why.";
@@ -427,18 +496,21 @@ function hardcodedHit(path) {
 /**
  * The decision for one repo-relative path under a live contract, or null to
  * allow. Rules in order: the run's own control files, the always-off-limits
- * list, the run's own folder, the contract's off_limits, its allowlist.
+ * list, the run's own folder, an install's node_modules/, the contract's
+ * off_limits, an install's lockfile, the allowlist.
  */
-function judgeUnderContract(rel, state) {
+function judgeUnderContract(rel, state, { installOutput = false } = {}) {
   const { contract, runId } = state;
   const strict = contract?.strict !== false;
-  const control = [CONTRACT_REL_PATH, lockRelPath(runId), endRelPath(runId)];
+  const control = [CONTRACT_REL_PATH, lockRelPath(runId), endRelPath(runId), testRecordRelPath(runId)];
   if (control.some((p) => matchGlob(rel, p, { anyCase: true }))) {
-    return { rule: "contract-control", msg: `${rel} is the write contract of live run ${runId}, or its freeze or end record. A live run never changes its own contract or records its own end; only plugin/scripts/write-contract.mjs writes them. ${NOT_YOURS}` };
+    return { rule: "contract-control", msg: `${rel} is the write contract of live run ${runId}, or its freeze, end or test record. A live run never changes its own contract, records its own end or writes its own test result; only plugin/scripts/write-contract.mjs and plugin/scripts/test-run.mjs write them. ${NOT_YOURS}` };
   }
   const hard = hardcodedHit(rel);
   if (hard) return { rule: hard, msg: `${rel} matches always-off-limits pattern "${hard}" (run ${runId}); no contract can open it. ${NOT_YOURS}` };
   if (matchGlob(rel, `.sdlc/runs/${runId}/**`)) return null;
+  // node_modules/** in off_limits keeps the run's own edits out of installed code; it is no bar to installing it.
+  if (installOutput && rel.startsWith("node_modules/")) return null;
   const off = firstMatch(rel, contract?.off_limits, { anyCase: true });
   if (off) {
     if (!strict) {
@@ -447,6 +519,7 @@ function judgeUnderContract(rel, state) {
     }
     return { rule: off, msg: `${rel} matches off-limits pattern "${off}" (run ${runId}). ${NOT_YOURS}` };
   }
+  if (installOutput && INSTALL_LOCKFILES.has(rel)) return null;
   if (firstMatch(rel, contract?.allowlist)) return null;
   if (!strict) {
     console.error(`[mmo-brownfield write-contract] WARN: ${rel} is not in the confirmed allowlist. Allowed because contract.strict = false.`);
@@ -456,7 +529,7 @@ function judgeUnderContract(rel, state) {
 }
 
 /** Returns { deny: boolean, msg?, ctx? } for a single candidate path. */
-async function checkOneTarget(target, call) {
+async function checkOneTarget(target, call, { installOutput = false } = {}) {
   const cwd = callCwd(call);
   const absTarget = isAbsolute(target) ? target : resolve(cwd, target);
   const realAbs = realTarget(absTarget);
@@ -525,7 +598,7 @@ async function checkOneTarget(target, call) {
     // Judged as written too, when the written form lies under the root: an
     // off-limits name reached through a link is refused either way.
     for (const rel of new Set([real, relUnder(root, absTarget)].filter((x) => x !== null))) {
-      const verdict = judgeUnderContract(rel, state);
+      const verdict = judgeUnderContract(rel, state, { installOutput });
       if (verdict) return { deny: true, msg: verdict.msg, ctx: { root, path: rel, runId: state.runId, matchedRule: verdict.rule, strict: state.contract?.strict } };
     }
   }

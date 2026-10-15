@@ -11,7 +11,7 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { extractTargets, extractPathArgs, READ_ONLY_TOOLS, findCredentialLiteral } from "../../plugin/agy/hooks/write-contract-check.mjs";
+import { extractTargets, extractPathArgs, READ_ONLY_TOOLS, findCredentialLiteral, packageInstallTargets, withoutProse } from "../../plugin/agy/hooks/write-contract-check.mjs";
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const HOOK = join(ROOT, "plugin", "agy", "hooks", "write-contract-check.mjs");
@@ -228,15 +228,112 @@ test("a script write with no literal target is refused only while a contract bin
   } finally { rmSync(bound, { recursive: true, force: true }); rmSync(free, { recursive: true, force: true }); }
 });
 
-test("a package install is judged as a write to node_modules and the lockfile of the bound project", () => {
+test("the project's own dependency install is allowed under a live contract, as a write to node_modules and the lockfile only", () => {
+  const dir = repoWithContract({ ...CONTRACT, off_limits: [...CONTRACT.off_limits, "node_modules/**"] });
+  const harness = mkdtempSync(join(tmpdir(), "wc-harness-"));
+  try {
+    for (const line of ["npm ci", "npm install", "npm i --silent && npm test", "npm ci 2>&1 | tail -5", "yarn install --frozen-lockfile", "pnpm install", "bun install"]) {
+      assert.deepEqual(shell(harness, line, [harness, dir]), { decision: "allow" }, line);
+    }
+    const last = readFileSync(join(dir, ".sdlc", "local", "guard-decisions.jsonl"), "utf8").trim().split("\n").map(JSON.parse).at(-1);
+    assert.deepEqual([last.decision, last.run_id], ["allow", "t1"], "agy names no working folder, so the bound project's contract judges it");
+    assert.deepEqual(last.paths, [join(dir, "node_modules", ".package-lock.json"), join(dir, "bun.lockb")]);
+    const edit = runHook({ toolCall: { name: "write_to_file", args: { TargetFile: join(dir, "node_modules", "express", "index.js") } }, workspacePaths: [dir] }, dir).reply;
+    assert.equal(edit.decision, "deny", "a file tool's edit of installed code stays refused");
+    assert.match(edit.reason, /matches off-limits pattern "node_modules\/\*\*"/);
+    assert.equal(shell(harness, "echo x > node_modules/a.js", [dir]).decision, "deny", "so does a redirect into it");
+  } finally { rmSync(dir, { recursive: true, force: true }); rmSync(harness, { recursive: true, force: true }); }
+});
+
+test("installing or removing a named package is judged as a package.json write", () => {
   const dir = repoWithContract(CONTRACT);
   const harness = mkdtempSync(join(tmpdir(), "wc-harness-"));
   try {
-    const r = shell(harness, "npm install", [harness, dir]);
-    assert.equal(r.decision, "deny", "agy names no working folder, so the bound project's contract judges it");
-    assert.match(r.reason, /node_modules\/\.package-lock\.json is not in the confirmed allowlist for run t1/);
+    for (const line of ["npm install express", "npm i -D jest", "npm ci && npm install lodash", "yarn add lodash", "pnpm add -D vitest", "npm uninstall express", "npm update",
+      "npm install >/dev/null express", "npm install 2>/dev/null express", "npm i --silent >install.log lodash", "npm install &>/dev/null express"]) {
+      const r = shell(harness, line, [harness, dir]);
+      assert.equal(r.decision, "deny", line);
+      assert.match(r.reason, /package\.json is not in the confirmed allowlist for run t1/, line);
+    }
+    const open = repoWithContract({ ...CONTRACT, allowlist: ["src/**", "package.json"] });
+    try { assert.equal(shell(open, "npm install express").decision, "allow", "a contract that allows package.json lets the dependency change run"); } finally { rmSync(open, { recursive: true, force: true }); }
     assert.equal(shell(dir, "npm test").decision, "allow");
-    const open = repoWithContract({ ...CONTRACT, allowlist: ["src/**", "node_modules/**", "package-lock.json"] });
-    try { assert.equal(shell(open, "npm ci").decision, "allow", "a contract that allows the install lets it run"); } finally { rmSync(open, { recursive: true, force: true }); }
   } finally { rmSync(dir, { recursive: true, force: true }); rmSync(harness, { recursive: true, force: true }); }
+});
+
+test("a lockfile the contract's off_limits names is refused to an install that rewrites it", () => {
+  const dir = repoWithContract({ ...CONTRACT, off_limits: [...CONTRACT.off_limits, "node_modules/**", "package-lock.json", "yarn.lock"] });
+  const harness = mkdtempSync(join(tmpdir(), "wc-harness-"));
+  try {
+    for (const [line, rule] of [["npm install", "package-lock.json"], ["yarn install", "yarn.lock"]]) {
+      const r = shell(harness, line, [harness, dir]);
+      assert.equal(r.decision, "deny", line);
+      assert.match(r.reason, new RegExp(`${rule.replace(".", "\\.")} matches off-limits pattern "${rule.replace(".", "\\.")}"`), line);
+    }
+    for (const line of ["npm ci", "npm install --no-package-lock", "yarn install --frozen-lockfile"]) {
+      assert.deepEqual(shell(harness, line, [harness, dir]), { decision: "allow" }, `${line} leaves the lockfile as it is`);
+    }
+  } finally { rmSync(dir, { recursive: true, force: true }); rmSync(harness, { recursive: true, force: true }); }
+});
+
+test("a redirect to an install's output path is judged as itself, not as the install", () => {
+  const dir = repoWithContract({ ...CONTRACT, off_limits: [...CONTRACT.off_limits, "node_modules/**"] });
+  const harness = mkdtempSync(join(tmpdir(), "wc-harness-"));
+  try {
+    const modules = shell(harness, `npm ci && echo hacked > ${join(dir, "node_modules", ".package-lock.json")}`, [harness, dir]);
+    assert.equal(modules.decision, "deny");
+    assert.match(modules.reason, /node_modules\/\.package-lock\.json matches off-limits pattern "node_modules\/\*\*"/);
+    const lock = shell(harness, `npm install && echo '{"forged":1}' > ${join(dir, "package-lock.json")}`, [harness, dir]);
+    assert.equal(lock.decision, "deny");
+    assert.match(lock.reason, /package-lock\.json is not in the confirmed allowlist for run t1/);
+  } finally { rmSync(dir, { recursive: true, force: true }); rmSync(harness, { recursive: true, force: true }); }
+});
+
+test("a stop record's quoted --reason and --needs are prose, never judged as commands", () => {
+  const dir = repoWithContract(CONTRACT);
+  const harness = mkdtempSync(join(tmpdir(), "wc-harness-"));
+  try {
+    const stop = [
+      `node "$MMO_PLUGIN_ROOT/scripts/mmo-log.mjs" --event=run.end --run-id=t1 --outcome=stopped --reason="the hook refused npm install express: package.json is not in the allowlist" --needs="add express to package.json, then re-run" --project-root="${dir}"`,
+      `node "$MMO_PLUGIN_ROOT/scripts/write-contract.mjs" --close --run-id=t1 --outcome=stopped --reason "src/auth.spec.js fails > 0 times" --needs='run npm install in the repo root' --project-root="${dir}"`,
+    ];
+    for (const line of stop) assert.deepEqual(shell(harness, line, [harness, dir]), { decision: "allow" }, line);
+    for (const line of [
+      `node m.mjs --reason="$(npm install express)"`,
+      `node m.mjs --reason="tests fail" && npm install express`,
+      `node m.mjs --reason="tests fail" > ${join(dir, "notes.txt")}`,
+      `echo "x --reason='" > ${join(dir, "notes.txt")} "'"`,
+    ]) assert.equal(shell(harness, line, [harness, dir]).decision, "deny", line);
+  } finally { rmSync(dir, { recursive: true, force: true }); rmSync(harness, { recursive: true, force: true }); }
+});
+
+test("withoutProse empties only quoted --reason and --needs values the shell does not expand", () => {
+  assert.equal(withoutProse(`x --reason="npm install a" --needs='npm i b' --other="npm i c"`), `x --reason="" --needs='' --other="npm i c"`);
+  assert.equal(withoutProse(`x --reason="$(npm i a)"`), `x --reason="$(npm i a)"`);
+  assert.equal(withoutProse(`x --reason="a"b`), `x --reason="a"b`, "a value glued to more of the word is kept");
+  assert.equal(withoutProse(`x --reason="open`), `x --reason="open`);
+  assert.equal(withoutProse(undefined), undefined);
+});
+
+test("packageInstallTargets splits an install's own output from a package.json change", () => {
+  assert.deepEqual(packageInstallTargets("npm ci"), { output: ["node_modules/.package-lock.json"], manifest: [] });
+  assert.deepEqual(packageInstallTargets("npm install --no-package-lock"), { output: ["node_modules/.package-lock.json"], manifest: [] }, "it leaves the lockfile as it is");
+  assert.deepEqual(packageInstallTargets("pnpm install --frozen-lockfile 2>&1 | tail -5"), { output: ["node_modules/.package-lock.json"], manifest: [] });
+  assert.deepEqual(packageInstallTargets("npm install 2>/dev/null express"), { output: ["node_modules/.package-lock.json", "package-lock.json"], manifest: ["package.json"] }, "a redirect before the name is no end to it");
+  assert.deepEqual(packageInstallTargets("cd app && yarn install"), { output: ["node_modules/.package-lock.json", "yarn.lock"], manifest: [] });
+  assert.deepEqual(packageInstallTargets("npm install express"), { output: ["node_modules/.package-lock.json", "package-lock.json"], manifest: ["package.json"] });
+  assert.deepEqual(packageInstallTargets("npm test && npm run build"), { output: [], manifest: [] });
+  assert.deepEqual(packageInstallTargets(undefined), { output: [], manifest: [] });
+});
+
+test("a live run's test record is refused to every tool, as its contract files are", () => {
+  const dir = repoWithContract(CONTRACT);
+  try {
+    const record = join(dir, ".sdlc", "runs", "t1", "test-run.json");
+    const tool = runHook({ toolCall: { name: "write_to_file", args: { TargetFile: record, CodeContent: "{}" } }, workspacePaths: [dir] }, dir).reply;
+    assert.equal(tool.decision, "deny");
+    assert.match(tool.reason, /test record.*only plugin\/scripts\/write-contract\.mjs and plugin\/scripts\/test-run\.mjs write them/);
+    assert.equal(shell(dir, `echo '{"status":"passed"}' > ${record}`).decision, "deny");
+    assert.equal(runHook({ toolCall: { name: "write_to_file", args: { TargetFile: join(dir, ".sdlc", "runs", "t1", "test-output.txt") } }, workspacePaths: [dir] }, dir).reply.decision, "allow", "the run's other files stay its own");
+  } finally { rmSync(dir, { recursive: true, force: true }); }
 });

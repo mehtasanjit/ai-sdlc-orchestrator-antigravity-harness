@@ -57,16 +57,24 @@ Behavior, in order:
    brownfield job, or a run that has ended), only the always-off-limits list is refused: `.env`,
    `.env.*`, `.mcp.json`, `.cursor/rules/**`, `.claude/settings.local.json`, `.git/**`, at any depth.
 5. **The freeze record decides first.** `write-contract.mjs --freeze` records the SHA-256 of the
-   contract's bytes in `.sdlc/runs/<run-id>/contract.lock.json`. While that run is live, a contract
-   that no longer matches — widened, switched off, deleted, replaced — refuses every write, with the
-   reason. So do two live freeze records.
+   contract's bytes in `.sdlc/runs/<run-id>/contract.lock.json`, with the test commands Gate 0
+   confirmed (`test_commands`, empty for `none`). While that run is live, a contract that no longer
+   matches — widened, switched off, deleted, replaced — refuses every write, with the reason. So do
+   two live freeze records.
 6. **A live run's contract binds:**
-   - The contract file, the run's `contract.lock.json` and its `run-end.json` are refused to file
-     tools, whatever the allowlist says.
+   - The contract file, the run's `contract.lock.json`, its `run-end.json` and its test record
+     `test-run.json` are refused to file tools, whatever the allowlist says. Only
+     `write-contract.mjs` and `test-run.mjs` write them.
    - The always-off-limits list is refused, under every contract, `strict: false` included.
    - The run's own folder `.sdlc/runs/<run-id>/` is allowed: its requirements, design, packets and
      reports.
-   - The contract's `off_limits` — deny with the reason if hit.
+   - A package manager's own `node_modules/` is allowed. `node_modules/**` in `off_limits` keeps
+     file tools and redirects out of installed code; it does not stop the project's install. A
+     redirect or file tool naming the same path is judged as itself.
+   - The contract's `off_limits` — deny with the reason if hit. This covers a lockfile a package
+     command rewrites (`npm install` with no `--no-package-lock`, `yarn install` with no
+     `--frozen-lockfile`), when you named it at Gate 0.
+   - A package manager's lockfile, otherwise — allow. `package.json` is judged like any other path.
    - The `allowlist` — allow if hit.
    - Otherwise — deny.
 7. Off-limits patterns (the always list and the contract's) match in any letter case: on macOS's
@@ -87,14 +95,16 @@ All three files are written by [`plugin/scripts/write-contract.mjs`](../plugin/s
 
 | When | Command | Writes |
 |---|---|---|
-| Gate 0 approved | `write-contract.mjs --freeze --run-id <id> --allowlist '<JSON>' --off-limits '<JSON>'` | `.sdlc/local/write-contract.json`, `.sdlc/runs/<id>/contract.lock.json` |
-| Close-out, after Gate 4 is accepted | `write-contract.mjs --close --run-id <id>` | `.sdlc/runs/<id>/run-end.json` (`completed`), then `active: false` |
+| Gate 0 approved | `write-contract.mjs --freeze --run-id <id> --allowlist '<JSON>' --off-limits '<JSON>' --test-command '<command>'` (once per package command in a monorepo, or `--test-command none`) | `.sdlc/local/write-contract.json`, `.sdlc/runs/<id>/contract.lock.json` |
+| Close-out, after Gate 4 is accepted | `write-contract.mjs --close --run-id <id>` | `.sdlc/runs/<id>/run-end.json` (`completed`), then `active: false`. Refused unless `.sdlc/runs/<id>/test-run.json` records a passing run of a frozen test command, from the project root, and the hook allowed no project write after that run started; or Gate 0 froze `none` |
 | A gate answered `abort` after the freeze | `write-contract.mjs --close --run-id <id> --outcome=aborted` | the same, `aborted` |
-| A headless run's driver loop ends | `plugin/agy/run.mjs`, for the run it launched | the same, `completed` or `stopped` |
+| Phase 7 stops the run: its tests cannot run, or still fail after the debug retries | `write-contract.mjs --close --run-id <id> --outcome=stopped --reason "<what failed>" --needs "<what you must do>"` | the same, `stopped`, with `reason` and `needs` |
+| A headless run's driver loop ends | `plugin/agy/run.mjs`, for the run it launched | the same, `completed` (`SUMMARY.md` and a passing test record) or `stopped`. A run that recorded its own end is not resumed |
 | A run that will never end by itself (its chat closed, it crashed) | `write-contract.mjs --abandon --run-id <id> --reason "<why>"` — your decision | the same, `aborted` |
 
 `--freeze` refuses a project root that is not a git project's root, a run that already froze or
-ended, and a project another live run holds. Ending a run never deletes its folder.
+ended, a project another live run holds, and a freeze with no `--test-command`. Ending a run never
+deletes its folder.
 
 ## Headless runs
 
@@ -175,8 +185,10 @@ This is the concrete answer to the "the plugin doesn't know how you use Gemini /
 | Will this touch my `.env`? | No, ever. `.env*` is in `.sdlc/project.json.off_limits_default` — the write contract refuses writes there regardless of intent. If codegen introduces a new required env var, the KEY name (not the value) is appended to `.env.example` and a mini-gate asks you to populate `.env` before Phase 7 tests run. | None. `.env` values are yours. |
 | Will this touch my Cursor rules (`.cursor/`)? | No. Default off-limits. | Move `.cursor/` into the allowlist at Gate 0 by editing the proposal. |
 | Will this touch my `package.json`? | Only to add missing dependencies (deep-merge, append-only) and only when a codegen packet explicitly requires it. Never removes, downgrades, or shadows existing scripts. | None needed — the merge rules already enforce safety. |
+| Will a run install my dependencies? | Only for its tests, when the test folder has a `package.json` and no `node_modules/`: `npm ci` with a `package-lock.json`, `yarn`, `pnpm` or `bun install --frozen-lockfile` with their lockfiles, and `npm install --no-package-lock` with none. Each leaves the lockfile and `package.json` as they are and writes only `node_modules/`. | Put `package.json` in the allowlist at Gate 0 when the job itself changes dependencies (a `deps` run). |
+| Can a run finish with failing tests? | No. It ends `stopped`, with `reason` and `needs` in `run-end.json` and `manifest.json` → `harness.stop`, when its tests cannot run or still fail after the debug retries. `write-contract.mjs --close` refuses `completed` without a passing `test-run.json`, and the manifest records such a run as `incomplete`. A pass counts only for a command Gate 0 froze, run from the project root; `test-run.mjs` refuses any other before it runs. A project write the hook allows after the test run started voids the pass, so a Gate 3 or Gate 4 revision runs the tests again. | Answer `none` for the test command at Gate 0: the run completes without a test run. |
 | What if I have `commit_strategy: per-gate`? | The plugin refuses to run on a dirty tree so your uncommitted work does not tangle with the plugin's commits. Defaults are safe: `branch_strategy: current`, `commit_strategy: none`, `pr: off`. | `--allow-dirty` bypasses the git-clean check. |
-| Can the AI bypass the hook? | Interactive: not through a file tool. The hook is an agy `PreToolUse` matcher, refusals happen before the tool executes, and editing the frozen contract refuses every later write. A shell command is checked for redirects, `tee`, `touch`, `cp` and `mv`, for the literal paths an inline `node -e` / `python -c` script writes through `fs`, `open()` or `Path`, and for package installs (`npm`, `pnpm`, `yarn`, `bun`), judged as writes to `node_modules/` and the lockfile of every project whose contract binds. While a contract binds, an inline script write whose path is not a literal is refused. Any other shell write is not seen; the run record's `after_run_check.unjudged_changes` lists every changed file no hook decision named. A command that rewrites the contract changes its bytes and locks the run. Headless: on agy 1.3.5 `agy -p` loads the hook and refuses the same writes ([check 1](verification/p1-agy-runtime.md)); the record's `write_guard.state` is `hook` when it judged the run's writes and `off` when it judged none, and the after-run check lists what the run changed outside the contract either way. | `--strict-write=off` at run start, passed by you. Mid-run: none; a wider scope is a new run with its own Gate 0. |
+| Can the AI bypass the hook? | Interactive: not through a file tool. The hook is an agy `PreToolUse` matcher, refusals happen before the tool executes, and editing the frozen contract refuses every later write. A shell command is checked for redirects, `tee`, `touch`, `cp` and `mv`, for the literal paths an inline `node -e` / `python -c` script writes through `fs`, `open()` or `Path`, and for package commands (`npm`, `pnpm`, `yarn`, `bun`), judged in every project whose contract binds. The project's own install (`npm ci`, and `install` naming no package) writes `node_modules/` and the lockfile, which a live contract allows unless its `off_limits` names the lockfile. A named install, `add`, `update` or `remove` is also a `package.json` write, judged by the contract. The quoted values of `--reason` and `--needs` are prose, not commands, and are not judged, unless the shell expands them (`$`, a backtick). While a contract binds, an inline script write whose path is not a literal is refused. Any other shell write is not seen; the run record's `after_run_check.unjudged_changes` lists every changed file no hook decision named. A command that rewrites the contract changes its bytes and locks the run. Headless: on agy 1.3.5 `agy -p` loads the hook and refuses the same writes ([check 1](verification/p1-agy-runtime.md)); the record's `write_guard.state` is `hook` when it judged the run's writes and `off` when it judged none, and the after-run check lists what the run changed outside the contract either way. | `--strict-write=off` at run start, passed by you. Mid-run: none; a wider scope is a new run with its own Gate 0. |
 | A run stopped after Gate 0 and the project stays held | `node plugin/scripts/write-contract.mjs --abandon --run-id <run-id> --reason "<why>"` records the run's end (aborted) and switches its contract off. Deleting the contract does not free it: under the live freeze record that refuses every write. | Your decision. |
 | How do I override off-limits for one specific run? | Re-open Gate 0 with `revise:` and move the specific path from `off_limits` to `allowlist`. Ephemeral — applies to this run only. | None. `.sdlc/project.json.off_limits_default` is unchanged by this. |
 | My repo has files with unusual characters — will pattern matching work? | Yes. The hook uses glob-style pattern matching (`*`, `**`, `?`, literal `/`). No shell-out, no eval on paths. Unicode, spaces, and exotic characters all work. | None needed. |

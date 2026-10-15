@@ -51,6 +51,9 @@ import { isMain } from "../scripts/lib/is-main.mjs";
 import { staleBuild, staleBuildWarning } from "../scripts/lib/stale-build.mjs";
 import { finishWriteGuard, gitStatus, loadLaunchSnapshot, saveLaunchSnapshot } from "./writeGuard.mjs";
 import { resumeRun } from "../scripts/write-contract.mjs";
+import { runEnd } from "../scripts/lib/contract-state.mjs";
+import { testVerdict } from "../scripts/lib/test-record.mjs";
+import { runMode } from "./telemetry/conductorWork.mjs";
 import { agyHome, readConversationRecord } from "./telemetry/conversationUsage.mjs";
 import { DEFAULT_POLICY, loadPolicyFile as loadProjectPolicyFile, policyPath as projectPolicyPath, resolvePolicy as resolveProjectPolicy } from "./projectPolicy.mjs";
 
@@ -269,6 +272,15 @@ export function runIsComplete(outputDir, since = null, { before = null, exists =
   if (!since) return true;
   // A second's slack for filesystems that store whole-second mtimes.
   return stat(path).mtimeMs >= Date.parse(since) - 1000;
+}
+
+/**
+ * A session that wrote its SUMMARY.md completes a brownfield run only on a
+ * passing test record, unless Gate 0 froze no test command.
+ */
+export function headlessVerdict({ outputDir, runId, mode = null, summaryWritten, projectRoot = null }) {
+  const tests = runMode(outputDir, mode) === "brownfield" ? testVerdict(outputDir, runId, { projectRoot }) : null;
+  return { completed: summaryWritten && (!tests?.required || tests.passed === true), tests };
 }
 
 /** SUMMARY.md as a fresh launch found it, or null when there was none. */
@@ -671,7 +683,8 @@ async function main(args) {
 
     let quotaRetries = 0;
     const resumable = () => result.status === 0 || (quotaStop(result) && quotaRetries < quotaWaits.length);
-    while (!interrupted && invocations < maxTurns && resumable() && conversationId && !runIsComplete(outputDir, started, { before: staleSummary })) {
+    // A run that recorded its own end (a stop, an abort) is the person's to reopen, never the loop's.
+    while (!interrupted && invocations < maxTurns && resumable() && conversationId && !runIsComplete(outputDir, started, { before: staleSummary }) && !runEnd(projectRoot, runId)) {
       if (result.status !== 0) {
         const wait = quotaWaits[quotaRetries++];
         console.log(`run ${runId}: agy's model hit its quota (429) in invocation ${invocations} — resuming ${conversationId} in ${wait}s (quota retry ${quotaRetries} of ${quotaWaits.length})`);
@@ -686,11 +699,19 @@ async function main(args) {
       invocations += 1;
       provisional(conversationId);
     }
-    const completed = runIsComplete(outputDir, started, { before: staleSummary });
-    if (!completed) {
+    const summaryWritten = runIsComplete(outputDir, started, { before: staleSummary });
+    const { completed, tests } = headlessVerdict({ outputDir, runId, mode, summaryWritten, projectRoot });
+    const ownEnd = runEnd(projectRoot, runId);
+    if (!completed && ownEnd) {
       console.log(
-        `run ${runId}: stopped after ${invocations} invocation(s) without this run's SUMMARY.md — ` +
-          (interrupted ? `interrupted (${interrupted}).` : invocations >= maxTurns ? `hit --max-turns=${maxTurns}.` : quotaStop(result) ? `agy's model was still over its quota after ${quotaRetries} wait(s).` : `agy exited ${result.status}.`) +
+        `run ${runId}: the run recorded its end (${ownEnd.outcome}${ownEnd.reason ? `: ${ownEnd.reason}` : ""})${ownEnd.needs ? ` and needs: ${ownEnd.needs}` : ""}. ` +
+          "It is not resumed; reopening it is your decision.",
+      );
+    } else if (!completed) {
+      console.log(
+        `run ${runId}: stopped after ${invocations} invocation(s) ` +
+          (summaryWritten ? `with this run's SUMMARY.md, but ${tests.reason}. ` : `without this run's SUMMARY.md — ` +
+          (interrupted ? `interrupted (${interrupted}).` : invocations >= maxTurns ? `hit --max-turns=${maxTurns}.` : quotaStop(result) ? `agy's model was still over its quota after ${quotaRetries} wait(s).` : `agy exited ${result.status}.`)) +
           ` Artifacts so far are in the output directory; re-run with --resume=${conversationId ?? "<conversation-id>"} --run-id=${runId} to continue.`,
       );
     }

@@ -35,7 +35,8 @@ import { unpricedCalls } from "./telemetry/driverPrice.mjs";
 import { offPinModels } from "./telemetry/event-reader.mjs";
 import { driverRange, driverRangeNote, driverRangeNotes } from "./telemetry/driverRange.mjs";
 import { isMain } from "../scripts/lib/is-main.mjs";
-import { conductorWork } from "./telemetry/conductorWork.mjs";
+import { conductorWork, runMode } from "./telemetry/conductorWork.mjs";
+import { testVerdict } from "../scripts/lib/test-record.mjs";
 import { inferRunId, readGates, readRunMarkers, runOutcome, sessionWindow } from "./telemetry/runWindow.mjs";
 import { studiesConsoleFields } from "./telemetry/consoleFields.mjs";
 
@@ -356,7 +357,11 @@ export function buildHarnessManifest({ runDir, policyName, runId, env = process.
     base.duration_sec = Math.max(1, base.session_window.duration_sec);
   }
   const gates = readGates(runDir);
-  const outcome = runOutcome({ runDir, gates, launcher: driverManifest, markers, since: markers.start ?? driverManifest?.started_at ?? null });
+  const mode = runMode(runDir, driverManifest?.mode ?? markers.mode);
+  const tests = mode === "brownfield" ? testVerdict(runDir, pass) : null;
+  const endRecord = readJson(join(runDir, "run-end.json"));
+  const end = endRecord?.run_id === pass ? endRecord : null;
+  const outcome = runOutcome({ runDir, gates, launcher: driverManifest, markers, since: markers.start ?? driverManifest?.started_at ?? null, tests, end });
 
   let pin = null;
   try { pin = policy ? readPin(policy) : null; } catch { pin = null; }
@@ -409,6 +414,9 @@ export function buildHarnessManifest({ runDir, policyName, runId, env = process.
     agy_invocations: driverManifest?.agy_invocations ?? null,
     completed: outcome.completed,
     status: outcome.status,
+    ...(outcome.incomplete_reason ? { incomplete_reason: outcome.incomplete_reason } : {}),
+    ...(outcome.stop ? { stop: outcome.stop } : {}),
+    ...(tests ? { tests } : {}),
     write_guard: driverManifest
       ? (driverManifest.write_guard ?? { state: "off", reason: "headless run recorded before write_guard existed, so whether the write hook ran is not known" })
       : { state: "hook", reason: "interactive session: plugin/agy/hooks/write-contract-check.mjs runs before every file write (plugin/hooks.json)" },
