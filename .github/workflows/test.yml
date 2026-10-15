@@ -22,7 +22,7 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version: '22.19'
           cache: npm
           cache-dependency-path: |
             package-lock.json
@@ -36,6 +36,11 @@ jobs:
       # not the "MCP tests NOT RUN" fallback.
       - name: Install MCP server deps
         run: npm ci
+        working-directory: plugin/mcp/model-dispatch
+
+      # dist/ is gitignored; the root suite imports dist/pricing.js.
+      - name: Build MCP server
+        run: npm run build
         working-directory: plugin/mcp/model-dispatch
 
       - name: Run tests

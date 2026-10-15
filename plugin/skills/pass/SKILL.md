@@ -11,7 +11,7 @@ Invoke the `orchestrator` subagent to execute one full SDLC run.
 
 **Argument parsing (the orchestrator must do this):**
 - `--auth=vendor` — **required**, and `vendor` is the only value this runtime accepts: every LLM call dispatches via the MCP server so telemetry carries real vendor-reported tokens. `estimated` (a char-count heuristic for direct-tier calls) belongs to the Claude Code harness. If the flag is missing or carries any other value, abort — see rule 6 in the orchestrator's system prompt for the exact abort text.
-- `--policy=<name>` — routing policy name. When absent, resolves to the current project's `default_policy` field from `.sdlc/project.json` (written by the setup-time policy console — see [SETUP.md](../../SETUP.md) §5b), or `opus-plus-flash` if no project default is set.
+- `--policy=<name>` — routing policy name. When absent, resolves to the current project's `default_policy` field from `.sdlc/project.json` (written by the setup-time policy console — see [SETUP.md](../../SETUP.md) §5b), or `antigravity-flash38-plus-opus5` if no project default is set. A `routing-policy.yaml` at the project root outranks both (see Policy resolution below).
 - `--study=<study-id>` — case-study identifier. Defaults to `workforce-ops`. Set this to a project-specific id when running against a brief other than the shipped `examples/workforce-ops/brief.md`, so telemetry and packets stay grouped by project.
 - `--run-id=<run-id>` — run identifier within the study. Defaults to `pass1`.
 - The remaining positional argument is the path to the brief file. Any markdown brief on disk works — see `docs/brief-template.md` for the section layout the requirements phase expects.
@@ -32,16 +32,16 @@ If `examples/<study-id>/passes/<run-id>/` already exists, its contents will be o
 precedence, and the orchestrator's job is to pass the arguments that express what the user asked
 for:
 
-1. **An explicit `--policy=<name>` flag wins over everything.** Pass it as
-   `policy_path: ${MMO_PLUGIN_ROOT}/config/policies/<name>.yaml` — an explicit path bypasses
-   the loader's search entirely, which is what lets a flag typed for *this run* beat a repo-local
-   override.
-2. **Otherwise a repo-local `<project root>/routing-policy.yaml` wins over any name.** Pass
-   `policy_name: <resolved default>` plus `project_root: $(pwd)`; the loader prefers the project
+1. **A repo-local `<project root>/routing-policy.yaml` wins over any name.** Pass
+   `policy_name: <resolved name>` plus `project_root: $(pwd)`; the loader prefers the project
    file whenever it exists. Omitting `project_root` is the historical bug: the run silently fell
-   back to the shipped preset while the project's own policy sat unread.
-3. **Otherwise the named preset** `plugin/config/policies/<name>.yaml` loads — the project's
-   `default_policy` from `.sdlc/project.json`, or `antigravity-flash38-plus-opus5` when none is set.
+   back to the shipped preset while the project's own policy sat unread. If the user also passed
+   `--policy=<name>` and it names another policy, say that `routing-policy.yaml` is in force and
+   the flag is not used. The headless launcher (`plugin/agy/run.mjs`) resolves the same way.
+2. **Otherwise an explicit `--policy=<name>` flag** names the preset
+   `plugin/config/policies/<name>.yaml` (a policy saved from the console lives there too).
+3. **Otherwise the project's `default_policy`** from `.sdlc/project.json`, or
+   `antigravity-flash38-plus-opus5` when none is set.
 
 Pass the same policy arguments on **every** call, `simulate_policy` included — a what-if priced
 under a different policy than the run used is worse than no what-if.
@@ -54,7 +54,7 @@ under a different policy than the run used is worse than no what-if.
 
 **HITL gates active:** Gate 1 (requirements), Gate 2 (design), Gate 3 (security review), Gate 4 (final acceptance).
 
-When invoked headlessly (`plugin/agy/run.mjs`, which wraps `agy --print … --output-format stream-json` with the pinned invocation, or `--gates=auto-approve` here), all four HITL gates auto-approve so the session can complete end-to-end without prompts.
+When invoked headlessly (`plugin/agy/run.mjs`, which wraps `agy --print … --output-format stream-json` with the pinned invocation), the launcher requires `--gates=auto-approve` or `--gates=auto-abort`: `auto-approve` accepts all four HITL gates so the session completes without prompts, and `auto-abort` stops at the first one. `prompt` is refused there, because print mode has no one to answer it.
 
 ---
 
@@ -71,7 +71,7 @@ flags:
 | `--brief=<path>` | Optional: pre-written intent brief (replaces the interview). Any markdown file with the section layout in [docs/brownfield.md](../../docs/brownfield.md) works. |
 | `--gates=<prompt\|auto-approve\|auto-abort>` | Gate behavior. `prompt` (default) is interactive; `auto-approve` accepts every gate (headless friendly); `auto-abort` **v1.5** — approves only when the run's fingerprint matches `.sdlc/project.json`, aborts otherwise. Recommended for CI so drift never silently proceeds. |
 | `--from-config=<path>` | **v1.5** — read gate answers from a committed team config file. Combined with `--gates=auto-abort`, this is the CI-safe flow. |
-| `--policy=<name>` | Same as greenfield. Overrides the setup-time project default (`.sdlc/project.json.default_policy`) and, if present, any repo-local `routing-policy.yaml` — the flag is passed to the MCP server as an explicit `policy_path`, which outranks the loader's project-override search (see **Policy resolution** above). |
+| `--policy=<name>` | Same as greenfield. Overrides the setup-time project default (`.sdlc/project.json.default_policy`). A repo-local `routing-policy.yaml` still wins, in the bridge and in the headless launcher alike (see **Policy resolution** above). |
 | `--strict-write=off` | Downgrade the write-contract PreToolUse hook from HARD-BLOCK to WARN. Every off-limits or not-in-allowlist write is logged but not refused. Use with care — this defeats the plugin's main safety guarantee. |
 | `--allow-dirty` | Bypass the git-clean check when the git contract's `commit_strategy != none`. |
 | `--recheck` | Force pre-check re-run even when the cached status is still valid. Useful after a plugin version bump. |
@@ -94,7 +94,7 @@ flags:
 - The pipeline pre-check (§7.4) must have passed or been skipped-with-user-consent for this
   run's inputs.
 
-See [plugin/commands/brownfield.md](brownfield.md) for the interactive equivalent
+See [plugin/skills/brownfield/SKILL.md](../brownfield/SKILL.md) for the interactive equivalent
 of these flags (the 7-step operating manual Claude follows in the interactive flow).
 
 Begin now.

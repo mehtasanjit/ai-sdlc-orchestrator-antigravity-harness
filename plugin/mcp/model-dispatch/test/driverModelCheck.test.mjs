@@ -24,7 +24,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 // The carried Claude-harness policies are bridge test fixtures, not shipped
 // presets of this harness (plugin/config/policies/ holds the two antigravity
 // policies). Point the loader at them for this file's process.
-process.env.MMO_POLICY_DIR = new URL("./fixtures/policies/", import.meta.url).pathname;
+process.env.MMO_POLICY_DIR = fileURLToPath(new URL("./fixtures/policies/", import.meta.url));
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const SCRIPT = join(HERE, "..", "..", "..", "scripts", "driver-model-check.mjs");

@@ -35,7 +35,7 @@ import { WORKER_PYTHON_ENV } from "../dist/delegation/workerProcess.js";
 // The carried Claude-harness policies are bridge test fixtures, not shipped
 // presets of this harness (plugin/config/policies/ holds the two antigravity
 // policies). Point the loader at them for this file's process.
-process.env.MMO_POLICY_DIR = new URL("./fixtures/policies/", import.meta.url).pathname;
+process.env.MMO_POLICY_DIR = fileURLToPath(new URL("./fixtures/policies/", import.meta.url));
 
 // The governance demo's routing policy, an unedited copy of what the store
 // synced into the demo project (see test/governanceDemoPolicy.test.mjs).
@@ -55,7 +55,11 @@ const BEFORE_V38_GA = () => new Date("2026-09-01T12:00:00Z");
 
 const USAGE = { promptTokenCount: 123457, cachedContentTokenCount: 45678, candidatesTokenCount: 2345, thoughtsTokenCount: 6789 };
 const TOKENS = { input: 123457 - 45678, input_cached: 45678, output: 2345 + 6789 };
+// The sidecar names its SDK version because what prompt_token_count means depends
+// on it (AGY_USAGE_SEMANTICS); 0.1.9 counts cached input inside prompt, which is
+// the split TOKENS above expects. These tests are about the price, not the reading.
 const SIDECAR = {
+  sdk_version: "0.1.9",
   usage: { prompt_token_count: 123457, cached_content_token_count: 45678, candidates_token_count: 2345, thoughts_token_count: 6789 },
   tool_call_count: 0,
 };
@@ -413,4 +417,17 @@ test("T10 AntigravityWorkerAdapter: a wrong block is ignored with a warning; an 
   assert.equal(refused38.ran, false, "no unpriced 3.8 work is ever dispatched");
   assert.equal(refused38.out.success, false);
   assert.match(refused38.out.error, /no price period for gemini-3\.8-flash on 2026-09-01/);
+});
+
+test("AntigravityWorkerAdapter: an agent session has no output cap, so the attempt claims no ceiling", async () => {
+  const leaf = loadPolicy({ policyName: "opus-plus-flash-v38" }).models.find((m) => m.id === "flash-agsdk-worker");
+  const ran = await workerRun(leaf);
+  assert.equal(ran.out.success, true, ran.out.error);
+  const refused = await workerRun(leaf, { now: BEFORE_V38_GA });
+  assert.equal(refused.ran, false);
+  for (const [attempt] of [ran.out.attempts, refused.out.attempts]) {
+    assert.equal(attempt.ceiling_used, null);
+    assert.equal(attempt.budget_enforced, false);
+    assert.equal(attempt.budget_declared, PACKET.budget.maxOutputTokens);
+  }
 });

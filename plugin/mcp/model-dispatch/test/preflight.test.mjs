@@ -5,6 +5,7 @@
  * by an unset env var.
  */
 import test from "node:test";
+import { fileURLToPath } from "node:url";
 import assert from "node:assert/strict";
 
 import {
@@ -17,7 +18,7 @@ import {
 // The carried Claude-harness policies are bridge test fixtures, not shipped
 // presets of this harness (plugin/config/policies/ holds the two antigravity
 // policies). Point the loader at them for this file's process.
-process.env.MMO_POLICY_DIR = new URL("./fixtures/policies/", import.meta.url).pathname;
+process.env.MMO_POLICY_DIR = fileURLToPath(new URL("./fixtures/policies/", import.meta.url));
 
 /** The two models of the shipped opus-plus-flash policy, in policy-file order. */
 const MODELS = [

@@ -108,9 +108,9 @@ any fails, halt and print what succeeded vs. what still needs manual attention.
 
 # 4. Backup file cleanup
 
-After a successful revert, the per-run backup copies at `.sdlc/local/cache/<run-id>/*.bak`
+After a successful revert, the per-run backup copies at `.sdlc/runs/<run-id>/backups/`
 become obsolete. Ask the user before deleting: *"Revert complete. Delete backup copies at
-.sdlc/local/cache/&lt;run-id&gt;/? Reply `yes` to delete, `no` to keep."*
+.sdlc/runs/&lt;run-id&gt;/backups/? Reply `yes` to delete, `no` to keep."*
 
 Default to KEEP if user just presses enter — keeping backups is cheap and undoing an accidental
 delete is expensive.

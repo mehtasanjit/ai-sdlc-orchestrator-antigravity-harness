@@ -2,9 +2,11 @@
 /**
  * Brownfield write-contract PreToolUse hook — agy edition.
  *
- * Refuses file writes outside the confirmed allowlist when brownfield mode is
- * active; silent allow when no active contract exists. Contract file:
- * <repo-root>/.sdlc/local/write-contract.json.
+ * Refuses file writes outside the confirmed allowlist while a brownfield
+ * run's contract binds (plugin/scripts/lib/contract-state.mjs: the contract
+ * at the target's git root, its run not ended, its bytes still those Gate 0
+ * froze); with none binding, only the always-off-limits list is refused.
+ * docs/brownfield-write-contract.md states the rules in order.
  *
  * agy's hook contract (docs/verification/p1-agy-runtime.md check 13): stdin is
  * `{ toolCall: { name, args }, workspacePaths, ... }` in camelCase, and the
@@ -13,18 +15,24 @@
  * is a live check, so every path-shaped argument is inspected and
  * `run_command` gets the shell-redirect heuristics.
  *
+ * Before any path check, the content a call would write is scanned for
+ * credential literals; a hit is denied with or without a contract, and
+ * regardless of `strict`.
+ *
  * Fail-open: any bug here must not block user work. Denials are recorded to
  * `.sdlc/local/guard-decisions.jsonl` because the stream-json output does not
  * show them.
  */
 
-import { readFile, appendFile, mkdir } from "node:fs/promises";
-import { existsSync, readFileSync, statSync } from "node:fs";
+import { appendFile, mkdir } from "node:fs/promises";
+import { existsSync, realpathSync } from "node:fs";
 import { resolve, relative, sep, dirname, isAbsolute, join, basename } from "node:path";
 import { HARDCODED_OFF_LIMITS } from "../../scripts/lib/off-limits.mjs";
-import { log } from "../../scripts/lib/log.mjs";
+import { CONTRACT_REL_PATH, contractState, endRelPath, gitRoot, lockRelPath } from "../../scripts/lib/contract-state.mjs";
+import { log, redactText } from "../../scripts/lib/log.mjs";
+import { isMain } from "../../scripts/lib/is-main.mjs";
+import { scan } from "../../scripts/dispatch-sanitize.mjs";
 
-const CONTRACT_REL_PATH = ".sdlc/local/write-contract.json";
 const GUARD_DECISIONS_REL_PATH = ".sdlc/local/guard-decisions.jsonl";
 
 async function readStdinJson() {
@@ -45,37 +53,6 @@ async function readStdinJson() {
 }
 
 /**
- * Walk from `start` up the filesystem until we find a directory containing
- * the given relative path. Returns the absolute contract path if found, else null.
- * Bounded to avoid pathological loops on unusual filesystems.
- */
-function findContractPath(start) {
-  let dir = resolve(start);
-  for (let i = 0; i < 40; i++) {
-    const candidate = resolve(dir, CONTRACT_REL_PATH);
-    if (existsSync(candidate)) return candidate;
-    const parent = dirname(dir);
-    if (parent === dir) return null;
-    dir = parent;
-  }
-  return null;
-}
-
-/**
- * Repo-relative path resolution + escape detection. Returns `{ rel, escapes }`
- * where `escapes: true` means the target resolves OUTSIDE the contract's repo
- * root. An escape is a category error — the run is trying to write outside
- * its own project — and gets a distinct deny message.
- */
-function toRepoRelative(target, contractPath) {
-  const repoRoot = resolve(contractPath, "..", "..", ".."); // .sdlc/local/write-contract.json → repo root
-  const abs = resolve(repoRoot, target);
-  let rel = relative(repoRoot, abs);
-  if (sep !== "/") rel = rel.split(sep).join("/");
-  return { rel, escapes: rel.startsWith("../") || rel === ".." };
-}
-
-/**
  * Minimal glob matcher. Supports:
  *   `**` — any characters including `/`
  *   `*`  — any characters except `/`
@@ -84,7 +61,12 @@ function toRepoRelative(target, contractPath) {
  * No brace expansion, no character classes, no negation. That's enough for
  * repo scope patterns like `src/**`, `docs/*.md`, `apps/api/**`, `.env`.
  */
-function matchGlob(path, pattern) {
+/**
+ * Off-limits patterns match in any letter case: on macOS's default disk
+ * `.ENV` is the same file as `.env`. The allowlist matches exactly, the
+ * stricter way for a list that grants.
+ */
+export function matchGlob(path, pattern, { anyCase = false } = {}) {
   if (path === pattern) return true;
   const re = pattern
     .replace(/[.+^${}()|[\]\\]/g, "\\$&")
@@ -92,31 +74,53 @@ function matchGlob(path, pattern) {
     .replace(/\*/g, "[^/]*")
     .replace(/\?/g, "[^/]")
     .replace(/\x00/g, ".*");
-  return new RegExp(`^${re}$`).test(path);
+  return new RegExp(`^${re}$`, anyCase ? "i" : "").test(path);
 }
 
 function matchesAtAnyDepth(target, pattern) {
-  if (matchGlob(target, pattern)) return true;
+  if (matchGlob(target, pattern, { anyCase: true })) return true;
   if (pattern.startsWith("**/") || pattern.startsWith("/")) return false;
-  return matchGlob(target, "**/" + pattern);
+  return matchGlob(target, "**/" + pattern, { anyCase: true });
 }
 
-function firstMatch(path, patterns) {
+function firstMatch(path, patterns, opts) {
   if (!Array.isArray(patterns)) return null;
   for (const p of patterns) {
-    if (typeof p === "string" && matchGlob(path, p)) return p;
+    if (typeof p === "string" && matchGlob(path, p, opts)) return p;
   }
   return null;
 }
 
-function readContractSafe(path) {
-  try {
-    const st = statSync(path);
-    if (st.size > 128 * 1024) return null;
-    return JSON.parse(readFileSync(path, "utf8"));
-  } catch {
-    return null;
+const toPosix = (p) => (sep === "/" ? p : p.split(sep).join("/"));
+
+/** `rel` of `abs` under `root`, or null when it lies outside. */
+function relUnder(root, abs) {
+  const rel = toPosix(relative(root, abs));
+  return rel === ".." || rel.startsWith("../") || isAbsolute(rel) ? null : rel;
+}
+
+/**
+ * Where a path leads once links are followed: the real path of its nearest
+ * existing ancestor, with the rest of the path appended.
+ */
+export function realTarget(abs) {
+  let head = abs;
+  const rest = [];
+  for (let i = 0; i < 256; i++) {
+    try {
+      return join(realpathSync(head), ...rest.reverse());
+    } catch {
+      const parent = dirname(head);
+      if (parent === head) return abs;
+      rest.push(basename(head));
+      head = parent;
+    }
   }
+  return abs;
+}
+
+function realRoot(root) {
+  try { return realpathSync(root); } catch { return root; }
 }
 
 /**
@@ -162,8 +166,53 @@ function extractBashRedirectTargets(command) {
     const dest = args[args.length - 1];
     if (dest && !dest.endsWith("/")) targets.push(dest);
   }
+  targets.push(...scriptWriteTargets(command).targets);
   return targets;
 }
+
+const Q = "['\"`]";
+const LIT = `\\\\?(${Q})([^'"\`$\\\\]+)\\\\?\\1`;
+const FS = "(?:fs|fsp|promises)\\.";
+const SCRIPT_WRITES = [
+  new RegExp(`\\b(?:writeFileSync|appendFileSync|createWriteStream|${FS}(?:writeFile|appendFile))\\(\\s*${LIT}`, "g"),
+  new RegExp(`\\b(?:copyFileSync|renameSync|cpSync|${FS}(?:copyFile|rename|cp))\\(\\s*\\\\?${Q}[^'"\`]*\\\\?${Q}\\s*,\\s*${LIT}`, "g"),
+  new RegExp(`\\bopen\\(\\s*${LIT}\\s*,\\s*['"][rb]*[wax]`, "g"),
+  new RegExp(`\\bPath\\(\\s*${LIT}\\s*\\)\\.write_(?:text|bytes)\\(`, "g"),
+];
+const SCRIPT_WRITE_CALLS = new RegExp(
+  `\\b(?:writeFileSync|appendFileSync|createWriteStream|copyFileSync|renameSync|cpSync|${FS}(?:writeFile|appendFile|copyFile|rename|cp))\\(` +
+    `|\\bopen\\([^)]*,\\s*['"][rb]*[wax]|\\.write_(?:text|bytes)\\(`,
+  "g",
+);
+
+/**
+ * The literal paths an inline script (`node -e`, `python -c`) writes through
+ * node's fs or python's open() and Path. `unresolved` counts the write calls
+ * whose target is not a literal, which no hook can judge.
+ */
+export function scriptWriteTargets(command) {
+  if (typeof command !== "string") return { targets: [], unresolved: 0 };
+  const targets = [];
+  for (const re of SCRIPT_WRITES) for (const m of command.matchAll(re)) targets.push(m[m.length - 1]);
+  const calls = (command.match(SCRIPT_WRITE_CALLS) ?? []).length;
+  return { targets, unresolved: Math.max(0, calls - targets.length) };
+}
+
+const INSTALL_RE = /(?:^|[\s;&|(])(npm|pnpm|yarn|bun)\s+(install|i|ci|add|update|up|upgrade|remove|rm|uninstall|un)\b/g;
+const LOCKFILES = { npm: "package-lock.json", pnpm: "pnpm-lock.yaml", yarn: "yarn.lock", bun: "bun.lockb" };
+
+/** What a package manager's install or dependency change writes, relative to the project it runs in. */
+export function packageInstallTargets(command) {
+  if (typeof command !== "string") return [];
+  const out = new Set();
+  for (const [, tool, sub] of command.matchAll(INSTALL_RE)) {
+    out.add("node_modules/.package-lock.json");
+    out.add(LOCKFILES[tool]);
+    if (/^(?:add|remove|rm|uninstall|un)$/.test(sub)) out.add("package.json");
+  }
+  return [...out];
+}
+
 
 // ── agy-specific: target extraction ─────────────────────────────────────
 
@@ -198,6 +247,61 @@ export function extractTargets(call) {
   return extractPathArgs(args);
 }
 
+// ── credential literals in what a call would write ──────────────────────
+
+/**
+ * Keys holding text a replace expects to find already on disk. Scanning them
+ * would refuse the very edit that removes a committed key.
+ */
+export const EXISTING_TEXT_ARG_KEYS = new Set(["TargetContent", "target_content", "old_string"]);
+
+/**
+ * `KEY=value` with any value also matches `process.env.X`, `$X` and a config
+ * schema line like `DATABASE_URL: z.string()`, which written code must carry.
+ */
+const PROMPT_ONLY_PATTERNS = new Set(["sensitive-env-assignment"]);
+
+/**
+ * Every string argument except the text being replaced: which key carries
+ * the new content on `code_action` / `propose_code` / `file_change` /
+ * `write_blob` is unverified (check 13), so none is assumed.
+ */
+export function extractWrittenText(call) {
+  const name = call?.toolCall?.name ?? call?.tool_name;
+  const args = call?.toolCall?.args ?? call?.tool_input ?? {};
+  if (name === "run_command") {
+    const line = args.CommandLine ?? args.command;
+    return typeof line === "string" ? [line] : [];
+  }
+  if (READ_ONLY_TOOLS.has(name)) return [];
+  const out = [];
+  const walk = (v, depth) => {
+    if (depth > 8) return;
+    if (typeof v === "string") out.push(v);
+    else if (Array.isArray(v)) for (const item of v) walk(item, depth + 1);
+    else if (v && typeof v === "object") {
+      for (const [k, item] of Object.entries(v)) if (!EXISTING_TEXT_ARG_KEYS.has(k)) walk(item, depth + 1);
+    }
+  };
+  walk(args, 0);
+  return out;
+}
+
+/** The first credential finding as `{ name, kind }` — never the matched text. */
+export function findCredentialLiteral(call) {
+  for (const text of extractWrittenText(call)) {
+    const hit = scan(text).find((f) => !PROMPT_ONLY_PATTERNS.has(f.name));
+    if (hit) return { name: hit.name, kind: hit.kind };
+  }
+  return null;
+}
+
+/** The git projects of the call's workspace whose contract binds, with that state. */
+function bindingRoots(call) {
+  const roots = new Set([callCwd(call), ...(Array.isArray(call?.workspacePaths) ? call.workspacePaths : [])].map((p) => (typeof p === "string" ? gitRoot(p) : null)).filter(Boolean));
+  return [...roots].map((root) => ({ root, state: contractState(root) })).filter(({ state }) => state.binding);
+}
+
 function callCwd(call) {
   const ws = Array.isArray(call?.workspacePaths) ? call.workspacePaths[0] : undefined;
   if (typeof ws === "string" && ws) return ws;
@@ -207,10 +311,9 @@ function callCwd(call) {
 
 // ── D3: guard-decisions sidecar — the only record a denial leaves ──
 
-async function recordDecision(contractPath, decision) {
+async function recordDecision(repoRoot, decision, fallbackRoot) {
   try {
-    const repoRoot = contractPath ? resolve(contractPath, "..", "..", "..") : process.cwd();
-    const sidecarPath = join(repoRoot, GUARD_DECISIONS_REL_PATH);
+    const sidecarPath = join(repoRoot ?? fallbackRoot ?? process.cwd(), GUARD_DECISIONS_REL_PATH);
     await mkdir(dirname(sidecarPath), { recursive: true });
     await appendFile(sidecarPath, JSON.stringify({ ts: new Date().toISOString(), ...decision }) + "\n");
   } catch {
@@ -230,7 +333,7 @@ async function allow(msg, ctx = {}) {
     console.error(`[mmo-brownfield write-contract] ALLOW: ${msg}`);
   }
   log("debug", "write.allow", { run_id: ctx.runId, path: ctx.path, matched_rule: ctx.matchedRule });
-  await recordDecision(ctx.contractPath, { decision: "allow", reason: msg, path: ctx.path, run_id: ctx.runId, matched_rule: ctx.matchedRule });
+  await recordDecision(ctx.root, { decision: "allow", reason: msg, path: ctx.path, ...(ctx.paths ? { paths: ctx.paths } : {}), run_id: ctx.runId, matched_rule: ctx.matchedRule });
   reply("allow");
   process.exit(0);
 }
@@ -243,14 +346,14 @@ async function deny(msg, ctx = {}) {
     matched_off_limits_rule: ctx.matchedRule,
     strict: ctx.strict,
   });
-  await recordDecision(ctx.contractPath, {
+  await recordDecision(ctx.root, {
     decision: "deny",
     reason: msg,
     path: ctx.path,
     run_id: ctx.runId,
     matched_rule: ctx.matchedRule,
     tool_name: ctx.toolName,
-  });
+  }, ctx.recordRoot);
   reply("deny", msg);
   process.exit(0);
 }
@@ -259,142 +362,177 @@ async function main() {
   const call = await readStdinJson();
   if (!call || typeof call !== "object") return allow("no parseable tool call on stdin");
 
-  const targets = extractTargets(call);
+  const toolName = call?.toolCall?.name ?? call?.tool_name;
+  const targets = [...extractTargets(call)];
+
+  const credential = findCredentialLiteral(call);
+  if (credential) {
+    const cwd = callCwd(call);
+    const root = gitRoot(cwd);
+    const state = root ? contractState(root) : { binding: false };
+    // A path argument could itself hold the secret; the reason must never echo it.
+    const path = targets.length ? redactText(targets.join(", ")) : undefined;
+    const where = path ?? (toolName === "run_command" ? "its command line" : "its target");
+    return deny(
+      `${toolName ?? "this tool call"} would write a ${credential.name} credential literal (${credential.kind}) into ${where}. ` +
+        `A key is never written into a file or a command line: read it from the environment the session ` +
+        `was launched with (process.env.GEMINI_API_KEY, $GEMINI_API_KEY) and re-issue the call without the value.`,
+      {
+        root,
+        recordRoot: cwd,
+        path,
+        matchedRule: credential.name,
+        runId: state.binding ? state.runId : undefined,
+        toolName,
+      },
+    );
+  }
+
+  if (toolName === "run_command") {
+    const line = call?.toolCall?.args?.CommandLine ?? call?.tool_input?.command;
+    const roots = bindingRoots(call);
+    if (roots.length && scriptWriteTargets(line).unresolved) {
+      const { root, state } = roots[0];
+      return deny(
+        `this command's inline script writes a file whose path is not a literal, so the write contract of run ${state.runId} cannot judge it. ` +
+          "Write the file with write_to_file, or name its path as a literal string.",
+        { root, runId: state.runId, matchedRule: "unresolved-script-write", toolName },
+      );
+    }
+    // agy names no working folder for a command: a package manager is judged in every project whose contract binds.
+    for (const rel of packageInstallTargets(line)) for (const { root } of roots) targets.push(join(root, rel));
+  }
+
   if (targets.length === 0) return allow("no write target extracted from this tool call");
 
-  const toolName = call?.toolCall?.name ?? call?.tool_name;
+  let judgedBy = null;
   for (const target of targets) {
     const verdict = await checkOneTarget(target, call);
     if (verdict.deny) return deny(verdict.msg, { ...verdict.ctx, toolName });
+    judgedBy ??= verdict.judgedBy?.[0] ?? null;
   }
-  return allow(`all ${targets.length} target(s) cleared`, { contractPath: findContractPath(callCwd(call)) });
+  // Logged where a refusal under the same contract would be, with its run id: a
+  // headless run counts these to show the hook judged its writes (writeGuard.mjs).
+  const paths = targets.map((t) => toPosix(isAbsolute(t) ? t : resolve(callCwd(call), t)));
+  return allow(`all ${targets.length} target(s) cleared`, judgedBy ? { root: judgedBy.root, runId: judgedBy.runId, paths } : { root: gitRoot(callCwd(call)), paths });
+}
+
+const NOT_YOURS = "A wider scope is the person's decision, for a new run with its own Gate 0: stop and tell the person which path is needed and why.";
+
+/** The always-off-limits pattern a path hits, in any letter case, at any depth. */
+function hardcodedHit(path) {
+  return HARDCODED_OFF_LIMITS.find((p) => matchesAtAnyDepth(path, p)) ?? null;
+}
+
+/**
+ * The decision for one repo-relative path under a live contract, or null to
+ * allow. Rules in order: the run's own control files, the always-off-limits
+ * list, the run's own folder, the contract's off_limits, its allowlist.
+ */
+function judgeUnderContract(rel, state) {
+  const { contract, runId } = state;
+  const strict = contract?.strict !== false;
+  const control = [CONTRACT_REL_PATH, lockRelPath(runId), endRelPath(runId)];
+  if (control.some((p) => matchGlob(rel, p, { anyCase: true }))) {
+    return { rule: "contract-control", msg: `${rel} is the write contract of live run ${runId}, or its freeze or end record. A live run never changes its own contract or records its own end; only plugin/scripts/write-contract.mjs writes them. ${NOT_YOURS}` };
+  }
+  const hard = hardcodedHit(rel);
+  if (hard) return { rule: hard, msg: `${rel} matches always-off-limits pattern "${hard}" (run ${runId}); no contract can open it. ${NOT_YOURS}` };
+  if (matchGlob(rel, `.sdlc/runs/${runId}/**`)) return null;
+  const off = firstMatch(rel, contract?.off_limits, { anyCase: true });
+  if (off) {
+    if (!strict) {
+      console.error(`[mmo-brownfield write-contract] WARN: ${rel} matches off-limits pattern "${off}". Allowed because contract.strict = false.`);
+      return null;
+    }
+    return { rule: off, msg: `${rel} matches off-limits pattern "${off}" (run ${runId}). ${NOT_YOURS}` };
+  }
+  if (firstMatch(rel, contract?.allowlist)) return null;
+  if (!strict) {
+    console.error(`[mmo-brownfield write-contract] WARN: ${rel} is not in the confirmed allowlist. Allowed because contract.strict = false.`);
+    return null;
+  }
+  return { rule: null, msg: `${rel} is not in the confirmed allowlist for run ${runId}. ${NOT_YOURS}` };
 }
 
 /** Returns { deny: boolean, msg?, ctx? } for a single candidate path. */
 async function checkOneTarget(target, call) {
   const cwd = callCwd(call);
   const absTarget = isAbsolute(target) ? target : resolve(cwd, target);
-  const targetNorm = absTarget.split(sep).join("/");
+  const realAbs = realTarget(absTarget);
 
-  const cwdContractPath = findContractPath(cwd);
-  const cwdContract = cwdContractPath ? readContractSafe(cwdContractPath) : null;
-
-  if (cwdContract && cwdContract.active === true) {
-    const cwdRepoRoot = resolve(cwdContractPath, "..", "..", "..");
-    const cwdRel = relative(cwdRepoRoot, absTarget).split(sep).join("/");
-    if (cwdRel.startsWith("../") || cwdRel === "..") {
-      const targetContract = findContractPath(dirname(absTarget));
-      return {
-        deny: true,
-        msg:
-          `${absTarget} resolves OUTSIDE the calling session's contracted repo ` +
-          `(${cwdRepoRoot}). Cross-project writes are refused — a brownfield ` +
-          `run can only write inside the repo whose contract it holds.` +
-          (targetContract ? ` (Target has its own contract at ${targetContract}; ` +
-            `run against that project explicitly if you meant to edit it.)` : ""),
-        ctx: { contractPath: cwdContractPath, path: absTarget, runId: cwdContract.run_id },
-      };
-    }
-  }
-
-  const contractPath = findContractPath(dirname(absTarget)) ?? cwdContractPath;
-
-  if (!contractPath) {
-    // The greenfield test fixture, and only that.
-    //
-    // The pipeline's test phase must bootstrap an `.env` before `npm test`,
-    // for an app whose codegen produced a validating config module — it
-    // copies the run's own `.env.test` across. The blanket `.env` rule
-    // refused it, so the Workforce Ops reference run silently skipped build,
-    // E2E and startup verification and said so in its final report. The
-    // harness was forbidding a write it also instructs.
-    //
-    // Narrow on purpose. Everything the `.env` rule exists to protect still
-    // holds:
-    //   - an EXISTING .env is never touched, so real secrets cannot be
-    //     overwritten — this only permits creating one that is not there;
-    //   - brownfield is unaffected, because that path has a contract and
-    //     never reaches this pre-contract branch at all (and its own test
-    //     phase refuses the copy outright);
-    //   - `.env.*` variants stay blocked, so `.env.production` and friends
-    //     are still refused.
-    // The residue is a greenfield run creating a throwaway fixture inside
-    // the tree it just generated, which belongs to nobody else.
-    if (basename(targetNorm) === ".env" && !existsSync(absTarget)) {
-      return { deny: false };
-    }
-
-    const preHit = HARDCODED_OFF_LIMITS.find((p) => matchesAtAnyDepth(targetNorm, p));
-    if (preHit) {
-      return {
-        deny: true,
-        msg:
-          `${target} matches always-off-limits pattern "${preHit}" (no active brownfield contract; ` +
-          `this is the pre-contract safety net for credentials, MCP config, other-AI-tool state, ` +
-          `and plugin bookkeeping). If this write is legitimate, establish an explicit contract ` +
-          `first, then re-issue.`,
-        ctx: { contractPath: null, path: targetNorm, matchedRule: preHit },
-      };
-    }
-    return { deny: false };
-  }
-
-  try {
-    const st = statSync(contractPath);
-    if (st.size > 128 * 1024) return { deny: false };
-  } catch {
-    return { deny: false };
-  }
-
-  let contract;
-  try {
-    contract = JSON.parse(await readFile(contractPath, "utf8"));
-  } catch {
-    return { deny: false };
-  }
-
-  if (!contract || contract.active !== true) return { deny: false };
-
-  const { rel } = toRepoRelative(target, contractPath);
-
-  const offHit = firstMatch(rel, contract.off_limits);
-  if (offHit) {
-    if (contract.strict === false) {
-      console.error(
-        `[mmo-brownfield write-contract] WARN: ${rel} matches off-limits pattern "${offHit}". Allowed because contract.strict = false.`
-      );
-      return { deny: false };
-    }
+  // The session's own project. Inside means inside once links are followed: the
+  // real form alone decides, so /tmp and /private/tmp spellings agree.
+  const sessionRoot = gitRoot(cwd);
+  const sessionState = sessionRoot ? contractState(sessionRoot) : { binding: false };
+  if (sessionState.binding && relUnder(realRoot(sessionRoot), realAbs) === null) {
     return {
       deny: true,
-      msg:
-        `${rel} matches off-limits pattern "${offHit}" (run ${contract.run_id ?? "?"}). ` +
-        `Re-open Gate 0 to move this path out of off-limits, or set contract.strict = false ` +
-        `(equivalent to --strict-write=off) to bypass.`,
-      ctx: { contractPath, path: rel, matchedRule: offHit, runId: contract.run_id, strict: contract.strict },
+      msg: `${absTarget} resolves OUTSIDE the project whose contract this session holds (${sessionRoot}), as written or through a link. ` +
+        `Cross-project writes are refused: a brownfield run writes only inside its own project.`,
+      ctx: { root: sessionRoot, path: absTarget, runId: sessionState.runId },
     };
   }
 
-  const allowHit = firstMatch(rel, contract.allowlist);
-  if (allowHit) return { deny: false };
+  // Every binding contract on the path judges the write: the session's, and the
+  // contract at the root of the git project holding the target when that is a
+  // different project (a submodule or a nested repo inside the session's).
+  const targetRoot = gitRoot(dirname(realAbs)) ?? gitRoot(dirname(absTarget)) ?? sessionRoot;
+  const judges = [];
+  if (sessionState.binding) judges.push({ root: sessionRoot, state: sessionState });
+  if (targetRoot && targetRoot !== sessionRoot) {
+    const own = contractState(targetRoot);
+    if (own.binding) judges.push({ root: targetRoot, state: own });
+  }
 
-  if (contract.strict === false) {
-    console.error(
-      `[mmo-brownfield write-contract] WARN: ${rel} is not in the confirmed allowlist. Allowed because contract.strict = false.`
-    );
+  if (!judges.length) {
+    // The greenfield test fixture: creating a missing `.env` from the run's
+    // own `.env.test` before `npm test`. An existing `.env` is never touched,
+    // `.env.*` stays refused, and a binding contract never reaches here.
+    if (basename(absTarget) === ".env" && !existsSync(absTarget)) return { deny: false };
+    const forms = targetRoot ? [relUnder(targetRoot, absTarget), relUnder(realRoot(targetRoot), realAbs)].filter(Boolean) : [];
+    for (const p of [...forms, toPosix(absTarget), toPosix(realAbs)]) {
+      const hit = hardcodedHit(p);
+      if (hit) {
+        return {
+          deny: true,
+          msg: `${target} matches always-off-limits pattern "${hit}" (no brownfield contract binds here; this net covers credentials, MCP config, ` +
+            `other AI tools' rules and git's own store, in any letter case).`,
+          ctx: { root: targetRoot, path: toPosix(absTarget), matchedRule: hit },
+        };
+      }
+    }
     return { deny: false };
   }
-  return {
-    deny: true,
-    msg:
-      `${rel} is not in the confirmed allowlist for run ${contract.run_id ?? "?"}. ` +
-      `Re-open Gate 0 to expand scope to include this path, or set contract.strict = false ` +
-      `(equivalent to --strict-write=off) to bypass.`,
-    ctx: { contractPath, path: rel, runId: contract.run_id, strict: contract.strict },
-  };
+
+  for (const { root, state } of judges) {
+    if (state.tampered) {
+      return {
+        deny: true,
+        msg: `every write is refused: ${state.tampered}. Ending run ${state.runId} is the person's decision: ` +
+          `node plugin/scripts/write-contract.mjs --abandon --run-id ${state.runId} --reason "<why>".`,
+        ctx: { root, path: toPosix(absTarget), runId: state.runId, matchedRule: "tampered" },
+      };
+    }
+    const real = relUnder(realRoot(root), realAbs);
+    if (real === null) {
+      return {
+        deny: true,
+        msg: `${absTarget} leads outside the project of live run ${state.runId} (${root}) through a link; a write there is a write outside the project.`,
+        ctx: { root, path: toPosix(absTarget), runId: state.runId },
+      };
+    }
+    // Judged as written too, when the written form lies under the root: an
+    // off-limits name reached through a link is refused either way.
+    for (const rel of new Set([real, relUnder(root, absTarget)].filter((x) => x !== null))) {
+      const verdict = judgeUnderContract(rel, state);
+      if (verdict) return { deny: true, msg: verdict.msg, ctx: { root, path: rel, runId: state.runId, matchedRule: verdict.rule, strict: state.contract?.strict } };
+    }
+  }
+  return { deny: false, judgedBy: judges.map(({ root, state }) => ({ root, runId: state.runId })) };
 }
 
-if (process.argv[1] && new URL(import.meta.url).pathname === process.argv[1]) {
+if (isMain(import.meta.url)) {
   main().catch(async (e) => {
     if (process.env.MMO_DEBUG === "1") console.error(`[mmo-brownfield write-contract] unhandled: ${e?.message ?? e}`);
     reply("allow");

@@ -1,7 +1,7 @@
 {
   "$schema": "https://antigravity.google/schemas/v1/plugin.json",
   "name": "mmo",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Multi-model AI-SDLC pipeline for the Antigravity CLI: Gemini conductor, Opus 5 judgment via the Claude Agent SDK, Gemini Flash mechanical tier, with per-phase cost attribution.",
   "author": { "name": "Tilicho Labs" },
   "license": "MIT",

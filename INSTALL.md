@@ -6,27 +6,27 @@ Steps from "Set up this plugin from this repo" to a project in which `agy` disco
 
 | Need | Check | Get |
 |---|---|---|
-| Node.js ≥ 20 | `node --version` | https://nodejs.org |
+| Node.js ≥ 22.19 | `node --version` | https://nodejs.org |
 | Antigravity CLI `agy` ≥ 1.2.3 | `agy --version` | `curl -fsSL https://antigravity.google/cli/install.sh \| bash` → `~/.local/bin/agy`; open a new shell |
 | Google Sign-In for agy | `agy models` lists models | run `agy` once with no arguments and finish the browser flow. A person does this; do not attempt it headlessly |
-| Claude Code (the Opus worker) | `claude --version` | https://code.claude.com/docs — the `claude-cli` adapter spawns `claude -p` |
+| Claude Code (the Opus worker) | `claude --version` | https://code.claude.com/docs — its sign-in is the seat wallet; the `claude-agent-sdk` adapter runs Claude Code through the Agent SDK |
 | git | `git --version` | — |
 
 ## 2. Clone the harness beside the project
 
 ```bash
-git clone --branch feat/antigravity-harness-implementation https://github.com/tl-ai-labs/ai-sdlc-orchestrator-antigravity-harness.git ../ai-sdlc-orchestrator-antigravity-harness
+git clone --branch develop https://github.com/tl-ai-labs/ai-sdlc-orchestrator-antigravity-harness.git ../ai-sdlc-orchestrator-antigravity-harness
 ```
 
-If `../ai-sdlc-orchestrator-antigravity-harness` already exists, switch it to the branch and update it instead:
+If `../ai-sdlc-orchestrator-antigravity-harness` already exists, switch it to `develop` and update it instead:
 
 ```bash
 git -C ../ai-sdlc-orchestrator-antigravity-harness fetch origin
-git -C ../ai-sdlc-orchestrator-antigravity-harness checkout feat/antigravity-harness-implementation
+git -C ../ai-sdlc-orchestrator-antigravity-harness checkout develop
 git -C ../ai-sdlc-orchestrator-antigravity-harness pull
 ```
 
-The branch matters until this work is merged to `main`: the wizard in step 3 and the mount step do not exist on `main`. Any location works; the next step records the absolute path.
+Any location works; the next step records the absolute path.
 
 ## 3. Run the wizard against the project
 
@@ -34,7 +34,7 @@ The branch matters until this work is merged to `main`: the wizard in step 3 and
 node ../ai-sdlc-orchestrator-antigravity-harness/tools/setup.mjs --project-root "$(pwd)"
 ```
 
-It checks Node, `agy`, `claude` and credentials; builds `plugin/mcp/model-dispatch/dist/` (`npm ci && npm run build`, gitignored, rebuilt after every pull that touches the bridge); asks about the Gemini agent path only when Vertex ADC exists; mounts the plugin as `<project>/.agents/plugins/mmo/` (symlinks into the clone); and opens the policy console once to pick `.sdlc/project.json` → `default_policy`. Pass `--yes` to take every default, `--policy=<name>` to skip the browser, `--no-agent` to skip the door question.
+It checks Node, `agy`, `claude` and credentials; builds `plugin/mcp/model-dispatch/dist/` (`npm ci && npm run build`, gitignored, rebuilt after every pull that touches the bridge); asks about the Gemini agent path only when Vertex ADC exists; mounts the plugin as `<project>/.agents/plugins/mmo/` (symlinks into the clone); and opens the policy console to pick `.sdlc/project.json` → `default_policy`. The console opens on every run from a terminal — including when a default is already set, so you can review or change it; saving nothing there leaves the current value untouched. Pass `--yes` to take every default (it no longer skips the console), `--policy=<name>` to skip the browser, `--no-agent` to skip the door question.
 
 Report the wizard's output to the user as it stands. An item marked ✗ names what is missing and where to set it; do not work around it.
 
@@ -79,7 +79,7 @@ npm run verify    # the same checks as the wizard, no questions
 A headless dry run prints the pinned `agy` invocation with credentials reported as set/unset only:
 
 ```bash
-node plugin/agy/run.mjs --brief=examples/quick-demo/brief.md --project-root=/path/to/project --output-dir=/path/to/project/.sdlc --gates=auto-approve --dry-run
+node plugin/agy/run.mjs --brief=examples/quick-demo/brief.md --project-root=/path/to/project --gates=auto-approve --dry-run
 ```
 
 [docs/running.md](docs/running.md) covers the flags and the run directory.

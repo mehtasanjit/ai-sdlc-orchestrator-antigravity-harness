@@ -5,6 +5,7 @@
  * placeholder timestamps would corrupt manifest.duration_sec.
  */
 import { test } from "node:test";
+import { fileURLToPath } from "node:url";
 import assert from "node:assert/strict";
 import { normalizeDirectTierEvent, appendEvent, readEvents, buildManifest } from "../dist/telemetry.js";
 import { mkdtempSync, rmSync } from "node:fs";
@@ -14,7 +15,7 @@ import { join } from "node:path";
 // The carried Claude-harness policies are bridge test fixtures, not shipped
 // presets of this harness (plugin/config/policies/ holds the two antigravity
 // policies). Point the loader at them for this file's process.
-process.env.MMO_POLICY_DIR = new URL("./fixtures/policies/", import.meta.url).pathname;
+process.env.MMO_POLICY_DIR = fileURLToPath(new URL("./fixtures/policies/", import.meta.url));
 
 /** A direct-tier event shaped exactly like the one the 2026-08-04 run produced. */
 function modelSuppliedEvent(overrides = {}) {
@@ -86,7 +87,7 @@ test("an event with no provenance stamp defaults to \"estimated\"", () => {
 
 test("an explicit provenance stamp is passed through untouched", () => {
   // The default only fills ABSENCE. A caller that stamped deliberately
-  // (e.g. the orchestrator-overhead collector writing "transcript" events)
+  // (e.g. a transcript reader writing "transcript" events)
   // must not be silently re-labeled as an estimate.
   const out = normalizeDirectTierEvent(
     modelSuppliedEvent({ provenance: "transcript" }),

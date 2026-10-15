@@ -176,6 +176,7 @@ abstract class GenAiTransport implements GeminiTransport {
       cached_content: args.cachedContentName,
       max_output_tokens: (args.generationConfig as any)?.maxOutputTokens,
       thinking_budget: (args.generationConfig as any)?.thinkingConfig?.thinkingBudget,
+      thinking_level: (args.generationConfig as any)?.thinkingConfig?.thinkingLevel,
     });
     if (args.cachedContentName) {
       log("debug", "api.gemini.cache.hit", { cache_context: args.cachedContentName });

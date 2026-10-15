@@ -8,6 +8,7 @@ import { existsSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parse as parseYaml, stringify as stringifyYaml } from "yaml";
+import { isMain } from "../scripts/lib/is-main.mjs";
 
 const SCRIPT_DIR = dirname(fileURLToPath(import.meta.url));
 const POLICIES_DIR = resolve(SCRIPT_DIR, "..", "config", "policies");
@@ -65,12 +66,14 @@ const CONDITIONAL_SKIP_NOTE = {
 
 const KNOWN_ADAPTERS = [
   "builtin-anthropic",
+  "claude-agent-sdk",
   "claude-cli",
   "mcp:model-dispatch",
   "antigravity-worker",
 ];
 const ADAPTER_LABEL = {
   "builtin-anthropic": "Anthropic (Claude)",
+  "claude-agent-sdk": "Anthropic Claude via the Claude Agent SDK (arm A: API key · arm B: Vertex · seat)",
   "claude-cli": "Anthropic Claude via claude -p (arm A: API key · arm B: Vertex)",
   "mcp:model-dispatch": "Gemini — completion call",
   "antigravity-worker": "Gemini — Antigravity agent (SDK worker)",
@@ -78,6 +81,8 @@ const ADAPTER_LABEL = {
 
 const GEMINI_TIERS = ["off", "minimal", "low", "medium", "high"];
 const ANTHROPIC_EFFORT_TIERS = ["off", "low", "medium", "high", "xhigh", "max"];
+/** Adapters whose thinking control is an Anthropic `effort` level, not a Gemini tier. */
+const ANTHROPIC_ADAPTERS = new Set(["builtin-anthropic", "claude-agent-sdk", "claude-cli"]);
 // Every preset YAML the plugin ships, for the console's "preset" vs "custom"
 // origin chip. A name list is the only discriminator available: console-saved
 // custom policies land in the same config/policies/ directory as the shipped
@@ -94,12 +99,12 @@ const NAME_PATTERN = /^[a-z0-9][a-z0-9-]*$/;
 
 function thinkingSupport(model) {
   if (model.adapter === "mcp:model-dispatch" || model.adapter === "antigravity-worker") return GEMINI_TIERS;
-  if (model.adapter === "builtin-anthropic" || model.adapter === "claude-cli") return ANTHROPIC_EFFORT_TIERS;
+  if (ANTHROPIC_ADAPTERS.has(model.adapter)) return ANTHROPIC_EFFORT_TIERS;
   return [];
 }
 
 function thinkingField(model) {
-  return model.adapter === "builtin-anthropic" || model.adapter === "claude-cli" ? "effort" : "tier";
+  return ANTHROPIC_ADAPTERS.has(model.adapter) ? "effort" : "tier";
 }
 
 // ── policy readers ────────────────────────────────────────────────────
@@ -217,7 +222,7 @@ function fallbackRule(policy) {
 
 /**
  * Rules for phases NOT in the visible PHASES list (e.g. brownfield's
- * `discovery`, `change_plan` in `antigravity-flash38-plus-opus5.yaml`). The console UI
+ * `change_plan` in `antigravity-flash38-plus-opus5.yaml`). The console UI
  * only renders 9 phases, but the base policy may name more. Without this,
  * buildCustomPolicy iterates only PHASES and silently drops those rules
  * on save — a data-loss regression from the old TypeScript app. Skip the
@@ -324,7 +329,7 @@ export function buildCustomPolicy(base, input) {
   }
 
   // Carry through rules for phases the console UI doesn't edit — brownfield's
-  // discovery / change_plan in antigravity-flash38-plus-opus5.yaml is the concrete case. Old
+  // change_plan in antigravity-flash38-plus-opus5.yaml is the concrete case. Old
   // code silently dropped these on save; a saved custom policy would then fall
   // through to the default for those phases.
   if (Array.isArray(structural.extraPhaseRules)) {
@@ -602,7 +607,7 @@ const server = createServer(async (req, res) => {
 
 export { summarizePolicy, renderPolicyYaml, SHIPPED_PRESETS, ADAPTER_LABEL };
 
-if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
+if (isMain(import.meta.url)) {
   const args = parseArgs(process.argv.slice(2));
   server.listen(args.port, args.host, () => {
     process.stderr.write(`policy-server: listening on http://${args.host}:${args.port}\n`);

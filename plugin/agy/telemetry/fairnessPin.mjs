@@ -15,11 +15,10 @@ export const BILLING_MODES = new Set(["seat", "gemini-api-key"]);
 
 /**
  * Live checks the headless pin depends on (p1-agy-runtime.md, "Pins chosen").
- * Recorded 2026-09-17 on agy 1.2.5. Print mode loads no workspace
- * customization (no plugin, no MCP server, no hooks), so a headless run
- * dispatches through plugin/agy/dispatch.mjs (pattern b) and checks 1 and 5
- * (the MCP route, ${VAR} in mcp_config.json) are interactive-only — they do
- * not gate a headless run. Flip an entry only with the result in the doc.
+ * Recorded 2026-09-17 on agy 1.2.5. A headless run dispatches through
+ * plugin/agy/dispatch.mjs (pattern b), so checks 1 and 5 (the MCP route,
+ * ${VAR} in mcp_config.json) do not gate it, even though agy 1.3.5's print
+ * mode loads the plugin's MCP server and hooks (check 1, re-checked 2026-10-14). Flip an entry only with the result in the doc.
  */
 export const LIVE_PIN_CHECKS = {
   2: "pass", // dispatch.mjs reaches the bridge from a print-mode session, with and without --sandbox
@@ -32,6 +31,20 @@ export function pendingPinChecks(checks = LIVE_PIN_CHECKS) {
   return Object.entries(checks)
     .filter(([, state]) => state !== "pass")
     .map(([n]) => Number(n));
+}
+
+/**
+ * Passed checks prove the pin can be asserted, not that it held: `verified`
+ * also needs a model agy itself recorded conducting the run, every one of
+ * them the pin. `observed` is every model name agy reported (the headless
+ * stream, the local conversation record); `offPin` the ones that are not the
+ * pin (event-reader.mjs offPinModels).
+ */
+export function pinVerification({ pending = pendingPinChecks(), observed = [], offPin = [] } = {}) {
+  if (offPin.length) return { verified: false, unverified_reason: "model_mismatch" };
+  if (pending.length) return { verified: false, unverified_reason: "pending_checks" };
+  if (!observed.length) return { verified: false, unverified_reason: "no_model_observed" };
+  return { verified: true };
 }
 
 export function readPin(policy) {
@@ -82,9 +95,9 @@ export function assertPinnedInvocation(intended, policy) {
 
 /**
  * The `result` event is the only place agy reports an error for the whole
- * turn; a rejected model slug lands in `result.error`. Nothing in the
- * stream echoes back which model answered, so this can prove a failure,
- * never a success.
+ * turn; a rejected model slug lands in `result.error`. This can prove a
+ * failure, never a success: success is pinVerification's, from the models
+ * agy reported.
  */
 export function findPinRejection(events) {
   for (const ev of events) {

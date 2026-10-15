@@ -1,14 +1,15 @@
 # The official antigravity harness policy: Gemini 3.8 Flash conducts on agy,
-# Opus 5 answers the judgment phases through the Claude Agent SDK (`claude -p`),
-# Gemini 3.8 Flash answers the mechanical phases. Same rule grammar, select
-# slots and cost cap as the Claude harness's opus-plus-flash-v38.yaml, which this is
-# modeled on (kept as a bridge test fixture, not shipped here).
+# Opus 5 answers the judgment phases through the Claude Agent SDK, Gemini 3.8
+# Flash answers the mechanical phases. Same rule grammar, select slots and cost
+# cap as the Claude harness's opus-plus-flash-v38.yaml, which this is modeled on
+# (kept as a bridge test fixture, not shipped here).
 #
 # Arm A (Anthropic key) and arm B (Vertex) run THIS SAME FILE. The arm is the
 # bridge's environment, not a policy field: arm A sets ANTHROPIC_API_KEY; arm B
 # sets CLAUDE_CODE_USE_VERTEX=1, ANTHROPIC_VERTEX_PROJECT_ID and
-# CLOUD_ML_REGION=global. The claude-cli adapter spawns `claude` with the
-# bridge's environment, so the same adapter reaches either wallet.
+# CLOUD_ML_REGION=global. The claude-agent-sdk adapter lets the SDK inherit the
+# bridge's environment, so the same adapter reaches either wallet — as does the
+# claude.ai seat, the third door.
 version: 1
 name: antigravity-flash38-plus-opus5
 
@@ -36,20 +37,25 @@ driver:
 
 models:
   - id: opus
-    adapter: claude-cli
+    adapter: claude-agent-sdk
     model_name: claude-opus-5
-    # Passed to `claude -p --effort`, so Opus is thinking-matched to the Claude
-    # Code harness runs. P1 check 7.
+    # Passed as the SDK's `effort` option, so Opus is thinking-matched to the
+    # Claude Code harness runs. P1 check 7.
     reasoning: { effort: high }
     # Opus 5 list card: input 5.00 / cached 0.50 / output 25.00 per 1M; cache
     # writes 1.25x (5m) or 2x (1h) of input. Arm B bills the GCP project at the
     # Vertex Claude card instead — pin that card in prices.ts before the first
-    # arm-B run; `claude -p`'s total_cost_usd is a check there, not the figure
+    # arm-B run; the SDK's own total_cost_usd is a check there, not the figure
     # of record.
     pricing: { input: 5.00, input_cached: 0.50, output: 25.00 }
     pricing_source: https://platform.claude.com/docs/en/about-claude/pricing
     pricing_last_verified: 2026-09-14
     max_output_tokens_absolute: 32000
+    # Sent as the SDK's settings.promptCacheTtl. Unset, Claude Code caches for
+    # 1h on the seat and 5m on arms A and B, so the wallet would set the
+    # cache-write rate. 1h because cross-packet reads land 13-17 min apart.
+    # Each event records the lifetime its writes used (prompt_cache_ttl).
+    prompt_cache_ttl: 1h
 
   # Gemini 3.8 Flash as a MODEL. One completion call per packet. Works on
   # GEMINI_API_KEY (AI Studio) or, unset, Vertex ADC at the same rates.
@@ -64,6 +70,10 @@ models:
     pricing_source: https://ai.google.dev/gemini-api/docs/pricing (AI Studio + Vertex global); https://cloud.google.com/vertex-ai/generative-ai/pricing (regional +10%)
     pricing_last_verified: 2026-09-14
     auth: { env: GEMINI_API_KEY }
+    # Sent as thinkingConfig.thinkingLevel LOW. Thinking counts against the
+    # output ceiling below and bills at the output rate; each attempt records
+    # the level and its thinking tokens.
+    reasoning: { tier: low }
     max_output_tokens_absolute: 8192
 
   # The SAME model reached as an AGENT (Antigravity SDK session). Vertex ADC
@@ -87,6 +97,12 @@ select:
     reason: "How the mechanical tier reaches Gemini 3.8: one completion call (cheap, predictable) or an agent session with tools and a workspace (costlier per packet, does its own reading and editing). Pick one per study and pin it."
 
 rules:
+  # The brownfield pre-check's dispatch smoke (brownfield-guide step 2). It
+  # proves the mechanical tier answers; preflight_dispatch already proves every
+  # model is reachable for free, so the smoke never needs Opus.
+  - when: { task_type: smoke }
+    use: gemini-flash
+    reason: "Pre-check dispatch smoke: proves the mechanical tier answers"
   - when: { phase: requirements_analysis }
     use: opus
     reason: "Judgment-heavy, low volume"
@@ -103,14 +119,27 @@ rules:
     use: opus
     reason: "Risk-bearing, low volume"
 
-  # Brownfield-mode phases — both premium.
-  - when: { phase: discovery }
-    use: opus
-    reason: "Judgment: understanding an unknown repo is high-stakes"
+  # Brownfield. No discovery rule: discovery is the conductor's own local
+  # read (brownfield-guide/discovery.md), logged as an in_session row.
   - when: { phase: change_plan }
     use: opus
     reason: "Judgment: delta design for feature-extend / refactor / deps"
 
+  # Root-cause analysis emits a note, not code; whichever phase the planner
+  # files it under, it is judgment.
+  - when: { task_type: bug_diagnose }
+    use: opus
+    reason: "Judgment: root-cause analysis"
+
+  # Above the codegen and tests rules, which would otherwise keep a failing
+  # packet on the mechanical tier forever.
+  - when: { phase: [codegen, tests], retry_count: { gte: 2 } }
+    use: opus
+    reason: "Escalation: 2 mechanical-tier attempts failed"
+
+  # The task types pipeline/SKILL.md and stacks/*.md tell the planner to
+  # use. An unlisted type falls to the default below and is stamped
+  # routing.fallback.
   - when:
       phase: codegen
       task_type:
@@ -130,6 +159,24 @@ rules:
         - frontend_util
         - frontend_config
         - frontend_html
+        - prisma_schema
+        - env_docs
+        - env_test_fixture
+        - test_unit
+        - test_integration
+        - docstring
+        - readme_section
+        - new_file_add
+        - existing_file_edit
+        - patch_apply
+        - bug_reproduce
+        - bug_fix_apply
+        - refactor_extract
+        - dependency_add
+        - test_add
+        - test_backfill
+        - doc_addition
+        - doc_update
     use: gemini-flash
     reason: "Schema-driven boilerplate"
   - when: { phase: tests }

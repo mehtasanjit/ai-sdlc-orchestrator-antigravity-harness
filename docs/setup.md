@@ -8,10 +8,10 @@ Everything you need to prepare your machine for a run. [INSTALL.md](../INSTALL.m
 
 | Item | Verify with | Notes |
 |---|---|---|
-| Node.js 20+ | `node --version` | The bridge, the driver and the setup scripts. |
+| Node.js 22.19+ | `node --version` | The bridge, the driver and the setup scripts. |
 | Antigravity CLI `agy` ≥ 1.2.3 | `agy --version` | `curl -fsSL https://antigravity.google/cli/install.sh \| bash` installs to `~/.local/bin/agy`; open a new shell. |
 | Google sign-in for agy | `agy models` lists models | Run `agy` once with no arguments and finish the browser flow. A person does this; it cannot be done headlessly. |
-| Claude Code `claude` | `claude --version` | The `claude-cli` adapter spawns `claude -p` for every Opus call. |
+| Claude Code `claude` | `claude --version` | Its sign-in is the seat wallet, and `claude -p` probes arm B. The shipped `claude-agent-sdk` adapter runs Claude Code in-process through `@anthropic-ai/claude-agent-sdk` for every Opus call. |
 | git | `git --version` | Brownfield needs ≥ 2.30. |
 | macOS, Linux, or WSL2 | — | POSIX bash. |
 
@@ -44,13 +44,13 @@ No variable. agy signs in with your Google account and the conductor runs on tha
 
 ### The Claude wallet — two arms and the seat
 
-Every wallet runs the same policy file and the same `claude-cli` adapter. The wallet is the environment the bridge is launched with, or, with nothing exported, Claude Code's own sign-in.
+Every wallet runs the same policy file and the same `claude-agent-sdk` adapter. The wallet is the environment the bridge is launched with, or, with nothing exported, Claude Code's own sign-in.
 
 | | Arm A | Arm B | Seat |
 |---|---|---|---|
 | Wallet | Anthropic API key | GCP project, Google's invoice, Google's published Claude rates | A claude.ai subscription (Pro / Max) that Claude Code is signed in to |
 | Env | `ANTHROPIC_API_KEY` | `CLAUDE_CODE_USE_VERTEX=1` `ANTHROPIC_VERTEX_PROJECT_ID=<gcp-project>` `CLOUD_ML_REGION=global` + ADC | nothing — `claude auth status` shows `authMethod: claude.ai` |
-| Cost of record | tokens from the `claude -p` result × the Anthropic card — cash | tokens from the same result × the Vertex Claude card; the GCP invoice is the receipt — cash | tokens × the Anthropic card — **modeled**; no invoice exists |
+| Cost of record | tokens from the SDK result × the Anthropic card — cash | tokens from the same result × the Vertex Claude card; the GCP invoice is the receipt — cash | tokens × the Anthropic card — **modeled**; no invoice exists |
 | Gate | key present | project active, Claude enabled in Model Garden (24–48 h approval), `roles/aiplatform.user`, quota in region | signed in once with `claude` |
 | Study use | yes | yes | wiring and development runs; a study cost of record on it needs the owner's sign-off |
 
@@ -128,7 +128,7 @@ Scripted: `node tools/setup.mjs --policy=<name>`, or `node plugin/scripts/setup-
 ## Install from the clone
 
 ```bash
-git clone --branch feat/antigravity-harness-implementation https://github.com/tl-ai-labs/ai-sdlc-orchestrator-antigravity-harness.git
+git clone --branch develop https://github.com/tl-ai-labs/ai-sdlc-orchestrator-antigravity-harness.git
 cd ai-sdlc-orchestrator-antigravity-harness
 npm ci && npm run build && npm test
 node tools/setup.mjs --project-root /path/to/your/project

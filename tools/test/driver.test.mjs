@@ -16,12 +16,16 @@ import { fileURLToPath } from "node:url";
 import {
   buildAgyArgs,
   buildRunArtifacts,
+  priorInvocations,
+  assertResumable,
+  terminated,
   loadPolicyFile,
   renderPrompt,
   renderSkills,
   renderHandover,
   validIntents,
   runIsComplete,
+  summaryAtLaunch,
   envPresence,
   redactPrompt,
   pinGateMessage,
@@ -32,6 +36,7 @@ import {
   DEFAULT_PRINT_TIMEOUT,
   PLUGIN_ROOT,
   HARNESS_ROOT,
+  driverModelCheck,
   parseArgs as parseRunArgs,
 } from "../../plugin/agy/run.mjs";
 import {
@@ -191,6 +196,16 @@ test("renderHandover emits nothing when no job was supplied, and the keys the gu
   assert.match(block, /^seed_description: line one line two$/m);
 });
 
+test("renderHandover marks an inferred intent, and only an inferred one", () => {
+  const inferred = renderHandover({ mode: "brownfield", intent: "docs", seed: "x", intentSource: "inferred" });
+  assert.match(inferred, /^intent: docs$/m);
+  assert.match(inferred, /^intent_source: inferred$/m);
+  for (const intentSource of ["flag", undefined]) {
+    const block = renderHandover({ mode: "brownfield", intent: "docs", seed: "x", intentSource });
+    assert.ok(!/intent_source/.test(block), `intentSource=${intentSource} must not mark the handover`);
+  }
+});
+
 test("an empty handover leaves no stray placeholder in the rendered prompt", () => {
   const template = readFileSync(join(ROOT, "plugin", "agy", "prompts", "conductor.md"), "utf8");
   assert.match(template, /\{\{HANDOVER\}\}/);
@@ -200,15 +215,44 @@ test("an empty handover leaves no stray placeholder in the rendered prompt", () 
 // ── run artifacts ─────────────────────────────────────────────────────────
 
 test("runIsComplete keys on SUMMARY.md, the artifact only the final phase writes", () => {
-  assert.equal(runIsComplete("/o", (p) => p.endsWith("SUMMARY.md")), true);
-  assert.equal(runIsComplete("/o", () => false), false);
+  assert.equal(runIsComplete("/o", null, { exists: (p) => p.endsWith("SUMMARY.md") }), true);
+  assert.equal(runIsComplete("/o", null, { exists: () => false }), false);
+});
+
+test("a SUMMARY.md older than this run's start does not mark this run complete", () => {
+  const exists = () => true;
+  const stat = () => ({ mtimeMs: Date.parse("2026-10-12T10:00:00Z") });
+  assert.equal(runIsComplete("/o", "2026-10-13T09:00:00Z", { exists, stat }), false, "an earlier run's summary");
+  assert.equal(runIsComplete("/o", "2026-10-12T09:00:00Z", { exists, stat }), true, "written after this run started");
+});
+
+test("a SUMMARY.md a fresh launch found in its folder ends the run only once it changes, however close its mtime", () => {
+  const exists = () => true;
+  const at = Date.parse("2026-10-14T04:44:36.200Z");
+  const since = "2026-10-14T04:44:36.500Z"; // inside the one-second slack
+  const before = { mtimeMs: at, text: "# first" };
+  const unchanged = { exists, stat: () => ({ mtimeMs: at }), read: () => "# first" };
+  assert.equal(runIsComplete("/o", since, unchanged), true, "without the snapshot the slack would take it as this run's");
+  assert.equal(runIsComplete("/o", since, { ...unchanged, before }), false, "the earlier run's summary, untouched");
+  assert.equal(runIsComplete("/o", since, { exists, stat: () => ({ mtimeMs: at + 900 }), read: () => "# third", before }), true, "rewritten by this run");
+  assert.equal(runIsComplete("/o", since, { exists, stat: () => ({ mtimeMs: at }), read: () => "# third", before }), true, "rewritten within the same whole-second mtime");
+  assert.equal(summaryAtLaunch("/o", { exists: () => false }), null);
+  assert.deepEqual(summaryAtLaunch("/o", unchanged), before);
+});
+
+test("each run gets its own folder; brownfield edits the project root, greenfield writes src/", async () => {
+  const { defaultOutputDir, defaultCodeDir } = await import("../../plugin/agy/run.mjs");
+  assert.equal(defaultOutputDir("/p", "r7"), join("/p", ".sdlc", "runs", "r7"));
+  assert.equal(defaultCodeDir("/p", "brownfield"), "/p");
+  assert.equal(defaultCodeDir("/p", "greenfield"), join("/p", "src"));
+  assert.equal(defaultCodeDir("/p", undefined), join("/p", "src"));
 });
 
 const STREAM = [
   JSON.stringify({ event: "init", conversation_id: "c1", model: SLUG }),
   JSON.stringify({ event: "step_update", step: { tool_call: { name: "mcp_tool" }, step_idx: 3 } }),
   JSON.stringify({ event: "result", result: { conversation_id: "c1", status: "OK", response: "done", num_turns: 4,
-    usage: { input_tokens: 1000, output_tokens: 200, thinking_tokens: 50, cache_read_tokens: 400, total_tokens: 1650 } } }),
+    usage: { input_tokens: 1000, output_tokens: 250, thinking_tokens: 50, cache_read_tokens: 400, total_tokens: 1250 } } }),
 ].join("\n");
 
 test("buildRunArtifacts models the driver's own cost from the result usage, labelled modeled", () => {
@@ -220,12 +264,185 @@ test("buildRunArtifacts models the driver's own cost from the result usage, labe
   assert.equal(e.provenance, "modeled");
   assert.equal(e.tier, "orchestrator");
   assert.equal(e.billing_mode, "seat");
-  assert.equal(e.input_tokens, 600, "input is split so cache reads are not priced twice");
+  // agy 1.3.0's layout (check 17): total_tokens 1250 = 1000 + 250; the cache reads sit beside input_tokens.
+  assert.equal(e.token_reading, "cache-outside-total+thinking-in-output");
+  assert.equal(e.token_reading_check, "adds_up");
+  assert.equal(e.input_tokens, 1000, "the counters' own total says input_tokens holds no cache reads");
   assert.equal(e.input_tokens_cached, 400);
   assert.equal(e.output_tokens, 250, "thinking tokens bill at the output rate");
   assert.equal(e.output_tokens_reasoning, 50);
-  const expected = (600 * 0.75 + 400 * 0.075 + 250 * 3.75) / 1e6;
-  assert.equal(e.cost_usd, Math.round(expected * 1e6) / 1e6, "priced by computeCostUsd, rounded to 6 places");
+  const expected = (1000 * 0.75 + 400 * 0.075 + 250 * 3.75) / 1e6;
+  assert.ok(Math.abs(e.cost_usd - expected) <= 1e-6, `priced by computeCostUsd: ${e.cost_usd} vs ${expected}`);
+});
+
+const resultWith = (usage) => JSON.stringify({ event: "result", result: { conversation_id: "c1", status: "OK", usage } });
+
+test("a result in agy 1.3.0's layout is booked under the reading check 17 recorded", () => {
+  const book = (usage) => buildRunArtifacts({ jsonl: resultWith(usage), pin: PIN, passId: "r", policyName: DEFAULT_POLICY, now: () => "T" });
+  const { modeled, driverUsage } = book({ input_tokens: 600, output_tokens: 250, thinking_tokens: 50, cache_read_tokens: 400, total_tokens: 850 });
+  assert.equal(modeled[0].token_reading, "cache-outside-total+thinking-in-output");
+  assert.equal(modeled[0].token_reading_check, "adds_up");
+  assert.deepEqual([modeled[0].input_tokens, modeled[0].input_tokens_cached, modeled[0].output_tokens], [600, 400, 250]);
+  assert.equal(driverUsage.results_with_unproven_reading, undefined);
+});
+
+test("a result only another layout adds up to is booked under it and flagged, because agy changed its counters", () => {
+  const { modeled, driverUsage } = buildRunArtifacts({ jsonl: resultWith({ input_tokens: 1000, output_tokens: 200, thinking_tokens: 50, cache_read_tokens: 400, total_tokens: 1600 }), pin: PIN, passId: "r", policyName: DEFAULT_POLICY, now: () => "T" });
+  assert.equal(modeled[0].token_reading, "cache-apart+thinking-in-output");
+  assert.equal(modeled[0].token_reading_check, "not_recorded_layout");
+  assert.deepEqual([modeled[0].input_tokens, modeled[0].output_tokens, modeled[0].output_tokens_reasoning], [1000, 200, 50]);
+  assert.equal(driverUsage.results_with_unproven_reading, 1);
+});
+
+test("counters that add up to no reading, or no total, are booked at the dearest reading and flagged", () => {
+  for (const [usage, check] of [
+    [{ input_tokens: 1000, output_tokens: 200, thinking_tokens: 50, cache_read_tokens: 400, total_tokens: 9999 }, "does_not_add_up"],
+    [{ input_tokens: 1000, output_tokens: 200, thinking_tokens: 50, cache_read_tokens: 400 }, "no_total"],
+  ]) {
+    const { modeled, driverUsage } = buildRunArtifacts({ jsonl: resultWith(usage), pin: PIN, passId: "r", policyName: DEFAULT_POLICY, now: () => "T" });
+    assert.equal(modeled[0].token_reading_check, check);
+    assert.equal(modeled[0].input_tokens, 1000, "nothing subtracted");
+    assert.equal(modeled[0].output_tokens, 250, "thinking added");
+    assert.equal(driverUsage.results_with_unproven_reading, 1);
+  }
+});
+
+test("two readings that both add up but price differently book the dearer and say ambiguous", () => {
+  // cache 50 and thinking 50: input+output+thinking and input+cache+output are both 1250.
+  const usage = { input_tokens: 1000, output_tokens: 200, thinking_tokens: 50, cache_read_tokens: 50, total_tokens: 1250 };
+  const e = buildRunArtifacts({ jsonl: resultWith(usage), pin: PIN, passId: "r", policyName: DEFAULT_POLICY, now: () => "T" }).modeled[0];
+  assert.equal(e.token_reading_check, "ambiguous");
+  assert.equal(e.token_reading, "cache-outside-total+thinking-apart", "thinking at the output rate and nothing subtracted from input is the dearest");
+});
+
+test("the driver line is priced from the dated list on the day each agy process started", () => {
+  const usage = { input_tokens: 1_000_000, output_tokens: 0, thinking_tokens: 0, cache_read_tokens: 0, total_tokens: 1_000_000 };
+  const driver = { model_name: "gemini-3.8-flash", pricing: PIN.pricing };
+  const { modeled, driverUsage } = buildRunArtifacts({
+    invocations: [
+      { stdout: resultWith(usage), status: 0, wall_ms: 1, started_at: "2026-12-31T23:00:00Z" },
+      { stdout: JSON.stringify({ event: "result", result: { conversation_id: "c2", status: "OK", usage } }), status: 0, wall_ms: 1, started_at: "2027-01-01T01:00:00Z" },
+    ],
+    pin: PIN, passId: "r", policyName: DEFAULT_POLICY, now: () => "T", driver,
+  });
+  assert.deepEqual(modeled.map((e) => e.cost_usd), [0.75, 1.5], "the introductory card ends 31 Dec 2026; the next card bills from 1 Jan 2027");
+  assert.deepEqual(modeled.map((e) => e.price_period.from), ["2026-09-02", "2027-01-01"]);
+  assert.equal(modeled[0].price_basis, "list");
+  assert.ok(driverUsage.price_warnings?.length, "the 2026 card in the driver block differs from the 2027 list and says so");
+});
+
+test("turns on a day the driver has no price are flagged, never lost and never guessed", () => {
+  const driver = { model_name: "gemini-3.8-flash", pricing: PIN.pricing };
+  const { modeled, driverUsage } = buildRunArtifacts({ invocations: [{ stdout: STREAM, status: 0, wall_ms: 1, started_at: "2026-08-01T00:00:00Z" }], pin: PIN, passId: "r", policyName: DEFAULT_POLICY, now: () => "T", driver });
+  assert.equal(modeled.length, 1);
+  assert.equal(modeled[0].cost_usd, 0);
+  assert.match(modeled[0].unpriced, /driver model 'gemini-3\.8-flash' has no price on 2026-08-01/);
+  assert.equal(driverUsage.unpriced_turns, 1);
+});
+
+test("a resume carries the events a launch streamed before it died, past the recorded boundaries", () => {
+  const dir = tmp();
+  try {
+    const first = [JSON.stringify({ event: "init", conversation_id: "c1" }), JSON.stringify({ event: "result", result: { conversation_id: "c1", status: "OK", usage: { input_tokens: 10, output_tokens: 1, total_tokens: 11 } } })];
+    const dead = [JSON.stringify({ event: "init", conversation_id: "c1" }), JSON.stringify({ event: "result", result: { conversation_id: "c1", status: "OK", usage: { input_tokens: 30, output_tokens: 3, total_tokens: 33 } } })];
+    writeFileSync(join(dir, "driver-events.jsonl"), [...first, ...dead].join("\n") + "\n");
+    writeFileSync(join(dir, "driver-manifest.json"), JSON.stringify({ conversation_id: "c1", driver_usage: { invocations: [{ lines: 2, exit_status: 0 }] } }));
+    const prior = priorInvocations(dir, "c1");
+    assert.equal(prior.invocations.length, 2, "the recorded launch and the one that died before its record");
+    assert.match(prior.invocations[1].stdout, /"input_tokens":30/);
+
+    rmSync(join(dir, "driver-manifest.json"));
+    assert.equal(priorInvocations(dir, "c1").invocations.length, 2, "no record at all: the stream is split at each init");
+    assert.equal(priorInvocations(dir, "other").invocations.length, 0);
+  } finally { cleanup(dir); }
+});
+
+test("a model the stream names is recorded, and one that is not the pin is flagged", () => {
+  const ok = buildRunArtifacts({ jsonl: STREAM, pin: PIN, passId: "r", policyName: DEFAULT_POLICY, now: () => "T" });
+  assert.deepEqual(ok.reportedModels, [SLUG]);
+  assert.deepEqual(ok.offPinModels, []);
+  const other = STREAM.replace(`"model":"${SLUG}"`, '"model":"gemini-3.1-pro-high"');
+  assert.deepEqual(buildRunArtifacts({ jsonl: other, pin: PIN, passId: "r", policyName: DEFAULT_POLICY, now: () => "T" }).offPinModels, ["gemini-3.1-pro-high"]);
+  assert.deepEqual(buildRunArtifacts({ jsonl: resultWith({ input_tokens: 1, total_tokens: 1 }), pin: PIN, passId: "r", policyName: DEFAULT_POLICY, now: () => "T" }).reportedModels, [], "agy names no model: nothing to check, nothing assumed");
+});
+
+test("a model only agy's local record names is checked against the pin like a streamed one", () => {
+  const onPin = driverModelCheck({ streamModels: [SLUG], localRecord: { found: true, models: [SLUG] }, pin: PIN, pending: [] });
+  assert.deepEqual(onPin, { observed: [SLUG], offPin: [], verification: { verified: true } });
+  const recordOnly = driverModelCheck({ streamModels: [SLUG], localRecord: { found: true, models: ["gemini-3.1-pro-high"] }, pin: PIN, pending: [] });
+  assert.deepEqual(recordOnly.offPin, ["gemini-3.1-pro-high"], "the mismatch is reported, not only folded into verified:false");
+  assert.deepEqual(recordOnly.verification, { verified: false, unverified_reason: "model_mismatch" });
+  assert.deepEqual(driverModelCheck({ streamModels: [], localRecord: null, pin: PIN, pending: [] }).verification, { verified: false, unverified_reason: "no_model_observed" });
+});
+
+test("buildRunArtifacts records each invocation's line count, so a later --resume can split the stream", () => {
+  const second = JSON.stringify({ event: "result", result: { conversation_id: "c1", status: "OK", usage: { input_tokens: 3000, output_tokens: 400, thinking_tokens: 60, cache_read_tokens: 900, total_tokens: 3460 } } });
+  const { modeled, driverUsage } = buildRunArtifacts({
+    invocations: [{ stdout: STREAM, status: 0, wall_ms: 10 }, { stdout: second, status: 0, wall_ms: 20 }],
+    pin: PIN, passId: "r1", policyName: DEFAULT_POLICY, now: () => "T",
+  });
+  assert.deepEqual(modeled.map((e) => e.invocation), [1, 2]);
+  assert.deepEqual(driverUsage.invocations.map((i) => i.lines), [3, 1], "an unterminated last line still counts as a line");
+  assert.equal(driverUsage.resume_check.check, 16);
+});
+
+test("a pin rejection in a carried invocation is not reported again by the launch that resumes it", () => {
+  const rejected = JSON.stringify({ event: "result", result: { conversation_id: "c1", status: "ERROR", error: "model is overloaded, try again later", usage: {} } });
+  const ok = JSON.stringify({ event: "result", result: { conversation_id: "c1", status: "OK", usage: { input_tokens: 10, output_tokens: 1, thinking_tokens: 0, cache_read_tokens: 0, total_tokens: 11 } } });
+  const carried = buildRunArtifacts({ invocations: [{ stdout: rejected, carried: true }, { stdout: ok, status: 0 }], pin: PIN, passId: "r1" });
+  assert.equal(carried.rejection, null);
+  const fresh = buildRunArtifacts({ invocations: [{ stdout: rejected, status: 1 }], pin: PIN, passId: "r1" });
+  assert.match(fresh.rejection, /model/);
+});
+
+test("assertResumable refuses to carry a record made under another pin or policy", () => {
+  const prior = { invocations: [{ stdout: "", carried: true }], pin: { slug: "gemini-3.8-flash-high" }, policy: "p1" };
+  assert.doesNotThrow(() => assertResumable(prior, { slug: "gemini-3.8-flash-high", policyName: "p1" }));
+  assert.throws(() => assertResumable(prior, { slug: "gemini-3.1-pro-high", policyName: "p1" }), /ran on 'gemini-3\.8-flash-high'.*--policy=p1/);
+  assert.throws(() => assertResumable(prior, { slug: "gemini-3.8-flash-high", policyName: "p2" }), /ran under policy 'p1'/);
+  assert.doesNotThrow(() => assertResumable({ invocations: [], pin: { slug: "x" }, policy: "y" }, { slug: "z", policyName: "w" }), "nothing carried, nothing to compare");
+});
+
+test("a resume that carries no earlier record is flagged, since check 16 decides what its first counters include", () => {
+  const ok = JSON.stringify({ event: "result", result: { conversation_id: "c1", status: "OK", usage: { input_tokens: 10, output_tokens: 1, thinking_tokens: 0, cache_read_tokens: 0, total_tokens: 11 } } });
+  assert.equal(buildRunArtifacts({ invocations: [{ stdout: ok }], pin: PIN, passId: "r1", resumedFirst: true }).driverUsage.resumed_without_earlier_record, true);
+  assert.equal(buildRunArtifacts({ invocations: [{ stdout: ok }], pin: PIN, passId: "r1" }).driverUsage.resumed_without_earlier_record, undefined);
+});
+
+test("terminated adds the missing newline, so two invocations never share a line", () => {
+  assert.equal(terminated('{"a":1}'), '{"a":1}\n');
+  assert.equal(terminated('{"a":1}\n'), '{"a":1}\n');
+  assert.equal(terminated(""), "");
+  assert.equal(terminated(undefined), "");
+});
+
+test("priorInvocations reads the earlier launch of the same conversation back, split at the recorded boundaries", () => {
+  const dir = tmp();
+  try {
+    const a = '{"event":"init","conversation_id":"c1"}\n{"event":"result","result":{"conversation_id":"c1","usage":{"input_tokens":1}}}\n';
+    const b = '{"event":"result","result":{"conversation_id":"c1","usage":{"input_tokens":2}}}\n';
+    writeFileSync(join(dir, "driver-events.jsonl"), a + b);
+    writeFileSync(join(dir, "driver-manifest.json"), JSON.stringify({ conversation_id: "c1", started_at: "S", driver_usage: { invocations: [{ lines: 2, exit_status: 0, wall_ms: 9 }, { lines: 1, exit_status: 1, wall_ms: 4 }] } }));
+    const prior = priorInvocations(dir, "c1");
+    assert.equal(prior.started_at, "S");
+    assert.deepEqual(prior.invocations.map((i) => [terminated(i.stdout), i.status, i.wall_ms, i.carried]), [[a, 0, 9, true], [b, 1, 4, true]]);
+    assert.deepEqual(priorInvocations(dir, "other").invocations, [], "a different conversation carries nothing");
+    assert.deepEqual(priorInvocations(dir, null).invocations, []);
+
+    writeFileSync(join(dir, "driver-manifest.json"), JSON.stringify({ conversation_id: "c1", agy_exit_status: 0, pin: { slug: "s" }, policy: "p" }));
+    const legacy = priorInvocations(dir, "c1");
+    assert.equal(legacy.invocations.length, 1, "no recorded boundaries and one init: one invocation");
+    assert.equal(terminated(legacy.invocations[0].stdout), a + b);
+    assert.deepEqual([legacy.pin, legacy.policy], [{ slug: "s" }, "p"]);
+
+    const second = '{"event":"init","conversation_id":"c1"}\n' + b;
+    writeFileSync(join(dir, "driver-events.jsonl"), a + second);
+    const split = priorInvocations(dir, "c1");
+    assert.deepEqual(split.invocations.map((i) => terminated(i.stdout)), [a, second], "a pre-boundary stream is split at each init event");
+
+    writeFileSync(join(dir, "driver-manifest.json"), "not json");
+    assert.equal(priorInvocations(dir, "c1").invocations.length, 2, "an unreadable record: the streamed events of the same conversation are still carried");
+  } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
 test("buildRunArtifacts surfaces a pin rejection from the result envelope", () => {
@@ -274,11 +491,61 @@ test("run.mjs --dry-run prints the pinned invocation without spawning agy, secre
   } finally { cleanup(dir); }
 });
 
+function dryRun(dir, ...flags) {
+  return spawnSync(process.execPath, [RUN, "--dry-run", `--project-root=${dir}`, `--output-dir=${join(dir, "out")}`, "--run-id=t", ...flags], { encoding: "utf8" });
+}
+
+test("a brownfield --seed with no --intent resolves the job type at launch and records how", () => {
+  const dir = tmp();
+  try {
+    writeFileSync(join(dir, "brief.md"), "# brief\n");
+    const r = dryRun(dir, "--mode=brownfield", '--seed=add README section "Board features" documenting the WIP limit');
+    assert.equal(r.status, 0, r.stderr);
+    const out = JSON.parse(r.stdout);
+    assert.equal(out.mode, "brownfield");
+    assert.deepEqual(out.intent, { resolved: "docs", source: "inferred" });
+  } finally { cleanup(dir); }
+});
+
+test("an explicit --intent is recorded as the flag, even beside a seed that reads differently", () => {
+  const dir = tmp();
+  try {
+    writeFileSync(join(dir, "brief.md"), "# brief\n");
+    const r = dryRun(dir, "--mode=brownfield", "--intent=bugfix", "--seed=extract LaneHeader component from Lane");
+    assert.equal(r.status, 0, r.stderr);
+    assert.deepEqual(JSON.parse(r.stdout).intent, { resolved: "bugfix", source: "flag" });
+  } finally { cleanup(dir); }
+});
+
+test("an ambiguous seed refuses to launch and names the colliding job types", () => {
+  const dir = tmp();
+  try {
+    writeFileSync(join(dir, "brief.md"), "# brief\n");
+    const r = dryRun(dir, "--mode=brownfield", "--seed=fix the 500 and add a regression test");
+    assert.equal(r.status, 1);
+    assert.match(r.stderr, /did not resolve to one job type/);
+    assert.match(r.stderr, /candidates: bugfix, test/);
+    assert.match(r.stderr, /--intent=</);
+  } finally { cleanup(dir); }
+});
+
+test("a seed on a greenfield run is passed through and infers nothing", () => {
+  const dir = tmp();
+  try {
+    writeFileSync(join(dir, "brief.md"), "# brief\n");
+    const r = dryRun(dir, "--seed=extract LaneHeader component from Lane");
+    assert.equal(r.status, 0, r.stderr);
+    const out = JSON.parse(r.stdout);
+    assert.equal(out.mode, null);
+    assert.equal(out.intent, null);
+  } finally { cleanup(dir); }
+});
+
 test("run.mjs reaches the spawn without --allow-unverified-pin now that the headless checks pass", () => {
   const dir = tmp();
   try {
     writeFileSync(join(dir, "brief.md"), "# brief\n");
-    const r = spawnSync(process.execPath, [RUN, `--project-root=${dir}`, "--agy-bin=/nonexistent/agy"], { encoding: "utf8" });
+    const r = spawnSync(process.execPath, [RUN, `--project-root=${dir}`, "--gates=auto-approve", "--agy-bin=/nonexistent/agy"], { encoding: "utf8" });
     assert.equal(r.status, 1);
     assert.match(r.stderr, /could not launch/);
     assert.ok(!/not live-verified/.test(r.stderr));
@@ -290,7 +557,7 @@ test("run.mjs with the override reaches the spawn and reports a missing agy bina
   try {
     writeFileSync(join(dir, "brief.md"), "# brief\n");
     const out = join(dir, "out");
-    const r = spawnSync(process.execPath, [RUN, `--project-root=${dir}`, `--output-dir=${out}`, "--allow-unverified-pin", "--agy-bin=/nonexistent/agy", "--run-id=t"], { encoding: "utf8" });
+    const r = spawnSync(process.execPath, [RUN, `--project-root=${dir}`, `--output-dir=${out}`, "--gates=auto-approve", "--allow-unverified-pin", "--agy-bin=/nonexistent/agy", "--run-id=t"], { encoding: "utf8" });
     assert.equal(r.status, 1);
     assert.match(r.stderr, /could not launch '\/nonexistent\/agy'/);
     assert.ok(existsSync(join(out, "policy_snapshot.yaml")), "the policy is snapshotted at launch");
@@ -329,6 +596,32 @@ test("buildLogEventArgs writes a zero-cost provenance:none event and refuses wit
   assert.equal(args.event.provenance, "none");
   assert.equal(args.event.cost_usd, 0);
   assert.throws(() => buildLogEventArgs({ phase: "docs" }), /--telemetry/);
+  assert.equal(args.event.pass, null);
+  assert.equal(buildLogEventArgs({ phase: "docs", taskType: "skipped", telemetryPath: "/t.jsonl", runId: "r7" }).event.pass, "r7", "--run-id stamps the run");
+});
+
+test("runDispatch stamps the launcher's run id on a packet the conductor stamped otherwise", async () => {
+  const dir = tmp();
+  try {
+    const packetPath = join(dir, "packet.json");
+    writeFileSync(packetPath, JSON.stringify({ id: "p1", phase: "docs", pass_id: "pass1" }));
+    const calls = [];
+    const connect = async () => ({ callTool: async (name, args) => { calls.push(args); return {}; }, close: async () => {} });
+    await runDispatch({ packet: packetPath, out: join(dir, "r.json"), telemetry: join(dir, "t.jsonl"), "run-id": "run-7" }, { connect });
+    assert.equal(calls[0].packet.pass_id, "run-7");
+  } finally { cleanup(dir); }
+});
+
+test("runDispatch refuses a packet dispatch without --telemetry, before connecting to the bridge", async () => {
+  const dir = tmp();
+  try {
+    const packetPath = join(dir, "packet.json");
+    writeFileSync(packetPath, JSON.stringify({ id: "p1", phase: "docs" }));
+    let connected = false;
+    const connect = async () => { connected = true; return { callTool: async () => ({}), close: async () => {} }; };
+    await assert.rejects(() => runDispatch({ packet: packetPath, out: join(dir, "r.json") }, { connect }), /--telemetry=<path> is required for a packet dispatch/);
+    assert.equal(connected, false, "no bridge, so no paid call");
+  } finally { cleanup(dir); }
 });
 
 test("bridgeEnv folds in the stored MMO_SELECT, but an explicit export wins", () => {
@@ -351,8 +644,9 @@ test("runDispatch writes the full result to --out and returns only a summary", a
     const fakeResult = { decision: { modelId: "opus" }, result: { success: true, cost_usd: 0.5 } };
     const calls = [];
     const connect = async () => ({ callTool: async (name, args) => { calls.push({ name, args }); return fakeResult; }, close: async () => {} });
-    const out = await runDispatch({ packet: packetPath, out: outPath, policy: DEFAULT_POLICY }, { connect });
+    const out = await runDispatch({ packet: packetPath, out: outPath, policy: DEFAULT_POLICY, telemetry: join(dir, "telemetry.jsonl") }, { connect });
     assert.equal(calls[0].name, "execute_with_model");
+    assert.equal(calls[0].args.telemetry_path, join(dir, "telemetry.jsonl"));
     assert.equal(calls[0].args.policy_name, DEFAULT_POLICY);
     assert.deepEqual(JSON.parse(readFileSync(outPath, "utf8")), fakeResult);
     assert.match(out.summary, /success=true/);
@@ -374,4 +668,21 @@ test("runDispatch reports ok:false when preflight fails and always closes the br
 
 test("parseDispatchArgs handles --key=value and bare flags", () => {
   assert.deepEqual(parseDispatchArgs(["--packet=/p.json", "--preflight"]), { packet: "/p.json", preflight: true });
+});
+
+test("a headless run never defaults a gate mode and refuses prompt, which nobody can answer in print mode", () => {
+  const dir = tmp();
+  try {
+    writeFileSync(join(dir, "brief.md"), "# brief\n");
+    const launch = (...flags) => spawnSync(process.execPath, [RUN, `--project-root=${dir}`, "--run-id=t", "--agy-bin=/nonexistent/agy", ...flags], { encoding: "utf8" });
+    assert.match(launch().stderr, /--gates=auto-approve or --gates=auto-abort is required/);
+    assert.match(launch("--gates=prompt").stderr, /print mode has none/);
+    assert.equal(spawnSync(process.execPath, [RUN, "--dry-run", `--project-root=${dir}`, "--run-id=t"], { encoding: "utf8" }).status, 0, "a dry run still prints the invocation");
+  } finally { cleanup(dir); }
+});
+
+test("a brownfield handover names the run's id, project root, output and code directories", () => {
+  const h = renderHandover({ mode: "brownfield", intent: "bugfix", runId: "b1", projectRoot: "/p", outputDir: "/p/.sdlc/runs/b1", codeDir: "/p" });
+  for (const line of ["run_id: b1", "project_root: /p", "output_dir: /p/.sdlc/runs/b1", "code_dir: /p"]) assert.ok(h.includes(line), line);
+  assert.ok(!renderHandover({ mode: "greenfield", runId: "g1", projectRoot: "/p" }).includes("project_root"), "greenfield needs none");
 });

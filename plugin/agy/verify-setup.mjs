@@ -27,6 +27,9 @@ import { fileURLToPath } from "node:url";
 
 import { readMmoSelectFile, writeMmoSelectFile } from "./mmoSelect.mjs";
 import { runChecks as runEnvChecks, renderText as renderEnvChecks } from "./env-checks.mjs";
+import { isMain } from "../scripts/lib/is-main.mjs";
+import { staleBuild } from "../scripts/lib/stale-build.mjs";
+import { MIN_NODE, meetsNodeFloor } from "../scripts/lib/node-floor.mjs";
 
 // ─── pure helpers ─────────────────────────────────────────────────────
 
@@ -347,11 +350,16 @@ export function observePolicy(pluginRoot, projectRoot = process.cwd(), read = re
     const adapters = policyAdapters(read(path, "utf8"));
     return {
       name, selected, path, adapters,
+      // Any Claude worker — gates the wallet check, which both transports need.
+      usesClaudeWorker: adapters.includes("claude-agent-sdk") || adapters.includes("claude-cli"),
+      // Only the subprocess transport needs `claude` on PATH. The Agent SDK
+      // ships its own platform binary as an optional dependency, so a policy
+      // on claude-agent-sdk alone runs on a machine with no `claude` at all.
       usesClaudeCli: adapters.includes("claude-cli"),
       usesGemini: adapters.includes("mcp:model-dispatch") || adapters.includes("antigravity-worker"),
     };
   } catch {
-    return { name, selected, path, adapters: null, usesClaudeCli: null, usesGemini: null };
+    return { name, selected, path, adapters: null, usesClaudeWorker: null, usesClaudeCli: null, usesGemini: null };
   }
 }
 
@@ -409,11 +417,13 @@ export function pluginDiscoveryState(pluginRoot, read = readFileSync, exists = e
 /** Facts → ordered problem list. Pure. `blocking` fails the exit code. */
 export function evaluate({
   nodeMajor,
+  nodeVersion = null,
   agyCli = { present: false, version: null },
   claudeCli = { present: false, version: null },
   claudeLogin = null,
   hasNodeModules,
   hasDist,
+  staleBuild = null,
   discovery = { ok: true, problems: [] },
   env = {},
   vertex = null,
@@ -423,12 +433,12 @@ export function evaluate({
 }) {
   const problems = [];
 
-  if (nodeMajor < 20) {
+  if (nodeVersion ? !meetsNodeFloor(nodeVersion) : nodeMajor < 22) {
     problems.push({
       id: "node-version",
       severity: "blocking",
-      message: `Node ${nodeMajor} is too old — the bridge and the driver scripts need Node 20 or newer.`,
-      fix: "Install Node 20+ (https://nodejs.org) and re-run this script.",
+      message: `Node ${nodeVersion ?? nodeMajor} is too old — the bridge needs Node ${MIN_NODE} or newer (its undici dependency requires it).`,
+      fix: `Install Node ${MIN_NODE} or newer (https://nodejs.org) and re-run this script.`,
     });
   }
 
@@ -472,6 +482,14 @@ export function evaluate({
       fix: "Run this script with --fix (or: npm run build at the repo root).",
     });
   }
+  if (hasDist && staleBuild?.stale) {
+    problems.push({
+      id: "mcp-build-stale",
+      severity: "warning",
+      message: `The bundled MCP server's dist/ is older than its src/ (${staleBuild.files.slice(0, 3).join(", ")}): runs use the old build until it is rebuilt.`,
+      fix: "Run this script with --fix (or: npm run build at the repo root).",
+    });
+  }
   if (!hasDist) {
     problems.push({
       id: "mcp-build",
@@ -492,21 +510,27 @@ export function evaluate({
   }
 
   const arm = claudeArmState(env, claudeLogin);
-  if (policy?.usesClaudeCli !== false) {
-    if (claudeCli.unprovable) {
-      problems.push({
-        id: "claude-cli-unprovable",
-        severity: "warning",
-        message: "Could not run `claude --version`; the Opus worker's binary is unproven from here.",
-        fix: "Run this script from a plain terminal.",
-      });
-    } else if (!claudeCli.present) {
-      problems.push({
-        id: "claude-cli",
-        severity: policy?.usesClaudeCli ? "blocking" : "warning",
-        message: `Claude Code (\`claude\`) is not on PATH — the claude-cli adapter spawns \`claude -p\` for every judgment phase${policy?.name ? ` of ${policy.name}` : ""}.`,
-        fix: "Install Claude Code (https://code.claude.com/docs) and sign in or export ANTHROPIC_API_KEY.",
-      });
+  const usesClaudeWorker = policy?.usesClaudeWorker ?? policy?.usesClaudeCli;
+  if (usesClaudeWorker !== false) {
+    // The `claude` binary is only the claude-cli transport's requirement. A
+    // policy on claude-agent-sdk gets its Claude Code from the SDK's own
+    // bundled binary, so a missing `claude` is not a problem there at all.
+    if (policy?.usesClaudeCli !== false) {
+      if (claudeCli.unprovable) {
+        problems.push({
+          id: "claude-cli-unprovable",
+          severity: "warning",
+          message: "Could not run `claude --version`; the Opus worker's binary is unproven from here.",
+          fix: "Run this script from a plain terminal.",
+        });
+      } else if (!claudeCli.present) {
+        problems.push({
+          id: "claude-cli",
+          severity: policy?.usesClaudeCli ? "blocking" : "warning",
+          message: `Claude Code (\`claude\`) is not on PATH — the claude-cli adapter spawns \`claude -p\` for every judgment phase${policy?.name ? ` of ${policy.name}` : ""}.`,
+          fix: "Install Claude Code (https://code.claude.com/docs) and sign in or export ANTHROPIC_API_KEY.",
+        });
+      }
     }
     if (arm.arm === "seat") {
       problems.push({
@@ -518,7 +542,7 @@ export function evaluate({
     } else if (arm.arm === "none") {
       problems.push({
         id: "claude-arm",
-        severity: policy?.usesClaudeCli ? "blocking" : "warning",
+        severity: usesClaudeWorker ? "blocking" : "warning",
         message: "No Claude wallet is selected: no ANTHROPIC_API_KEY (arm A), no CLAUDE_CODE_USE_VERTEX=1 (arm B), and Claude Code is not signed in to claude.ai (seat).",
         fix: `Export one arm's variables in ${ENV_ADVICE}, or sign in once with \`claude\`. See SETUP.md.`,
       });
@@ -616,12 +640,14 @@ function observe(pluginRoot, env = process.env, projectRoot = process.cwd()) {
   const adcFile = adcPath();
   return {
     nodeMajor: nodeMajorFrom(process.versions.node),
+    nodeVersion: process.versions.node,
     agyCli: probeAgyCli(),
     claudeCli: probeClaudeCli(),
     claudeLogin: probeClaudeLogin(),
     hasGcloud: onPath("gcloud"),
     hasNodeModules: existsSync(nodeModules),
     hasDist: existsSync(distEntry),
+    staleBuild: staleBuild(mcpPaths(pluginRoot).serverDir),
     discovery: pluginDiscoveryState(pluginRoot),
     vertex: vertexCredentialState({
       env: realEnv,
@@ -759,7 +785,7 @@ function report({ ok, problems }, log) {
   return ok;
 }
 
-if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
+if (isMain(import.meta.url)) {
   const pluginRoot = dirname(dirname(fileURLToPath(import.meta.url)));
   const log = (m) => console.log(m);
   const shouldFix = process.argv.includes("--fix");

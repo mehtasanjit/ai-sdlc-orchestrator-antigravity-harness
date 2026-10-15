@@ -65,6 +65,14 @@ test("an explicit zero cache-write rate is honored, not treated as unset", () =>
 // compiled source instead — cheap, offline, and they fail loudly if the
 // unbundling or the telemetry field is ever dropped.
 
+test("1-hour cache writes bill at 2x input, 5-minute at 1.25x, disjoint and additive", () => {
+  const card = { input: 4, input_cached: 0.4, output: 20 };
+  assert.equal(computeCostUsd({ input: 0, input_cached: 0, output: 0, input_cache_write: 1_000_000 }, card), 5);
+  assert.equal(computeCostUsd({ input: 0, input_cached: 0, output: 0, input_cache_write_1h: 1_000_000 }, card), 8);
+  assert.equal(computeCostUsd({ input: 0, input_cached: 0, output: 0, input_cache_write: 500_000, input_cache_write_1h: 500_000 }, card), 6.5);
+  assert.equal(computeCostUsd({ input: 0, input_cached: 0, output: 0, input_cache_write_1h: 1_000_000 }, { ...card, input_cache_write_1h: 7 }), 7, "an explicit 1-hour rate wins over the multiplier");
+});
+
 test("BuiltinAnthropicAdapter buckets cache_creation_input_tokens separately (not folded into input)", () => {
   const src = readFileSync(join(DIST, "adapters", "BuiltinAnthropicAdapter.js"), "utf-8");
   assert.match(src, /input_cache_write:\s*usage\?\.cache_creation_input_tokens \?\? 0/);
