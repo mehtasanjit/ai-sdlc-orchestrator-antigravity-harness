@@ -319,13 +319,14 @@ extra confirmation lines with the plugin's default behavior. Example:
 >   into them. Continue? [assumed yes unless you say otherwise]
 
 On `approved`:
-0. Record the answer by code, with the reply word for word:
+0. Record the answer by code. Write the user's reply, word for word, to
+   `.sdlc/runs/<run-id>/gate-reply.txt` with your file tool, then:
    ```bash
    node "${MMO_PLUGIN_ROOT}/scripts/record-gate.mjs" --run-id=<run-id> --gate=0 --decision=approved \
-     --artifact=.sdlc/runs/<run-id>/discovery.md --reply="<the user's reply, verbatim>" --project-root="$(pwd)"
+     --artifact=.sdlc/runs/<run-id>/discovery.md --reply-file=.sdlc/runs/<run-id>/gate-reply.txt --project-root="$(pwd)"
    ```
    Every later gate is recorded the same way (pipeline "Gate delivery"); never write `gates.jsonl`
-   yourself.
+   yourself, and never put a reply on the command line.
 1. Check this chat against the pin of the policy Gate 0 confirmed, and snapshot that policy into
    the run folder (interactive only). It writes `.sdlc/runs/<run-id>/policy_snapshot.yaml`, which
    the manifest reads the pin from:
@@ -346,7 +347,8 @@ On `approved`:
    Pass one `--conditional`/`--condition` pair per file Gate 0 showed as in scope only on a
    condition, and none when there are none. The hook refuses such a file until the user says the
    condition holds: ask them, quoting the condition, and record a yes with
-   `record-gate.mjs --gate=0 --decision=approved-conditional --artifact=<path>`.
+   `record-gate.mjs --gate=0 --decision=approved-conditional --artifact=<path>`, the reply through
+   `gate-reply.txt` as in step 0.
    Pass `--test-command` once per package command in a monorepo, each as it runs from the repo root
    (`pnpm --filter api test`), or `--test-command=none` when the user confirmed the project has no
    tests; `--freeze` refuses a freeze without one. Phase 7 runs

@@ -115,7 +115,9 @@ const aborted = (decision) => /^(auto-)?abort(ed)?$/i.test(String(decision ?? ""
  * (the headless launcher's own verdict when it recorded one), and, when
  * `tests` says the run has a test command, a passing test record, and, when
  * `approvals` is given, every gate-approved artifact as its gate approved it.
- * Once a run has record-gate lines, a hand-written line decides nothing.
+ * Once a run has record-gate lines, a hand-written line decides nothing; in
+ * a chat (no launcher record), neither does an `auto-*` line, which no
+ * person answered (`auto_decisions_in_prompt_run`).
  * `status`: interrupted, aborted, stopped (the run's own stop record: a
  * `run.end` line or a run-end.json the launcher did not write), completed,
  * awaiting_acceptance (the report exists, the final gate has no accepting
@@ -126,7 +128,9 @@ export function runOutcome({ runDir, gates, launcher = null, markers = {}, since
   // A second's slack for filesystems that store whole-second mtimes.
   const summary = existsSync(summaryPath) && (!since || statSync(summaryPath).mtimeMs >= Date.parse(since) - 1000);
   const all = gates ?? [];
-  const counted = all.some((g) => g.written_by === GATE_RECORD_WRITER) ? all.filter((g) => g.written_by === GATE_RECORD_WRITER) : all;
+  const recorded = all.some((g) => g.written_by === GATE_RECORD_WRITER) ? all.filter((g) => g.written_by === GATE_RECORD_WRITER) : all;
+  const unattended = launcher ? [] : recorded.filter((g) => /^auto-/i.test(String(g.decision ?? "")));
+  const counted = recorded.filter((g) => !unattended.includes(g));
   const last = new Map(counted.map((g) => [g.gate, g.decision]));
   const finalAccepted = accepted(last.get(FINAL_GATE));
   const finished = typeof launcher?.completed === "boolean" ? launcher.completed : summary && finalAccepted;
@@ -141,12 +145,13 @@ export function runOutcome({ runDir, gates, launcher = null, markers = {}, since
     : summary && testsHeld && approvalsHeld ? "awaiting_acceptance"
     : "incomplete";
   const why = [...(testsHeld ? [] : [`the run's tests did not pass: ${tests.reason}`]), ...(approvalsHeld ? [] : [approvals.reason])];
-  const ignored = all.length - counted.length;
+  const ignored = all.length - recorded.length;
   return {
     completed, status, summary_written: summary,
     ...(stop ? { stop } : {}),
     ...(summary && why.length ? { incomplete_reason: why.join("; ") } : {}),
     ...(ignored ? { gate_lines_ignored: ignored } : {}),
+    ...(unattended.length ? { auto_decisions_in_prompt_run: unattended.map((g) => ({ gate: g.gate, decision: g.decision, ...(g.artifact ? { artifact: g.artifact } : {}) })) } : {}),
   };
 }
 

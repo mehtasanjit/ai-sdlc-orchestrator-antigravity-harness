@@ -181,10 +181,12 @@ node '{{PLUGIN_ROOT}}/scripts/record-gate.mjs' --run-id={{RUN_ID}} --gate=1 \
   --project-root='{{PROJECT_ROOT}}' --output-dir='{{OUTPUT_DIR}}'
 ```
 
-Unattended, the decision is `auto-approved` or `auto-aborted` and takes no `--reply`: no person
-answered, and the record says so. With a person answering, it is their answer (`approved`,
-`accepted`, `revise`, `reject`, `abort`) with `--reply="<their reply, verbatim>"`. The script
-records the artifact's SHA-256. An approved artifact is locked: the write hook refuses to change
+Unattended, the decision is `auto-approved` or `auto-aborted` and takes no reply: no person
+answered, and the record says so. The script takes them only because the launcher recorded this
+run's gate mode. With a person answering, it is their answer (`approved`, `accepted`, `revise`,
+`reject`, `abort`): write their reply word for word to `{{OUTPUT_DIR}}/gate-reply.txt` with your
+file tool and pass `--reply-file='{{OUTPUT_DIR}}/gate-reply.txt'`, never the reply itself. The
+script records the artifact's SHA-256. An approved artifact is locked: the write hook refuses to change
 it, and the run does not complete if it changed.
 
 A reviewer or refinement that asks for the person's approval is a gate. Stop, ask, and record

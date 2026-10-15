@@ -421,12 +421,14 @@ export function buildHarnessManifest({ runDir, policyName, runId, env = process.
     ...(tests ? { tests } : {}),
     ...(approvals.changed.length ? { approved_artifact_changed: approvals.changed } : {}),
     ...(approvals.unchecked ? { approved_artifacts_unchecked: approvals.unchecked } : {}),
+    ...(approvals.record_problem ? { gate_record_untrusted: approvals.record_problem } : {}),
     write_guard: driverManifest
       ? (driverManifest.write_guard ?? { state: "off", reason: "headless run recorded before write_guard existed, so whether the write hook ran is not known" })
       : { state: "hook", reason: "interactive session: plugin/agy/hooks/write-contract-check.mjs runs before every file write (plugin/hooks.json)" },
     gate_mode: driverManifest ? driverManifest.gates ?? null : "prompt",
     gates,
     ...(outcome.gate_lines_ignored ? { gate_lines_ignored: outcome.gate_lines_ignored } : {}),
+    ...(outcome.auto_decisions_in_prompt_run ? { auto_decisions_in_prompt_run: outcome.auto_decisions_in_prompt_run } : {}),
     pin_rejection: driverManifest?.pin_rejection ?? null,
     ...conductorWork({ runDir, telemetry: dispatched, mode: driverManifest?.mode, completed: outcome.completed }),
     ...(otherRuns.length ? { other_runs_in_directory: otherRuns } : {}),

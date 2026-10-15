@@ -6,7 +6,8 @@
  *              contract.lock.json (the SHA-256 of the exact bytes, and the test
  *              commands Gate 0 confirmed), so an edit to the contract later in
  *              the run refuses every write. Each --conditional file is in scope
- *              only once a Gate 0 approved-conditional record opens it.
+ *              only once a Gate 0 approved-conditional record opens it. The lock
+ *              keeps the gate record's length and SHA-256 at this moment.
  *   --close    at close-out, after Gate 4: records the run's end in
  *              .sdlc/runs/<run-id>/run-end.json, then switches the contract off.
  *              `completed` needs a passing run of a frozen test command (lib/test-record.mjs)
@@ -27,11 +28,11 @@
  * The project root must be its git project's root: the hook reads only the
  * contract there. Exit 0 = written, 2 = refused or usage.
  */
-import { mkdirSync, renameSync, writeFileSync } from "node:fs";
-import { dirname, join, resolve } from "node:path";
+import { mkdirSync, realpathSync, renameSync, writeFileSync } from "node:fs";
+import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 
 import { CONTRACT_REL_PATH, RUN_ID, contractState, endRelPath, fingerprint, gitRoot, liveLocks, lockRelPath, readContract, readLock, runEnd, runEnded } from "./lib/contract-state.mjs";
-import { approvalVerdict } from "./lib/gate-record.mjs";
+import { approvalVerdict, gateRecordAnchor } from "./lib/gate-record.mjs";
 import { isMain } from "./lib/is-main.mjs";
 import { testVerdict } from "./lib/test-record.mjs";
 
@@ -80,11 +81,30 @@ function testCommands(values) {
 
 const CONDITIONAL_USAGE = "--conditional '<glob>' --condition '<when it is in scope, as Gate 0 showed it>', one pair per file Gate 0 showed as in scope only on a condition";
 
-/** The conditional entries, each with its condition; null when a pair is incomplete. */
-function conditionalEntries(pairs, stray) {
-  if (stray) return null;
-  const entries = pairs.map((e) => ({ path: filled(e.path), condition: filled(e.condition) }));
-  return entries.every((e) => e.path && e.condition) ? entries : null;
+const real = (p) => { try { return realpathSync(p); } catch { return p; } };
+
+/** `path` as the hook compares it: relative to the project root, posix, no `./`; null when it lies outside. */
+function projectPath(root, path) {
+  const abs = resolve(root, path);
+  for (const base of [root, real(root)]) {
+    const rel = relative(base, abs).split(sep).join("/");
+    if (rel && rel !== ".." && !rel.startsWith("../") && !isAbsolute(rel)) return rel;
+  }
+  return null;
+}
+
+/** The conditional entries, each with its condition, or `{ error }`. */
+function conditionalEntries(pairs, stray, root) {
+  if (stray) return { error: CONDITIONAL_USAGE };
+  const entries = [];
+  for (const e of pairs) {
+    const [given, condition] = [filled(e.path), filled(e.condition)];
+    if (!given || !condition) return { error: CONDITIONAL_USAGE };
+    const path = projectPath(root, given);
+    if (!path) return { error: `--conditional ${JSON.stringify(given)} lies outside the project ${root}: name the file relative to the project root` };
+    entries.push({ path, condition });
+  }
+  return { entries };
 }
 
 function globs(text) {
@@ -161,14 +181,15 @@ export function main(argv = process.argv.slice(2), { log = (m) => process.stdout
     if (!offLimits) return refuse("--off-limits must be a JSON array of path globs");
     const tests = testCommands(a.testCommands);
     if (!tests) return refuse(`${TEST_COMMAND_USAGE}. Nothing is written.`);
-    const conditional = conditionalEntries(a.conditional, a.strayCondition);
-    if (!conditional) return refuse(`${CONDITIONAL_USAGE}. Nothing is written.`);
+    const { entries: conditional, error: badConditional } = conditionalEntries(a.conditional, a.strayCondition, root);
+    if (badConditional) return refuse(`${badConditional}. Nothing is written.`);
     if (readLock(root, a.runId)) return refuse(`run ${a.runId} has already frozen its contract: a run freezes once, at its Gate 0. ${PERSON_DECIDES}`);
     if (runEnded(root, a.runId)) return refuse(`run ${a.runId} has ended, and a run that ended never freezes again. ${PERSON_DECIDES}`);
     const state = contractState(root);
     if (state.binding) return refuse(`run ${state.runId} is live and holds this project's contract. Ending it is the person's decision: write-contract.mjs --abandon --run-id ${state.runId} --reason "<why>".`);
     const sha256 = writeContract(root, { schema_version: 1, active: true, mode: "brownfield", run_id: a.runId, strict: a.strict, allowlist, off_limits: offLimits, ...(conditional.length ? { conditional } : {}) });
-    writeWhole(join(root, lockRelPath(a.runId)), JSON.stringify({ run_id: a.runId, sha256, test_commands: tests, frozen_at: new Date().toISOString(), written_by: "plugin/scripts/write-contract.mjs" }, null, 2) + "\n");
+    const gateRecord = gateRecordAnchor(join(root, ".sdlc", "runs", a.runId));
+    writeWhole(join(root, lockRelPath(a.runId)), JSON.stringify({ run_id: a.runId, sha256, test_commands: tests, ...(gateRecord ? { gate_record: gateRecord } : {}), frozen_at: new Date().toISOString(), written_by: "plugin/scripts/write-contract.mjs" }, null, 2) + "\n");
     log(`write-contract: frozen for run ${a.runId} (${allowlist.length} allowlist, ${conditional.length ? `${conditional.length} conditional, ` : ""}${offLimits.length} off-limits pattern(s), test command ${tests.length ? tests.map((c) => JSON.stringify(c)).join(", ") : "none"}${a.strict ? "" : ", strict off"})`);
     return 0;
   }
@@ -189,7 +210,10 @@ export function main(argv = process.argv.slice(2), { log = (m) => process.stdout
       }
       const approvals = approvalVerdict(join(root, ".sdlc", "runs", a.runId), a.runId, { projectRoot: root });
       if (!approvals.held) {
-        return refuse(`run ${a.runId} cannot end as completed: ${approvals.reason}. An approved artifact changes only on the person's revise, recorded with plugin/scripts/record-gate.mjs, and its gate approving it again. Nothing is written. Show the person what changed and record their answer, or end the run as stopped: ${stopWith}`);
+        const next = approvals.record_problem
+          ? "Nothing is written. Show the person; the run ends as stopped"
+          : "An approved artifact changes only on the person's revise, recorded with plugin/scripts/record-gate.mjs, and its gate approving it again. Nothing is written. Show the person what changed and record their answer, or end the run as stopped";
+        return refuse(`run ${a.runId} cannot end as completed: ${approvals.reason}. ${next}: ${stopWith}`);
       }
     }
     endRun(root, a.runId, { outcome: a.outcome, reason: filled(a.reason), needs: filled(a.needs) });

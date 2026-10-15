@@ -573,23 +573,27 @@ with `phase: <name>, task_type: "skipped"` so downstream summaries stay complete
 ## HITL gate prompt templates
 
 **Gate delivery.** Interactive, you print the gate block yourself and wait for the user's reply,
-then record it by code, never by writing `gates.jsonl` yourself:
+then record it by code, never by writing `gates.jsonl` yourself. Write the reply as you received
+it, word for word, to `<output_dir>/gate-reply.txt` with your file tool; never put it on the
+command line, where shell quoting rewrites it and can run parts of it. Then run:
 
 ```bash
-node "${MMO_PLUGIN_ROOT}/scripts/record-gate.mjs" --run-id=<run_id> --gate=<N> --decision=<approved|accepted|revise|reject|abort> --artifact=<output_dir>/<file the gate reviewed> --reply="<the user's reply, verbatim>" --project-root="<project_root>" --output-dir="<output_dir>"
+node "${MMO_PLUGIN_ROOT}/scripts/record-gate.mjs" --run-id=<run_id> --gate=<N> --decision=<approved|accepted|revise|reject|abort> --artifact=<output_dir>/<file the gate reviewed> --reply-file=<output_dir>/gate-reply.txt --project-root="<project_root>" --output-dir="<output_dir>"
 ```
 
 `--artifact` is relative to the project root (`.sdlc/runs/<run_id>/requirements.md`). `accepted`
 is Gate 4's `accept` and `reject` its `reject: <comments>`; the manifest reads Gate 4's last line to
-mark the run completed. `--reply` is the user's reply as you received it, word for word. The script
-records the artifact's SHA-256 with it. **An approved artifact is locked:** while a brownfield
+mark the run completed. The decision is the one the reply gives: a `revise`, `reject` or `abort`
+reply begins with that word, an approving one with none of them, and the script refuses a
+mismatch. It stores the reply, records the artifact's SHA-256 with it, and removes the reply file. **An approved artifact is locked:** while a brownfield
 contract binds, the hook refuses any write to it, and the close-out (any mode) refuses `completed`
 when its bytes no longer match the approval. It changes only after a recorded `revise` (or Gate 4
 `reject`), which re-opens it until its gate approves it again.
 Every gate is a fenced `> ⏸ **HITL Gate <N> — <Title>**` block (templates below), printed
 verbatim. Headless, the conductor prompt names the gate mode (`auto-approve` or `auto-abort`):
 print the block anyway, apply the mode's decision, and record it with the same script
-(`--decision=auto-approved` or `--decision=auto-aborted`, no `--reply`) — a run whose gates were not reviewed by a person must say so. **Persist
+(`--decision=auto-approved` or `--decision=auto-aborted`, no reply; the script takes them only in a
+run `plugin/agy/run.mjs` launched in that mode) — a run whose gates were not reviewed by a person must say so. **Persist
 the gate-pending state to `<output_dir>/state.json` before printing** — the run's own folder,
 `.sdlc/runs/<run-id>/state.json`, the one place under `.sdlc/` a live write contract lets the run
 write. Write the whole file, one object:
@@ -639,7 +643,8 @@ the write contract by code with
 `--conditional`/`--condition` pair per conditional file, none when there are none); never write
 `.sdlc/local/write-contract.json` yourself. The hook refuses a conditional file until the user
 says its condition holds: ask, quoting the condition, and record a yes with
-`--gate=0 --decision=approved-conditional --artifact=<path>`. Build `off_limits` by concatenating `.sdlc/project.json.off_limits_default`
+`--gate=0 --decision=approved-conditional --artifact=<path>`, the reply through `gate-reply.txt`
+as at every gate. Build `off_limits` by concatenating `.sdlc/project.json.off_limits_default`
 (the project-level constants — `.env*`, `.mcp.json`, `node_modules/**`, etc., written by setup)
 with the AI-configs from `baseline.ai_configs_detected` and any ticket-specific paths the user
 added at Gate 0. The PreToolUse hook and the packet validator both read the merged list — the

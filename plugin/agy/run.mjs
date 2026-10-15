@@ -53,7 +53,7 @@ import { finishWriteGuard, gitStatus, loadLaunchSnapshot, saveLaunchSnapshot } f
 import { resumeRun } from "../scripts/write-contract.mjs";
 import { runEnd } from "../scripts/lib/contract-state.mjs";
 import { testVerdict } from "../scripts/lib/test-record.mjs";
-import { approvalVerdict } from "../scripts/lib/gate-record.mjs";
+import { approvalVerdict, recordGateMode } from "../scripts/lib/gate-record.mjs";
 import { runMode } from "./telemetry/conductorWork.mjs";
 import { agyHome, readConversationRecord } from "./telemetry/conversationUsage.mjs";
 import { DEFAULT_POLICY, loadPolicyFile as loadProjectPolicyFile, policyPath as projectPolicyPath, resolvePolicy as resolveProjectPolicy } from "./projectPolicy.mjs";
@@ -101,7 +101,7 @@ export const GATE_MODES = {
     "gate, print what was produced and where it is, record the decision as `auto-approved`, " +
     "and continue without waiting. Do not ask a question you cannot receive an answer to. " +
     "If an artifact looks wrong enough that a reviewer would have rejected it, say so plainly " +
-    "in the gate record and in your final report rather than passing it silently.",
+    "in your final report rather than passing it silently.",
   "auto-abort":
     "You are running UNATTENDED with gates set to abort. At each gate, print what was " +
     "produced, record the decision as `auto-aborted`, and stop the run there. Use this to produce " +
@@ -608,6 +608,8 @@ async function main(args) {
   if (pending.length && !args["allow-unverified-pin"]) throw new Error(pinGateMessage(pending));
 
   mkdirSync(outputDir, { recursive: true });
+  // record-gate.mjs takes an auto-* decision only from a run this launcher started in that mode.
+  recordGateMode(outputDir, runId, gateMode);
   renderSkills(outputDir, renderValues);
   copyFileSync(resolvedPolicy.path, join(outputDir, "policy_snapshot.yaml"));
   if (runRoot) materialiseRunRoot({ runRoot, pluginRoot: PLUGIN_ROOT });
