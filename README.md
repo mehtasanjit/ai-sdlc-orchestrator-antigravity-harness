@@ -80,7 +80,7 @@ At each gate the run stops, shows you a file to read, and waits. You reply with 
 | Gate 3 | After the security check | `security_review.md` — problems found and how serious they are |
 | Gate 4 | At the end | The summary and the bill |
 
-A run with nobody watching (a **headless run**, started from a script) answers every gate automatically with `--gates=auto-approve` and writes each answer to `gates.jsonl`.
+You use the harness in the app and answer the gates yourself. A run with nobody watching (a **headless run**, started from a script) is the cost check: it runs the same steps, answers every gate automatically with `--gates=auto-approve`, writes each answer to `gates.jsonl`, and reads the conductor's own usage from the app's output.
 
 ## Which model does which step
 
@@ -175,7 +175,15 @@ What happens next, in order (the full list is in [INSTALL.md](INSTALL.md)):
 4. It connects the plugin to your folder through a hidden `.agents/plugins/mmo/` folder. Nothing is written to your home folder's Antigravity settings (`~/.gemini/`).
 5. A browser page opens once. Press **Save** to keep the default policy.
 
-**Prompt 2 — run.** Start a **new `agy` session in the same folder**: quit the app, then open it again with `agy` in the same folder. Answer **yes** when it asks whether you trust the folder. Then type one command:
+**Prompt 2 — run.** Start a **new `agy` session in the same folder**: quit the app, then open it again in the same folder with this exact command. Answer **yes** when it asks whether you trust the folder.
+
+```bash
+cd ~/my-first-app && agy --model gemini-3.8-flash-high
+```
+
+Without `--model` the app runs on its own default model, while the bill prices the conductor as Gemini 3.8 Flash and checks that model, so the model check fails. `gemini-3.8-flash-high` is the default policy's model; setup prints the command for the policy you picked.
+
+Then type one command:
 
 ```
 /mmo:greenfield      # empty folder: build a new app
@@ -188,7 +196,7 @@ Or use one of the job commands from [What it can do for you](#what-it-can-do-for
 
 ## Your first run, step by step
 
-1. Type `/mmo:greenfield`.
+1. Start the app in your folder with `agy --model gemini-3.8-flash-high` (Prompt 2), then type `/mmo:greenfield`.
 2. It checks the setup again. If something is broken it stops here, before spending anything.
 3. It asks what to build. Pick the **Ping Service** sample ([examples/quick-demo/brief.md](examples/quick-demo/brief.md)): it is small, takes minutes, and costs the least. To build your own idea instead, write a brief by following [docs/brief-template.md](docs/brief-template.md): a one-line summary, the business context, and what is in and out of scope.
 4. It shows which model will do each step and asks you to confirm. Nothing is spent before you say yes.
@@ -293,7 +301,8 @@ Shortcuts for `/mmo:brownfield` with the job type already chosen. Add a sentence
 
 | What you see | What to do |
 |---|---|
-| `/mmo:greenfield` is not recognized | You are still in the setup session, or you didn't trust the folder. Quit `agy`, open it again in the same folder, and answer **yes** to the trust question. |
+| `/mmo:greenfield` is not recognized | You are still in the setup session, or you didn't trust the folder. Quit `agy`, open it again in the same folder with `agy --model gemini-3.8-flash-high`, and answer **yes** to the trust question. |
+| `manifest.json` → `harness.pin` shows `"unverified_reason": "model_mismatch"` | The app was started without `--model`, so the conductor ran on the app's default model. Start the next run with `agy --model gemini-3.8-flash-high`. |
 | Setup says a key or program is missing | Install or add what it names, then type `/mmo:setup` to check again. |
 | Things broke after you updated this project | Type `/mmo:setup`. It rebuilds the bridge, which is not stored in git and must be rebuilt after each update. |
 | The run stops with a message about the cost cap | The $50 safety limit was reached. Type `/mmo:policy change` to raise it, or stop here. |
@@ -380,7 +389,7 @@ npm ci && npm run build && npm test
 node tools/setup.mjs --project-root /path/to/your/project
 ```
 
-`tools/setup.mjs` runs the same checks as the setup sentence, builds the bridge, connects the plugin to your project, and opens the policy page so you can review or change it.
+`tools/setup.mjs` runs the same checks as the setup sentence, builds the bridge, connects the plugin to your project, and opens the policy page so you can review or change it. It ends with the command that starts the run session in your project, `agy --model gemini-3.8-flash-high` for the default policy.
 
 | Option | Effect |
 |---|---|
@@ -388,7 +397,7 @@ node tools/setup.mjs --project-root /path/to/your/project
 | `--policy=` followed by a policy name | Picks that policy without opening the browser |
 | `--no-agent` | Skips the "model or agent" question for the fast crew |
 
-To start a headless run, try it first with `--dry-run`. That prints exactly what would run, showing each key only as "set" or "unset":
+A headless run is the cost check: the same steps with nobody watching, with the conductor's usage read from the app's output. Try it first with `--dry-run`. That prints exactly what would run, showing each key only as "set" or "unset":
 
 ```bash
 node plugin/agy/run.mjs --brief=examples/quick-demo/brief.md --project-root=/path/to/empty/dir --gates=auto-approve --dry-run
@@ -403,7 +412,7 @@ Every headless setting: [docs/running.md](docs/running.md).
 | Does the free practice run work? | Yes, on every `npm test` (see [Try it — one offline run](#try-it--one-offline-run)). |
 | Has it run for real? | Yes, twice, both inside the Antigravity app — the two runs in [What it costs](#what-it-costs). Each has a line-by-line cost audit: [greenfield](docs/verification/greenfield-001-cost-audit.md), [brownfield](docs/verification/brownfield-maps-screen-cost-audit.md). |
 | Were those bills right? | Each recorded price matches the vendor's published rate. Some calls were missing: a Claude call that timed out was booked at $0, and one that was cut off left no receipt. In the brownfield run, most coding tasks went to the expensive expert instead of the fast crew, because the policy did not name those task types. |
-| Has a headless run been done for real? | Not yet. So the conductor's own cost has never been measured from real numbers. |
+| Has a headless run been done for real? | Yes, twice on 14 October 2026: one new app and one bug fix in an existing project, with nobody watching. Both measured the conductor's own cost from the app's counters, and each figure matches the app's own record of the conversation to the token: [the two runs](docs/verification/headless-proof-runs-2026-10-14.md). |
 | Where are the published example runs? | None are in this repository yet; the first will be the [Ping Service](examples/quick-demo/) brief. The [Claude Code version](https://github.com/tl-ai-labs/ai-sdlc-orchestrator-claude-code-harness) ships two in `examples/quick-demo/passes/`. |
 
 Every capability claim about the Antigravity app is backed by a numbered check in [docs/verification/p1-agy-runtime.md](docs/verification/p1-agy-runtime.md).
@@ -441,7 +450,7 @@ Every capability claim about the Antigravity app is backed by a numbered check i
 | Cash / modeled | A real charge on your account / an estimate of what unbilled work would cost |
 | Seat | A flat monthly subscription (claude.ai, or the Google account Antigravity runs on) with no per-task bill |
 | Arm A / Arm B | Paying for Claude with an Anthropic key (A) or through Google Cloud (B) |
-| Headless run | A run with nobody watching, started from a script, that approves gates automatically |
+| Headless run | A run with nobody watching, started from a script, that approves gates automatically; the cost check |
 | `.sdlc/` | The hidden folder in your project where every run keeps its documents and receipts |
 
 ## More documentation
@@ -449,7 +458,7 @@ Every capability claim about the Antigravity app is backed by a numbered check i
 | Document | Covers |
 |---|---|
 | [docs/setup.md](docs/setup.md) | Every way to pay for Claude and Gemini, and how to check each |
-| [docs/running.md](docs/running.md) | Headless runs: every setting, resuming, the run folder |
+| [docs/running.md](docs/running.md) | Starting a run in the app, and the headless cost check: every setting, resuming, the run folder |
 | [docs/brief-template.md](docs/brief-template.md) | How to write a brief |
 | [docs/tutorial-first-run.md](docs/tutorial-first-run.md) | A first run, stage by stage |
 | [docs/understanding-output.md](docs/understanding-output.md) | Reading the report, the manifest and the raw files |

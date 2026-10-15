@@ -4,11 +4,33 @@
 
 ![The pipeline's phases and gates — eleven greenfield states with gates after requirements, design and security review and before final acceptance; brownfield adds discovery, change_plan and Gate 0](assets/phases-and-gates.svg)
 
-Two shapes. Interactive is how you build and debug the plugin; headless is how a measured run is recorded.
+Two shapes. Interactive is how you use the harness: you invoke a skill in an agy chat and answer the gates yourself. Headless is the cost check: `run.mjs` runs the same pipeline unattended and records the conductor's usage from agy's own stream.
 
 ## Interactive
 
-Run `node tools/setup.mjs --project-root <project>` once (README, "Setup — the two-prompt flow"); it mounts the plugin as `<project>/.agents/plugins/mmo/`. Then open `agy` in the project — or in the repo root, where the committed mount already applies — and answer yes to the trust prompt. `/skills` lists `mmo:greenfield`, `mmo:brownfield`, `mmo:pass` and the rest; the bridge's tools are reached through `call_mcp_tool`. Invoke a skill, answer the gates by hand. Credentials come from the shell that launched `agy` (see [SETUP.md](../SETUP.md)).
+Run `node tools/setup.mjs --project-root /path/to/your/project` once (README, "Setup — the two-prompt flow"); it mounts the plugin as `.agents/plugins/mmo/` in the project and prints the command that starts the chat. Start agy in the project on the policy's driver pin, and answer yes to the trust prompt:
+
+```bash
+cd /path/to/your/project && agy --model gemini-3.8-flash-high
+```
+
+Without `--model` the chat runs on agy's default model, while the run prices the conductor at the pin's rates and checks the model it ran on against the pin's model, so the model check fails (`pin.unverified_reason: model_mismatch`). `gemini-3.8-flash-high` is the default policy's slug. For the project's own policy, either command below prints the slug derived from its `driver:` block the way `run.mjs` derives `--model`. Run them in the harness clone; `npm run verify` without `--project-root` checks the clone itself and prints no start command.
+
+```bash
+node plugin/agy/start-command.mjs --project-root=/path/to/your/project
+npm run verify -- --project-root=/path/to/your/project
+```
+
+What an interactive run's pin check can see:
+
+| Part of the slug | Read from | A wrong start it catches |
+|---|---|---|
+| The model, `gemini-3.8-flash` | agy's local conversation record, field `.1.19` ([check 18](verification/p1-agy-runtime.md)) | A chat started with plain `agy`: the record names agy's default model |
+| The effort, `high` | Nothing: `.1.19` reads `gemini-3.8-flash` on a `-high` run, and the collector reads no effort field | None. A chat started at another effort passes, so use the slug exactly as printed |
+
+Whether a chat started with `--model` conducts on that slug is [check 19](verification/p1-agy-runtime.md), pending: a plain `agy` chat on agy 1.3.5 conducted on `gemini-4-argon`, and no interactive run started with `--model` is recorded yet. Until it is, `pin.verified` in the run's manifest is what shows the chat held the pin's model.
+
+`/skills` lists `mmo:greenfield`, `mmo:brownfield`, `mmo:pass` and the rest; the bridge's tools are reached through `call_mcp_tool`. Invoke a skill and answer the gates yourself. Credentials come from the shell that launched `agy` (see [SETUP.md](../SETUP.md)).
 
 ## Headless
 
@@ -61,7 +83,7 @@ Passed checks open the gate; they do not prove the run held the pin. `pin.verifi
 
 | `pin.unverified_reason` | Meaning |
 |---|---|
-| `model_mismatch` | agy named a model that is not the pin (`driver_model_mismatch` lists it) |
+| `model_mismatch` | agy named a model that is not the pin (`driver_model_mismatch` lists it). On an interactive run, most often a chat started without `--model` |
 | `pending_checks` | A check in `pin.pending_checks` is pending, and the run went ahead under `--allow-unverified-pin` |
 | `no_model_observed` | Neither the stream nor agy's local conversation record named a model, so nothing shows which model conducted |
 
@@ -77,9 +99,9 @@ One `agy --print` invocation may end before the pipeline does. `run.mjs` reads t
 
 `--resume=<conversation-id>` into the same `--output-dir` keeps the earlier launch's invocations: `run.mjs` reads them back from the directory before it writes, so the driver line covers the whole conversation, not only the resumed part. The resume must use the policy and driver pin the conversation started under; `run.mjs` refuses otherwise. A resume that finds no earlier record in the directory is flagged `resumed_without_earlier_record`, because check 16 decides whether its first counters include the earlier launch.
 
-## Measured runs: the greenfield and brownfield proof runs
+## The cost check: the greenfield and brownfield proof runs
 
-Run cost is measured headless: `run.mjs` captures the conductor's own usage from agy's stream, every dispatch is priced at the bridge, and `manifest.json` carries the labelled lines. Each command below is copy-paste-runnable from the repo root.
+The headless run checks what a run costs: `run.mjs` captures the conductor's own usage from agy's stream, every dispatch is priced at the bridge, and `manifest.json` carries the labelled lines. Each command below is copy-paste-runnable from the repo root.
 
 **1. Before anything is spent.** All free.
 

@@ -276,11 +276,11 @@ A `model_breakdown` or `by_model` row's `calls` counts attempts routed to that m
 | Field | Meaning |
 |---|---|
 | `dispatched_cash_usd` | Bridge dispatches that a vendor invoiced. On arm A or B this equals `total_cost_usd`. Opus calls on the seat are subtracted out, because they were not invoiced either |
-| `driver_modeled_usd` | The conductor's loop at the driver card. $0 on an interactive run, where `driver_measured` is `false` |
+| `driver_modeled_usd` | The conductor's loop at the driver card, headless or interactive. $0, with `driver_measured: false`, only when neither the launcher nor the collector recorded the driver |
 | `driver_modeled_usd_low` | Present while check 16 is pending on a resumed run: the lower bound |
-| `driver_measured` | `false` on an interactive run: no agy usage counters were captured, and the $0 is not a measurement |
+| `driver_measured` | Present, and `false`, only when neither the launcher nor the collector recorded the driver: no agy usage was read, and the $0 is not a measurement |
 | `claude_seat_modeled_usd` | Present only when Opus calls ran on the seat: those calls, priced at the Anthropic card, no invoice |
-| `lines[]` | Three entries — `driver`, `gemini_workers`, `claude_worker` — each with `kind` (`cash`, `modeled`, `mixed` on a Claude line partly on the seat, or `unmeasured` for an interactive run's driver), the wallet, models, tokens, `cost_usd`, and on the modeled, mixed and unmeasured ones a `basis` sentence. The driver line also carries `cost_usd_low`, `cost_usd_high`, `tokens_low`, `resume_check`, `resumed_without_earlier_record` and `invocations_without_usage` when they apply. A fourth, `unclassified`, appears only when an event names no known worker adapter and no `claude-` or `gemini-` model; its dollars stay off both worker lines. Each worker line also carries `attempts` (equal to `calls`), `dispatches`, `failed_attempts` and `failed_cost_usd` |
+| `lines[]` | Three entries — `driver`, `gemini_workers`, `claude_worker` — each with `kind` (`cash`, `modeled`, `mixed` on a Claude line partly on the seat, or `unmeasured` for a driver neither the launcher nor the collector recorded), the wallet, models, tokens, `cost_usd`, and on the modeled, mixed and unmeasured ones a `basis` sentence. The driver line also carries `cost_usd_low`, `cost_usd_high`, `tokens_low`, `resume_check`, `resumed_without_earlier_record` and `invocations_without_usage` when they apply. A fourth, `unclassified`, appears only when an event names no known worker adapter and no `claude-` or `gemini-` model; its dollars stay off both worker lines. Each worker line also carries `attempts` (equal to `calls`), `dispatches`, `failed_attempts` and `failed_cost_usd` |
 | `note` | The rule, restated in the file itself: the cash figure and the modeled figures are different kinds of dollars and are not summed |
 
 The two worker lines take their wallet from each event's `wallet` stamp:

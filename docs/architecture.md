@@ -87,6 +87,7 @@ Hook commands run with cwd = the directory containing `hooks.json` (the plugin d
 | `plugin/agy/dispatch.mjs` | Pattern (b): the conductor shells out to this when its session binds no bridge tool; it speaks MCP via `mcp/model-dispatch/src/driverClient.ts` |
 | `plugin/agy/hooks/`, `plugin/hooks.json` | The write-contract PreToolUse guard and the bridge-call heartbeat, in agy's hook format |
 | `plugin/agy/verify-setup.mjs`, `plugin/agy/env-checks.mjs` | Offline setup check and repair (`npm run verify -- --fix`) |
+| `plugin/agy/projectPolicy.mjs`, `plugin/agy/start-command.mjs` | Which policy a project runs (routing-policy.yaml, `--policy`, `.sdlc/project.json`, the default), and the `agy --model <slug>` command that starts an interactive run on its driver pin, printed by setup and the setup check |
 | `plugin/agy/manifest.mjs` | Writes `manifest.json` from the run directory: the bridge's rollups plus `harness`, `usage` and `cost` (three labeled lines) |
 | `plugin/agy/runRoot.mjs`, `plugin/agy/mmoSelect.mjs` | The `--inline-env` per-run root, and the `MMO_SELECT` door choice read from `.sdlc/local/mmo-select.json` |
 | `plugin/scripts/` | Scripts the skills call in an interactive session: `setup-policy.mjs` (the console), `write-provenance.mjs`, `write-contract.mjs` (freezes and ends a brownfield contract), `session-hydrate.mjs`, `mmo-log.mjs` and the rest |

@@ -35,6 +35,7 @@ import {
   meetsMinVersion, mcpPaths, MIN_AGY_VERSION, AGENT_WORKER_SELECT, observePolicy, claudeArmState, pluginDiscoveryState, probeClaudeLogin,
 } from "../plugin/agy/verify-setup.mjs";
 import { writeMmoSelectFile } from "../plugin/agy/mmoSelect.mjs";
+import { isHarnessClone, projectStartCommand, whyThePin } from "../plugin/agy/start-command.mjs";
 import { isMain } from "../plugin/scripts/lib/is-main.mjs";
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
@@ -90,6 +91,31 @@ export function registerProject(projectRoot, harnessRoot = ROOT, io = { existsSy
     changed = true;
   }
   return { path: plan.mount, changed, plan };
+}
+
+/** Runs from any folder, and checks the project rather than the clone `npm run verify` would check. */
+export function recheckCommand(projectRoot, harnessRoot = ROOT) {
+  return `node "${join(harnessRoot, "plugin", "agy", "verify-setup.mjs")}" --project-root="${projectRoot}"`;
+}
+
+/** What a passing setup prints last: the pinned command that starts the run session, then the headless cost check. */
+export function handoverLines({ projectRoot, start, harnessRoot = ROOT }) {
+  if (isHarnessClone(projectRoot, harnessRoot)) {
+    return [
+      "This set up the harness clone, not a project, so it gives no command to start a run. Run the wizard against the folder you run in:",
+      `  node "${join(harnessRoot, "tools", "setup.mjs")}" --project-root=/path/to/your/project`,
+    ];
+  }
+  return [
+    `Start a NEW agy session in ${projectRoot} — plugins and MCP servers load when a session begins — on the policy's driver pin:`,
+    `  cd "${projectRoot}" && ${start.command}`,
+    whyThePin(start.model),
+    "Then type:",
+    "  /mmo:greenfield   (empty folder + brief)      /mmo:brownfield   (existing repo)",
+    "",
+    "Headless, the cost check: the same pipeline unattended, with the conductor's usage read from agy's own stream:",
+    `  node "${join(harnessRoot, "plugin", "agy", "run.mjs")}" --brief=./brief.md --project-root="${projectRoot}" --gates=auto-approve --dry-run`,
+  ];
 }
 
 const c = { dim: "\x1b[2m", bold: "\x1b[1m", green: "\x1b[32m", amber: "\x1b[33m", red: "\x1b[31m", reset: "\x1b[0m" };
@@ -257,16 +283,19 @@ async function main(args) {
     warn("No project policy chosen (no TTY -- the console needs a terminal and a browser); the launcher and the skills fall back to antigravity-flash38-plus-opus5.");
     hint(`Pick one before your first run: node plugin/scripts/setup-policy.mjs --project-root "${projectRoot}"   or re-run with --policy=<name>.`);
   }
+  const start = projectStartCommand({ projectRoot, pluginRoot: PLUGIN_ROOT });
+  if (!start.command) { fail(`No command to start a chat on the driver pin: ${start.error}`); blocked = true; }
+  else if (!isHarnessClone(projectRoot)) ok(`The run session starts with: ${start.command}   (the driver pin of '${start.policy}')`);
 
   console.log("");
   if (blocked) {
     console.log(`${c.bold}Setup incomplete.${c.reset} Resolve the items marked ✗ above, then re-run:  node tools/setup.mjs --project-root "${projectRoot}"`);
-    console.log(`${c.dim}Re-check without the questions: npm run verify${c.reset}`);
+    console.log(`${c.dim}Re-check without the questions: ${recheckCommand(projectRoot)}${c.reset}`);
   } else {
-    console.log(`${c.bold}Setup complete.${c.reset} Start a NEW agy session in ${projectRoot} — plugins and MCP servers load when a session begins — then:`);
-    console.log(`  /mmo:greenfield   (empty folder + brief)      /mmo:brownfield   (existing repo)`);
-    console.log(`\nHeadless instead:\n  node "${join(ROOT, "plugin", "agy", "run.mjs")}" --brief=./brief.md --project-root="${projectRoot}" --gates=auto-approve --dry-run`);
-    console.log(`${c.dim}Re-check any time: npm run verify${c.reset}`);
+    const [first, ...rest] = handoverLines({ projectRoot, start });
+    console.log(`${c.bold}Setup complete.${c.reset} ${first}`);
+    for (const line of rest) console.log(line);
+    console.log(`${c.dim}Re-check any time, no questions: ${recheckCommand(projectRoot)}${c.reset}`);
   }
   rl?.close();
   return blocked ? 1 : 0;

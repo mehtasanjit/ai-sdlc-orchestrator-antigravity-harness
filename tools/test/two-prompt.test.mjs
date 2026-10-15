@@ -11,6 +11,9 @@ import { readFileSync, readdirSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { DEFAULT_POLICY, loadPolicyFile } from "../../plugin/agy/run.mjs";
+import { driverSlug, readPin } from "../../plugin/agy/telemetry/fairnessPin.mjs";
+
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const read = (p) => readFileSync(join(ROOT, p), "utf8");
 
@@ -59,4 +62,58 @@ test("the pass skill accepts only --auth=vendor on this runtime", () => {
   const pass = read("plugin/skills/pass/SKILL.md");
   assert.match(pass, /`--auth=vendor` — \*\*required\*\*, and `vendor` is the only value/);
   assert.ok(!/CLAUDE_CODE_SUBAGENT_MODEL` must be set/.test(pass));
+});
+
+const RUN_START_DOCS = ["README.md", "docs/running.md", "docs/tutorial-first-run.md", "INSTALL.md", "SETUP.md", "docs/setup.md", "plugin/skills/setup/SKILL.md"];
+
+test("every place that starts the run session gives agy --model with the default policy's slug, and says why", () => {
+  const command = `agy --model ${driverSlug(readPin(loadPolicyFile(DEFAULT_POLICY)))}`;
+  for (const p of RUN_START_DOCS) {
+    const text = read(p);
+    assert.ok(text.includes(command), `${p}: ${command}`);
+    assert.match(text, /without `--model` the (chat|app) runs on (agy's|its own) default model/i, `${p}: why the pin`);
+  }
+  assert.doesNotMatch(read("docs/tutorial-first-run.md"), /cd \.\.\/first-run && agy\n/, "the run session starts on the pin");
+  assert.doesNotMatch(read("README.md"), /open it again with `agy` in the same folder/);
+  assert.doesNotMatch(read("docs/running.md"), /Then open `agy` in the project/);
+});
+
+test("interactive is how the harness is used; headless is the cost check", () => {
+  const running = read("docs/running.md");
+  assert.match(running, /Interactive is how you use the harness/);
+  assert.match(running, /Headless is the cost check/);
+  for (const p of [...RUN_START_DOCS, "docs/repo-overview.md"]) {
+    assert.doesNotMatch(read(p), /build and debug the plugin|run of record|An interactive run has no driver line|The measured runs go through it/, p);
+  }
+});
+
+test("the start command's reason claims only the model check agy's record supports", () => {
+  for (const p of [...RUN_START_DOCS, "docs/troubleshooting.md"]) {
+    const text = read(p);
+    assert.doesNotMatch(text, /checks it against (the pin|`?gemini-3\.8-flash-high`?)/, `${p}: the record names the model, not the slug`);
+    assert.doesNotMatch(text, /the command (the wizard|setup) printed last/, `${p}: the wizard prints the headless line and the re-check after it`);
+  }
+  const running = read("docs/running.md");
+  assert.match(running, /checks the model it ran on against the pin's model/);
+  assert.match(running, /A chat started at another effort passes/);
+  assert.doesNotMatch(running, /or in the repo root, where the committed mount already applies/);
+  assert.match(running, /\[check 19\]\(verification\/p1-agy-runtime\.md\), pending/);
+  const row = read("docs/verification/p1-agy-runtime.md").split("\n").find((l) => l.startsWith("| 19 |"));
+  assert.match(row, /\*\*PENDING/, "check 19 stays pending until an interactive --model chat is read back");
+});
+
+test("re-checking a project names it, and a policy change hands over the new start command", () => {
+  assert.doesNotMatch(read("INSTALL.md"), /^npm run verify\s+#/m, "npm run verify in the clone checks the clone");
+  assert.match(read("INSTALL.md"), /verify-setup\.mjs --project-root "\$\(pwd\)"/);
+  for (const p of ["plugin/skills/policy/SKILL.md", "plugin/rules/AGENTS.md"]) {
+    assert.ok(read(p).includes('node "${MMO_PLUGIN_ROOT}/agy/start-command.mjs" --project-root "$(pwd)"'), p);
+  }
+});
+
+test("no doc still calls the headless run unmeasured or the interactive driver free", () => {
+  assert.doesNotMatch(read("README.md"), /Has a headless run been done for real\? \| Not yet/);
+  assert.match(read("README.md"), /headless-proof-runs-2026-10-14\.md/);
+  assert.doesNotMatch(read("docs/understanding-output.md"), /\$0 on an interactive run|`false` on an interactive run/);
+  assert.doesNotMatch(read("plugin/skills/setup/SKILL.md"), /for CI or replays/);
+  assert.doesNotMatch(read("plugin/skills/pipeline/SKILL.md"), /the measured runs/);
 });
