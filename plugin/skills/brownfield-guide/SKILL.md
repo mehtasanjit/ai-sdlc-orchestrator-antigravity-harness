@@ -60,7 +60,8 @@ It reads the model calls agy has recorded for this chat and compares them with t
   The message names the model this chat runs on, the pin, and the command to restart agy on the
   pin (`agy --model <slug>`). The user quits this chat, restarts agy with that command in this
   folder, and invokes the same `/mmo:` command again.
-- **Exit 3** — not checked: agy's record holds no call for this chat yet. Say so in one line —
+- **Exit 3** — not checked: agy's record holds no call for this chat yet, or a conversation's
+  record could not be read (the message names it). Say so in one line —
   never as a pass — and continue; run the same command again before the first paid dispatch
   (step 2's dispatch smoke, or Gate 0 when the pre-check is cached).
 - **Exit 2** — print the error and stop.

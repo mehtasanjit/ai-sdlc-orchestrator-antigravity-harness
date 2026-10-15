@@ -136,7 +136,8 @@ node "${MMO_PLUGIN_ROOT}/agy/check-driver-pin.mjs" --since=<run_started_at> --pr
 - **Exit 1** — refused. Print its message verbatim and stop. It names the model this chat runs on,
   the pin, and the command to restart agy on the pin (`agy --model <slug>`); the user quits this
   chat, restarts agy with that command in this folder, and runs `/mmo:greenfield` again.
-- **Exit 3** — not checked: agy's record holds no call for this chat yet. Say so in one line,
+- **Exit 3** — not checked: agy's record holds no call for this chat yet, or a conversation's
+  record could not be read (the message names it). Say so in one line,
   never as a pass, and continue; the pipeline runs the check again before Phase -1.
 - **Exit 2** — print the error and stop.
 

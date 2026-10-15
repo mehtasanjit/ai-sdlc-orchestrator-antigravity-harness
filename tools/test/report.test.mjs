@@ -152,6 +152,10 @@ test("a driver line with unpriced calls is shown as a floor, at least its figure
     assert.match(text, /driver\s+modeled\s+2\s+.*at least \$0\.0011/);
     assert.match(text, /Modeled cost\s+at least \$0\.0011/);
     assert.match(text, /driver figure is a floor, not the whole cost: 1 call\(s\) on gemini-4-argon/);
+    const rows = text.split("\n");
+    const end = (re) => { const row = rows.find((r) => re.test(r)); return row.indexOf("$") + row.slice(row.indexOf("$")).search(/\d(?!\d|\.)/) + 1; };
+    assert.equal(end(/^\s+driver\s+modeled/), end(/^\s+Cash\s/), "the floor's cost ends in the column the cash figure ends in");
+    assert.equal(end(/^\s+gemini workers\s/), end(/^\s+Cash\s/));
     const md = report(dir, "--markdown");
     assert.match(md, /\| driver \| \*\*modeled\*\* \| 2 \| .* \| at least \$0\.0011 \|/);
     assert.match(md, /\| 2 \| 2\.0K \/ 200 \| at least \$0\.0011 \|/);

@@ -39,13 +39,13 @@ A chat runs on the model agy was started with, and plain `agy` starts on agy's o
 | Exit | Meaning | The skill |
 |---|---|---|
 | `0` | Every recorded call is the pinned model (`gemini-3.8-flash` or its slug) | Continues |
-| `1` | A call ran on another model, or the pin has no price today | Prints the message and stops before any dispatch. The message names the model seen, the pin, and the restart command, `agy --model gemini-3.8-flash-high` |
-| `3` | No conversation or no model call recorded yet | Says the model is not checked, never that it passed, and checks again before the first paid dispatch |
+| `1` | A call ran on another model, even when another conversation's record could not be read, or the pin has no price today | Prints the message and stops before any dispatch. The message names the model seen, the pin, and the restart command, `agy --model gemini-3.8-flash-high` |
+| `3` | No conversation or model call recorded yet, or a conversation's record could not be read and no readable call is off the pin. The message names the unreadable conversation | Says the model is not checked, never that it passed, and checks again before the first paid dispatch |
 | `2` | Usage or policy error, or `--run-id` names a run started under another policy | Stops |
 
-With `--run-id` it copies the resolved policy to `.sdlc/runs/<run-id>/policy_snapshot.yaml`, which `manifest.mjs` reads the pin from, so an interactive run's `pin.verified` is computed. A run that already has a snapshot (a resumed run) is checked against it and keeps it.
+With `--run-id` it copies the resolved policy to `.sdlc/runs/<run-id>/policy_snapshot.yaml`, which `manifest.mjs` reads the pin from, so an interactive run's `pin.verified` is computed. A run folder elsewhere takes `--output-dir`, resolved against `--project-root`: the pipeline passes the run's output folder as `--output-dir`, so a `/mmo:pass` run with the default study and run id gets `examples/workforce-ops/passes/pass1/policy_snapshot.yaml`. A run that already has a snapshot (a resumed run) is checked against it and keeps it.
 
-Effort is not checked. agy's record names the model without its effort (`gemini-3.8-flash` for the slug `gemini-3.8-flash-high`, [check 14](verification/p1-agy-runtime.md)), and the label line in agy's `cli.log` (`Propagating selected model override to backend: label="…"`) is written when an agy process starts, not per conversation, while `cli.log` itself points at the newest process's log. Start the chat with the slug so the effort is the pinned one.
+Effort is not checked, and an interactive manifest says so (`pin.effort_verified: false`). agy's record names the model without its effort (`gemini-3.8-flash` for the slug `gemini-3.8-flash-high`, [check 14](verification/p1-agy-runtime.md)), and the label line in agy's `cli.log` (`Propagating selected model override to backend: label="…"`) is written when an agy process starts, not per conversation, while `cli.log` itself points at the newest process's log. Start the chat with the slug so the effort is the pinned one.
 
 ## Headless
 
@@ -94,7 +94,7 @@ node plugin/agy/run.mjs \
 
 `docs/verification/p1-agy-runtime.md` says nothing may be pinned on a pending check. `plugin/agy/telemetry/fairnessPin.mjs` lists the checks the headless pin depends on (2, 4, 6, 10); all four passed live on 2026-09-17, so `run.mjs` runs without `--allow-unverified-pin`. If a check is ever set back to pending, the gate closes again.
 
-Passed checks open the gate; they do not prove the run held the pin. `pin.verified` is `true` only when agy itself named the model that conducted, and every name it gave is the pinned model or its slug:
+Passed checks open the gate; they do not prove the run held the pin. `pin.verified` is `true` only when agy itself named the model that conducted, and every name it gave is the pinned model or its slug. It judges the model name, not the effort: a headless run's effort is the one in the slug `run.mjs` passed to agy, while an interactive run's is whatever the chat was started with, so its pin carries `effort_verified: false` and the console's driver line reads `gemini-3.8-flash (high, effort not checked)`:
 
 | `pin.unverified_reason` | Meaning |
 |---|---|

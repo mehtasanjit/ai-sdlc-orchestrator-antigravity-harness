@@ -460,12 +460,6 @@ export function buildHarnessManifest({ runDir, policyName, runId, env = process.
 }
 
 /**
- * The driver pin and whether a model agy recorded proves it held. A launcher
- * record written before `observed_models` existed stamped `verified` from the
- * checks alone, so it is re-derived from the models that record names. An
- * interactive run's models are the collector's, from agy's conversation record.
- */
-/**
  * An interactive run collects its driver before SUMMARY.md and again after
  * run.end. When only the first ran, the conductor's calls from then to the
  * end of the run (Gate 4, the run.end step) are in no figure.
@@ -476,6 +470,14 @@ export function driverCollectionGap(collector, markers) {
   return { collected_until: until, run_ended_at: markers.end, uncollected_sec: Math.round((Date.parse(markers.end) - Date.parse(until)) / 1000) };
 }
 
+/**
+ * The driver pin and whether a model agy recorded proves it held. A launcher
+ * record written before `observed_models` existed stamped `verified` from the
+ * checks alone, so it is re-derived from the models that record names. An
+ * interactive run's models are the collector's, from agy's conversation record,
+ * which names the model without its effort (check 14), so `verified` there
+ * covers the model name only.
+ */
 export function pinRecord({ driverManifest = null, pin = null, collector = null }) {
   if (driverManifest?.pin) {
     const recorded = driverManifest.pin;
@@ -490,6 +492,7 @@ export function pinRecord({ driverManifest = null, pin = null, collector = null 
   return {
     model: pin.model, effort: pin.effort, slug: driverSlug(pin), billing_mode: pin.billing_mode,
     ...pinVerification({ pending, observed, offPin: collector?.model_mismatch ?? [] }),
+    effort_verified: false,
     pending_checks: pending, observed_models: observed,
   };
 }

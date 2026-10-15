@@ -323,16 +323,17 @@ if (asMarkdown) {
   for (const n of lineNotes) p(`- ${n}${n.startsWith("!") ? ` \`${rebuild}\`` : ""}`);
   p();
 } else {
+  const cells = workersFirst.map((l) => [l, lineCells(l)]);
+  const costW = Math.max(11, ...cells.map(([, c]) => c.cost.length + 1), fmtUSD(cashUsd).length + 1);
   p(`  Cost lines — never summed`);
   p();
-  p(`  ${"Line".padEnd(18)}${"Kind".padEnd(14)}${"Calls".padStart(6)}${"Tokens (in / out)".padStart(21)}${"Cache (read / write)".padStart(23)}${"Cost".padStart(11)}`);
-  p(`  ${"─".repeat(93)}`);
-  for (const l of workersFirst) {
-    const c = lineCells(l);
-    p(`  ${lineName(l).padEnd(18)}${kindLabel(l).padEnd(14)}${c.calls.padStart(6)}${c.tok.padStart(21)}${c.cache.padStart(23)}${` ${c.cost}`.padStart(11)}${c.range ?? ""}`);
+  p(`  ${"Line".padEnd(18)}${"Kind".padEnd(14)}${"Calls".padStart(6)}${"Tokens (in / out)".padStart(21)}${"Cache (read / write)".padStart(23)}${"Cost".padStart(costW)}`);
+  p(`  ${"─".repeat(82 + costW)}`);
+  for (const [l, c] of cells) {
+    p(`  ${lineName(l).padEnd(18)}${kindLabel(l).padEnd(14)}${c.calls.padStart(6)}${c.tok.padStart(21)}${c.cache.padStart(23)}${c.cost.padStart(costW)}${c.range ?? ""}`);
   }
-  p(`  ${"─".repeat(93)}`);
-  p(`  ${"Cash".padEnd(82)}${fmtUSD(cashUsd).padStart(11)}`);
+  p(`  ${"─".repeat(82 + costW)}`);
+  p(`  ${"Cash".padEnd(82)}${fmtUSD(cashUsd).padStart(costW)}`);
   p();
   for (const n of lineNotes) wrap(n).forEach((l, i) => p(`${i ? "    " : "  "}${l}`));
   if (rebuild) p(`    ${rebuild}`);

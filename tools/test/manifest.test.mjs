@@ -484,6 +484,8 @@ test("an interactive run's pin is verified from the models agy's conversation re
   assert.equal(held.verified, true);
   assert.equal(held.unverified_reason, undefined);
   assert.equal(held.slug, "gemini-3.8-flash-high");
+  assert.equal(held.effort_verified, false, "agy's record names the model without its effort, so a chat's effort is unchecked");
+  assert.equal(none.effort_verified, false);
   const wrong = pinRecord({ pin, collector: { reported_models: ["gemini-3.1-pro"], model_mismatch: ["gemini-3.1-pro"] } });
   assert.deepEqual([wrong.verified, wrong.unverified_reason], [false, "model_mismatch"]);
   assert.equal(pinRecord({}), null);
@@ -495,6 +497,7 @@ test("a launcher record stamped verified from the checks alone is re-derived fro
   assert.deepEqual([blind.verified, blind.unverified_reason], [false, "no_model_observed"]);
   const seen = pinRecord({ driverManifest: { ...legacy, driver_reported_models: ["gemini-3.8-flash-high"] } });
   assert.deepEqual([seen.verified, seen.unverified_reason, seen.observed_models], [true, undefined, ["gemini-3.8-flash-high"]]);
+  assert.equal(seen.effort_verified, undefined, "a headless run's effort is the slug run.mjs passed to agy");
   const local = pinRecord({ driverManifest: { ...legacy, driver_reported_models: [], driver_usage: { local_record: { models: ["gemini-3.8-flash"] } } } });
   assert.equal(local.verified, true, "the local record's model counts as observed");
   const off = pinRecord({ driverManifest: { ...legacy, driver_reported_models: ["gemini-3.1-pro"], driver_model_mismatch: ["gemini-3.1-pro"] } });

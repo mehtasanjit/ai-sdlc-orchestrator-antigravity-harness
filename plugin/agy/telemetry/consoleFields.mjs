@@ -89,7 +89,7 @@ export function studiesConsoleFields({ lines, dispatched, pin, harness }) {
 
   return {
     cable: {
-      driver_display: `${cable.driver_runtime} · ${pin ? `${pin.model}${pin.effort ? ` (${pin.effort})` : ""}` : "driver model not pinned"} · ${cable.driver_auth}`,
+      driver_display: `${cable.driver_runtime} · ${pin ? `${pin.model}${pin.effort ? ` (${pin.effort}${pin.effort_verified === false ? ", effort not checked" : ""})` : ""}` : "driver model not pinned"} · ${cable.driver_auth}`,
       worker_sdk: WORKER_SDK,
       worker_sdk_label: WORKER_SDK_LABEL,
       worker_display: `via ${WORKER_SDK_LABEL} (MCP) → ${legs.length ? legs.join(", ") : "no dispatches"}`,

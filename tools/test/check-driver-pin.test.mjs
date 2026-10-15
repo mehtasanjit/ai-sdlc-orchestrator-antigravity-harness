@@ -112,6 +112,62 @@ test("a conversation with no model call yet is not checked either", async () => 
   } finally { c.cleanup(); }
 });
 
+test("an unreadable record of another conversation does not hide this chat's off-pin calls", async () => {
+  const project = mkdtempSync(join(tmpdir(), "proj-"));
+  const home = agyHomeWith(project, [
+    { id: "a-broken", lastModified: "2026-10-14T16:00:00Z", steps: [T("2026-10-14T15:48:00Z")], gens: [{ model: "gemini-3.8-flash", fresh: 1, thinking: 1, text: 1, output: 5, step: 0 }] },
+    { id: "b-this-chat", lastModified: "2026-10-14T16:00:00Z", steps: [T("2026-10-14T15:48:00Z")], gens: [{ model: "gemini-4-argon", fresh: 1, thinking: 1, text: 1, step: 0 }] },
+  ]);
+  try {
+    const r = await checkDriverPin({ projectRoot: project, since: SINCE, home, today: TODAY });
+    assert.equal(r.status, "refused");
+    assert.equal(r.reason, "off_pin");
+    assert.deepEqual(r.off_pin, ["gemini-4-argon"]);
+    assert.deepEqual(r.unreadable.map((u) => u.id), ["a-broken"]);
+    assert.match(r.message, /ran on gemini-4-argon \(1 call\(s\)\)/);
+    assert.match(r.message, /a-broken could not be read/);
+    const run = cli([`--since=${SINCE}`, `--project-root=${project}`], home);
+    assert.equal(run.status, 1, "a definite refusal, not a yes/no prompt");
+  } finally { for (const d of [home, project]) rmSync(d, { recursive: true, force: true }); }
+});
+
+test("an unreadable record beside on-pin ones is not checked, and names the conversation it could not read", async () => {
+  const project = mkdtempSync(join(tmpdir(), "proj-"));
+  const home = agyHomeWith(project, [
+    { id: "a-broken", lastModified: "2026-10-14T16:00:00Z", steps: [T("2026-10-14T15:48:00Z")], gens: [{ model: "gemini-3.8-flash", fresh: 1, thinking: 1, text: 1, output: 5, step: 0 }] },
+    { id: "b-this-chat", lastModified: "2026-10-14T16:00:00Z", steps: [T("2026-10-14T15:48:00Z")], gens: [{ model: "gemini-3.8-flash", fresh: 1, thinking: 1, text: 1, step: 0 }] },
+  ]);
+  try {
+    const r = await checkDriverPin({ projectRoot: project, since: SINCE, home, today: TODAY });
+    assert.equal(r.status, "unchecked", "the unreadable conversation may be this chat");
+    assert.equal(r.reason, "record_unreadable");
+    assert.deepEqual(r.models, { "gemini-3.8-flash": 1 });
+    assert.match(r.message, /NOT CHECKED[\s\S]*a-broken could not be read[\s\S]*not a pass/);
+  } finally { for (const d of [home, project]) rmSync(d, { recursive: true, force: true }); }
+});
+
+test("--output-dir writes the snapshot where the manifest reads it, for a run folder outside .sdlc/runs", async () => {
+  const c = chat(["gemini-3.8-flash"]);
+  try {
+    const outputDir = join("examples", "workforce-ops", "passes", "pass1");
+    const runDir = join(c.project, outputDir);
+    const r = await checkDriverPin({ projectRoot: c.project, since: SINCE, home: c.home, today: TODAY, runId: "pass1", outputDir, policyName: POLICY });
+    assert.equal(r.status, "ok");
+    assert.equal(r.snapshot_written, join(runDir, "policy_snapshot.yaml"));
+    assert.ok(!existsSync(join(c.project, ".sdlc", "runs", "pass1")), "nothing is written under .sdlc/runs for this run");
+    writeFileSync(join(runDir, "telemetry.jsonl"), "");
+    const m = buildHarnessManifest({ runDir, runId: "pass1", env: {} });
+    assert.equal(m.harness.pin?.slug, "gemini-3.8-flash-high");
+
+    const again = await checkDriverPin({ projectRoot: c.project, since: SINCE, home: c.home, today: TODAY, runId: "pass1", outputDir, policyName: POLICY });
+    assert.equal(again.snapshot_written, undefined, "a resumed run keeps the snapshot in its output dir");
+    rmSync(runDir, { recursive: true, force: true });
+    const run = cli([`--since=${SINCE}`, `--project-root=${c.project}`, "--run-id=pass1", `--output-dir=${outputDir}`], c.home);
+    assert.equal(run.status, 0, run.stderr);
+    assert.ok(existsSync(join(runDir, "policy_snapshot.yaml")), "the CLI resolves --output-dir against --project-root");
+  } finally { c.cleanup(); }
+});
+
 test("--run-id writes the run's policy_snapshot.yaml, so the manifest reads the pin and judges it", async () => {
   const c = chat(["gemini-3.8-flash"]);
   try {
@@ -125,6 +181,10 @@ test("--run-id writes the run's policy_snapshot.yaml, so the manifest reads the 
     const m = buildHarnessManifest({ runDir, runId: "r1", env: {} });
     assert.equal(m.harness.pin.slug, "gemini-3.8-flash-high", "the pin comes from the snapshot");
     assert.deepEqual([m.harness.pin.verified, m.harness.pin.unverified_reason], [false, "model_mismatch"]);
+
+    writeFileSync(join(runDir, "driver-collector.json"), JSON.stringify({ source: "agy-local-record", run_id: "r1", reported_models: ["gemini-3.8-flash"], model_mismatch: [] }));
+    const held = buildHarnessManifest({ runDir, runId: "r1", env: {} }).harness.pin;
+    assert.deepEqual([held.verified, held.effort, held.effort_verified], [true, "high", false], "a chat's verified pin covers the model name, not the effort");
   } finally { c.cleanup(); }
 });
 
@@ -176,5 +236,6 @@ test("the interactive skills run the pin check before anything is dispatched, an
   const markers = pipeline.slice(pipeline.indexOf("## Run start and end markers"), pipeline.indexOf("## Phase -1"));
   assert.ok(markers.indexOf(CHECK) >= 0 && markers.indexOf(CHECK) < markers.indexOf("--event=run.start"), "the pipeline checks and snapshots before run.start");
   assert.match(markers, /check-driver-pin\.mjs[^\n]*--run-id=<run_id>[^\n]*--policy=<policy>/);
+  assert.match(markers, /check-driver-pin\.mjs[^\n]*--output-dir="<output_dir>"/, "the snapshot goes where the manifest reads it, whatever the layout");
 });
 
