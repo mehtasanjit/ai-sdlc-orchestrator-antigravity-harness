@@ -80,7 +80,14 @@ The conductor runs on your Google seat by default: no invoice exists, so its cos
 
 ## 7. Hand over
 
-Setup ends by telling the user to start a **new** `agy` session in the project and to answer **yes** to the trust prompt. Plugins, rules, hooks and MCP servers load when a session begins, only in a trusted workspace; the setup session has none of them. Then `/mmo:greenfield` or `/mmo:brownfield`.
+Setup ends by telling the user to start a **new** `agy` session in the project with the command the wizard printed last, and to answer **yes** to the trust prompt. Plugins, rules, hooks and MCP servers load when a session begins, only in a trusted workspace; the setup session has none of them. Then `/mmo:greenfield` or `/mmo:brownfield`.
+
+| Policy | Start command |
+|---|---|
+| `antigravity-flash38-plus-opus5` (the default) | `agy --model gemini-3.8-flash-high` |
+| Any other | `node plugin/agy/start-command.mjs --project-root <project>` prints it: the slug from the policy's `driver:` block, derived the way `run.mjs` derives `--model` |
+
+Tell the user why in one sentence: without `--model` the chat runs on agy's default model, while the run prices the conductor at the pin's rates and checks it against the pin, so the model check fails (`pin.unverified_reason: model_mismatch`).
 
 ## 8. Before any paid run
 

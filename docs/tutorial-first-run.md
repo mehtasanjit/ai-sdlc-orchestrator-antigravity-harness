@@ -43,11 +43,13 @@ The report prints the **Cost lines** (both worker lines at $0, the driver line m
 
 ## 3. Open a NEW session in the folder
 
-Skills, rules, hooks and the bridge load when a session starts, in a trusted workspace. The session that set up the plugin does not see `/mmo:greenfield`. Open a fresh one:
+Skills, rules, hooks and the bridge load when a session starts, in a trusted workspace. The session that set up the plugin does not see `/mmo:greenfield`. Open a fresh one on the policy's driver pin, the command setup printed last:
 
 ```bash
-cd ../first-run && agy
+cd ../first-run && agy --model gemini-3.8-flash-high
 ```
+
+Without `--model` the chat runs on agy's default model, while the run prices the conductor at the pin's rates and checks it against `gemini-3.8-flash-high`, so the model check fails.
 
 Answer **yes** when agy asks whether you trust the folder. `/skills` now lists the `mmo:` entries.
 
@@ -115,9 +117,9 @@ npm start
 
 Then `curl http://localhost:3000/ping` — `{ "status": "ok", "time": "…" }` is what the brief asked for.
 
-## 8. The measured version
+## 8. The headless cost check
 
-An interactive run has no driver line. The run of record goes through the headless launcher, which pins the conductor's model and effort, answers the gates itself, and prices every conductor turn from the stream:
+The run you just made is how you use the harness. The headless launcher is the cost check: it runs the same pipeline unattended, answers the gates itself, passes the driver pin as `--model` on every invocation, and records the conductor's usage from agy's own stream:
 
 ```bash
 node plugin/agy/run.mjs --brief=examples/quick-demo/brief.md --project-root=/tmp/demo --gates=auto-approve --run-id=quick-demo-1 --dry-run

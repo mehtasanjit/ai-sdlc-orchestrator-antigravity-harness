@@ -11,6 +11,9 @@ import { readFileSync, readdirSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { DEFAULT_POLICY, loadPolicyFile } from "../../plugin/agy/run.mjs";
+import { driverSlug, readPin } from "../../plugin/agy/telemetry/fairnessPin.mjs";
+
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const read = (p) => readFileSync(join(ROOT, p), "utf8");
 
@@ -59,4 +62,27 @@ test("the pass skill accepts only --auth=vendor on this runtime", () => {
   const pass = read("plugin/skills/pass/SKILL.md");
   assert.match(pass, /`--auth=vendor` — \*\*required\*\*, and `vendor` is the only value/);
   assert.ok(!/CLAUDE_CODE_SUBAGENT_MODEL` must be set/.test(pass));
+});
+
+const RUN_START_DOCS = ["README.md", "docs/running.md", "docs/tutorial-first-run.md", "INSTALL.md", "SETUP.md", "docs/setup.md", "plugin/skills/setup/SKILL.md"];
+
+test("every place that starts the run session gives agy --model with the default policy's slug, and says why", () => {
+  const command = `agy --model ${driverSlug(readPin(loadPolicyFile(DEFAULT_POLICY)))}`;
+  for (const p of RUN_START_DOCS) {
+    const text = read(p);
+    assert.ok(text.includes(command), `${p}: ${command}`);
+    assert.match(text, /without `--model` the (chat|app) runs on (agy's|its own) default model/i, `${p}: why the pin`);
+  }
+  assert.doesNotMatch(read("docs/tutorial-first-run.md"), /cd \.\.\/first-run && agy\n/, "the run session starts on the pin");
+  assert.doesNotMatch(read("README.md"), /open it again with `agy` in the same folder/);
+  assert.doesNotMatch(read("docs/running.md"), /Then open `agy` in the project/);
+});
+
+test("interactive is how the harness is used; headless is the cost check", () => {
+  const running = read("docs/running.md");
+  assert.match(running, /Interactive is how you use the harness/);
+  assert.match(running, /Headless is the cost check/);
+  for (const p of [...RUN_START_DOCS, "docs/repo-overview.md"]) {
+    assert.doesNotMatch(read(p), /build and debug the plugin|run of record|An interactive run has no driver line|The measured runs go through it/, p);
+  }
 });

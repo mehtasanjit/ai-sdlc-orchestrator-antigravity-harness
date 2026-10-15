@@ -136,6 +136,8 @@ node tools/setup.mjs --project-root /path/to/your/project
 
 `npm test` is offline and free. `npm run build` compiles the bridge under `plugin/mcp/model-dispatch/dist/`, which is gitignored and must be rebuilt after every pull that touches the bridge. The wizard's `--yes` takes every default, `--policy=<name>` skips the browser, `--no-agent` skips the door question.
 
+The wizard ends with the command that starts the run session in the project, on the policy's driver pin: `agy --model gemini-3.8-flash-high` for the default policy. Without `--model` the chat runs on agy's default model, while the run prices the conductor at the pin's rates and checks it against the pin, so the model check fails. `node plugin/agy/start-command.mjs --project-root=/path/to/your/project` prints the command again.
+
 ## Before any paid run
 
 1. `npm test` passes and `npm run verify` is green.

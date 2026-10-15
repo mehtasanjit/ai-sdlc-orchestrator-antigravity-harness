@@ -66,7 +66,17 @@ Do not run `agy plugin install` or `agy plugin import` on this repo: both copy t
 
 ## 6. Hand over
 
-Tell the user to start a **new** `agy` session in the project — plugins, rules, hooks and MCP servers load when a session begins — answer **yes** to the trust prompt, and then run `/mmo:greenfield` (empty folder + brief) or `/mmo:brownfield` (existing repo). In that session `/skills` lists the `mmo:` entry points.
+Tell the user to start a **new** `agy` session in the project — plugins, rules, hooks and MCP servers load when a session begins — with the exact command the wizard printed last, answer **yes** to the trust prompt, and then run `/mmo:greenfield` (empty folder + brief) or `/mmo:brownfield` (existing repo). In that session `/skills` lists the `mmo:` entry points. For the default policy the command, run in the project folder, is:
+
+```bash
+agy --model gemini-3.8-flash-high
+```
+
+Give the reason in one sentence: without `--model` the chat runs on agy's default model, while the run prices the conductor at the pin's rates and checks it against the pin, so the model check fails. For another policy the slug differs; this prints the project's own command:
+
+```bash
+node ../ai-sdlc-orchestrator-antigravity-harness/plugin/agy/start-command.mjs --project-root "$(pwd)"
+```
 
 ## 7. Verify later
 
