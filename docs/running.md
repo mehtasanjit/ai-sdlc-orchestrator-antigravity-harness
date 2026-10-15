@@ -206,7 +206,8 @@ node tools/report.mjs /tmp/smoke/.sdlc/runs/smoke1
 | `skills/pipeline.md`, `skills/brownfield-guide.md` | `run.mjs` at launch | The playbook with real paths rendered in |
 | `preflight.json` | the conductor, from `preflight_dispatch` | Rule 0's verdict |
 | `telemetry.jsonl` | the bridge | Every dispatched call, vendor-metered |
-| `gates.jsonl` | the conductor | One line per gate with the decision mode |
+| `gates.jsonl` | `plugin/scripts/record-gate.mjs`, run by the conductor | One line per gate answer: the decision, the artifact, its SHA-256, and the reply verbatim (`null` for `auto-approved` / `auto-aborted`) |
+| `gate-mode.json` | `run.mjs`, before agy starts | The run's `--gates` mode; `record-gate.mjs` takes an `auto-approved` or `auto-aborted` decision only when it names that mode |
 | `state.json` | the conductor, before each gate and after its decision | The gate the run is at and its status (`gate_pending`, `running`, `complete`, `aborted`). It is one of the inputs to [when a run counts as unfinished](#when-a-run-counts-as-unfinished) |
 | `driver-events.jsonl` | `run.mjs` | The raw stream-json, every invocation |
 | `driver-stderr.log` | `run.mjs` | agy's stderr, where soft-denials and hook notices land |

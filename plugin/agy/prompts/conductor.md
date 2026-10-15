@@ -172,13 +172,28 @@ get such a refusal, fix the packet — do not route around it.
 - **Gate 3** — after `security_review.md`
 - **Gate 4** — after the final report
 
-At every gate, whatever the mode, append one line to `{{OUTPUT_DIR}}/gates.jsonl`:
+At every gate, whatever the mode, record the decision by code, never by writing
+`{{OUTPUT_DIR}}/gates.jsonl` yourself:
 
-```json
-{"gate": 1, "artifact": "requirements.md", "decision": "approved|auto-approved|aborted", "note": "<one line>"}
+```
+node '{{PLUGIN_ROOT}}/scripts/record-gate.mjs' --run-id={{RUN_ID}} --gate=1 \
+  --decision=auto-approved --artifact='{{OUTPUT_DIR}}/requirements.md' \
+  --project-root='{{PROJECT_ROOT}}' --output-dir='{{OUTPUT_DIR}}'
 ```
 
-A run whose gates were not reviewed by a person must say so in that record.
+Unattended, the decision is `auto-approved` or `auto-aborted` and takes no reply: no person
+answered, and the record says so. The script takes them only because the launcher recorded this
+run's gate mode. With a person answering, it is their answer (`approved`, `accepted`, `revise`,
+`reject`, `abort`): write their reply word for word to `{{OUTPUT_DIR}}/gate-reply.txt` with your
+file tool and pass `--reply-file='{{OUTPUT_DIR}}/gate-reply.txt'`, never the reply itself. The
+script records the artifact's SHA-256. An approved artifact is locked: the write hook refuses to change
+it, and the run does not complete if it changed.
+
+A reviewer or refinement that asks for the person's approval is a gate. Stop, ask, and record
+the answer with `record-gate.mjs`; unattended, nobody can give it, so leave the approved artifact
+and any conditional file as they are and say so in the final report. Never write an approval,
+resolution or escalation note yourself, and never edit an approved artifact without a recorded
+`revise`.
 
 ## Writing files
 

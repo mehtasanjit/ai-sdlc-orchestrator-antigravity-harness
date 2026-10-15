@@ -307,11 +307,18 @@ test("a stop record's quoted --reason and --needs are prose, never judged as com
   } finally { rmSync(dir, { recursive: true, force: true }); rmSync(harness, { recursive: true, force: true }); }
 });
 
-test("withoutProse empties only quoted --reason and --needs values the shell does not expand", () => {
-  assert.equal(withoutProse(`x --reason="npm install a" --needs='npm i b' --other="npm i c"`), `x --reason="" --needs='' --other="npm i c"`);
-  assert.equal(withoutProse(`x --reason="$(npm i a)"`), `x --reason="$(npm i a)"`);
-  assert.equal(withoutProse(`x --reason="a"b`), `x --reason="a"b`, "a value glued to more of the word is kept");
-  assert.equal(withoutProse(`x --reason="open`), `x --reason="open`);
+test("withoutProse empties only quoted prose values of the plugin's own scripts that the shell does not expand", () => {
+  const log = `node "$MMO_PLUGIN_ROOT/scripts/mmo-log.mjs"`;
+  assert.equal(withoutProse(`${log} --reason="npm install a" --needs='npm i b' --other="npm i c"`), `${log} --reason="" --needs='' --other="npm i c"`);
+  assert.equal(withoutProse(`${log} --reason="$(npm i a)"`), `${log} --reason="$(npm i a)"`);
+  assert.equal(withoutProse(`${log} --reason="a"b`), `${log} --reason="a"b`, "a value glued to more of the word is kept");
+  assert.equal(withoutProse(`${log} --reason="open`), `${log} --reason="open`);
+  for (const line of [`node '/a b/scripts/record-gate.mjs' --reply='x > y'`, `cd p && node plugin/scripts/write-contract.mjs --condition 'if a > b'`, `node "/p/agy/dispatch.mjs" --reason='npm i a'`]) {
+    assert.doesNotMatch(withoutProse(line), /[>]|npm/, line);
+  }
+  for (const line of [`x --reason="npm install a"`, `eval true --reply ';echo k=v > .env'`, `sh -c 'x' --condition ';echo > f'`, `${log} --reason='a'; eval x --reply 'echo > f'`]) {
+    assert.match(withoutProse(line), /npm|> /, `${line}: the flag on any other command is judged`);
+  }
   assert.equal(withoutProse(undefined), undefined);
 });
 

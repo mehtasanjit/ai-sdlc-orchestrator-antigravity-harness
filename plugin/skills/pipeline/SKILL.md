@@ -573,18 +573,32 @@ with `phase: <name>, task_type: "skipped"` so downstream summaries stay complete
 ## HITL gate prompt templates
 
 **Gate delivery.** Interactive, you print the gate block yourself and wait for the user's reply,
-then append one line with their decision to `<output_dir>/gates.jsonl`:
-`{"gate": <N>, "artifact": "<file the gate reviewed>", "decision": "approved|revise|aborted|accepted", "note": "<one line>"}`
-(`accepted` for Gate 4's `accept`; the manifest reads Gate 4's last line to mark the run completed).
+then record it by code, never by writing `gates.jsonl` yourself. Write the reply as you received
+it, word for word, to `<output_dir>/gate-reply.txt` with your file tool; never put it on the
+command line, where shell quoting rewrites it and can run parts of it. Then run:
+
+```bash
+node "${MMO_PLUGIN_ROOT}/scripts/record-gate.mjs" --run-id=<run_id> --gate=<N> --decision=<approved|accepted|revise|reject|abort> --artifact=<output_dir>/<file the gate reviewed> --reply-file=<output_dir>/gate-reply.txt --project-root="<project_root>" --output-dir="<output_dir>"
+```
+
+`--artifact` is relative to the project root (`.sdlc/runs/<run_id>/requirements.md`). `accepted`
+is Gate 4's `accept` and `reject` its `reject: <comments>`; the manifest reads Gate 4's last line to
+mark the run completed. The decision is the one the reply gives: a `revise`, `reject` or `abort`
+reply begins with that word, an approving one with none of them, and the script refuses a
+mismatch. It stores the reply, records the artifact's SHA-256 with it, and removes the reply file. **An approved artifact is locked:** while a brownfield
+contract binds, the hook refuses any write to it, and the close-out (any mode) refuses `completed`
+when its bytes no longer match the approval. It changes only after a recorded `revise` (or Gate 4
+`reject`), which re-opens it until its gate approves it again.
 Every gate is a fenced `> ⏸ **HITL Gate <N> — <Title>**` block (templates below), printed
 verbatim. Headless, the conductor prompt names the gate mode (`auto-approve` or `auto-abort`):
-print the block anyway, apply the mode's decision, and append the line to `<output_dir>/gates.jsonl`
-that the conductor prompt specifies — a run whose gates were not reviewed by a person must say so. **Persist
+print the block anyway, apply the mode's decision, and record it with the same script
+(`--decision=auto-approved` or `--decision=auto-aborted`, no reply; the script takes them only in a
+run `plugin/agy/run.mjs` launched in that mode) — a run whose gates were not reviewed by a person must say so. **Persist
 the gate-pending state to `<output_dir>/state.json` before printing** — the run's own folder,
 `.sdlc/runs/<run-id>/state.json`, the one place under `.sdlc/` a live write contract lets the run
 write. Write the whole file, one object:
 `{"run_id": "<run-id>", "phase": "<phase>", "gate": <N>, "status": "gate_pending", "at": "<ISO-8601 now>"}`.
-After appending the decision to `gates.jsonl`, rewrite it with a new `at` and the status the decision
+After recording the decision, rewrite it with a new `at` and the status the decision
 leaves: `"complete"` once Gate 4 is accepted (or auto-approved), `"aborted"` after any abort,
 `"running"` otherwise. If the session dies mid-gate, session-hydrate finds the non-terminal state and
 re-prompts on the next `/mmo:brownfield` invocation. No new command needed.
@@ -607,6 +621,9 @@ re-prompts on the next `/mmo:brownfield` invocation. No new command needed.
 > - **Intent:** `<intent picked in step 4a of /mmo:brownfield>`
 > - **File scope:**
 >   - allowlist: `<paths proposed by the intent brief>` — accept / edit
+>   - conditional: `<path>` — in scope only `<condition, e.g. if route error-handling is needed>`;
+>     written only after you approve it when the condition arises (one line per file the brief
+>     scopes "if needed"; never in the allowlist)
 >   - off-limits: **project defaults from `.sdlc/project.json.off_limits_default`** apply
 >     (`.env*`, `.mcp.json`, `node_modules/**`, `.cursor/rules/**`, other AI tools'
 >     settings files, `dist/**`, `.sdlc/**`, `.git/**`) — add anything else this ticket must not touch
@@ -619,9 +636,15 @@ re-prompts on the next `/mmo:brownfield` invocation. No new command needed.
 >
 > Reply: `approved`, `revise: <comments>`, or `abort`.
 
-On `approved`, freeze the write contract by code with
-`node "${MMO_PLUGIN_ROOT}/scripts/write-contract.mjs" --freeze --run-id=<run_id> --allowlist='<JSON>' --off-limits='<JSON>' --test-command='<test command>' --project-root="$(pwd)"`
-(the brownfield guide's step 5; `--test-command=none` when the user answered `none`); never write `.sdlc/local/write-contract.json` yourself. Build `off_limits` by concatenating `.sdlc/project.json.off_limits_default`
+On `approved`, record it (`--gate=0 --artifact=.sdlc/runs/<run_id>/discovery.md`), then freeze
+the write contract by code with
+`node "${MMO_PLUGIN_ROOT}/scripts/write-contract.mjs" --freeze --run-id=<run_id> --allowlist='<JSON>' --off-limits='<JSON>' --test-command='<test command>' --conditional='<path>' --condition='<condition>' --project-root="$(pwd)"`
+(the brownfield guide's step 5; `--test-command=none` when the user answered `none`; one
+`--conditional`/`--condition` pair per conditional file, none when there are none); never write
+`.sdlc/local/write-contract.json` yourself. The hook refuses a conditional file until the user
+says its condition holds: ask, quoting the condition, and record a yes with
+`--gate=0 --decision=approved-conditional --artifact=<path>`, the reply through `gate-reply.txt`
+as at every gate. Build `off_limits` by concatenating `.sdlc/project.json.off_limits_default`
 (the project-level constants — `.env*`, `.mcp.json`, `node_modules/**`, etc., written by setup)
 with the AI-configs from `baseline.ai_configs_detected` and any ticket-specific paths the user
 added at Gate 0. The PreToolUse hook and the packet validator both read the merged list — the
@@ -742,6 +765,12 @@ never by editing the file yourself. The same holds for any other fix to a file a
 dispatch a refined packet for it. Write each worker's returned content to its `artifact_path`
 exactly as returned. An `in_session` row explains a change you made yourself; it does not make
 that change dispatched work.
+
+**A review or refinement that asks for the user's approval is a gate, not a packet.** Stop, ask
+the user, and record the answer with `record-gate.mjs`. Never write an approval, resolution or
+escalation note yourself, and never edit an approved artifact without a recorded `revise`. An
+answer that changes an approved artifact is a `revise` on that artifact's gate, followed by its
+gate again; a conditional file is an `approved-conditional` at Gate 0.
 
 The code-written manifest checks this. `harness.unrecorded_phases` lists every judgment phase the
 run went through with no row at all, and `harness.conductor_edits` lists every planned file whose

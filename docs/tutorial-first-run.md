@@ -78,7 +78,7 @@ The pipeline pauses at four points:
 - **Gate 3** — after `security_review.md` is written.
 - **Gate 4** — after the final report.
 
-At each gate, the artifact prints on screen. Read it, then approve to continue or type feedback to redirect the phase. For the quick-demo brief you can approve every gate as-is. Each decision is appended to `.sdlc/gates.jsonl`.
+At each gate, the artifact prints on screen. Read it, then approve to continue or type feedback to redirect the phase. For the quick-demo brief you can approve every gate as-is. Each decision is recorded, with your reply word for word, in the run folder's `gates.jsonl`.
 
 **Wall-clock for the whole run:** minutes for quick-demo. Longer briefs (`workforce-ops`, `travel-ops`) take an hour or more.
 
