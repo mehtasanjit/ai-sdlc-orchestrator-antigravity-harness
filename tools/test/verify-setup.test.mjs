@@ -170,6 +170,18 @@ test("the next-steps banner names the repo-discovery route and the sign-in cavea
   assert.equal(nextStepsBanner("/nonexistent", false), null);
 });
 
+test("the banner starts the chat on the project's driver pin, or says why it cannot", () => {
+  const banner = nextStepsBanner("/nonexistent", true);
+  assert.ok(banner.includes(`cd "/nonexistent" && agy --model gemini-3.8-flash-high\n`), banner);
+  assert.match(banner, /Without --model the chat runs on agy's default model/);
+  assert.doesNotMatch(banner, /open `agy` in the repo root/);
+  const other = nextStepsBanner("/p", true, { command: "agy --model gemini-3.8-flash-low", slug: "gemini-3.8-flash-low" });
+  assert.ok(other.includes(`cd "/p" && agy --model gemini-3.8-flash-low\n`), other);
+  const none = nextStepsBanner("/p", true, { command: null, error: "fairness pin: policy 'x' has no top-level driver: block" });
+  assert.match(none, /✗ No command to start a chat on the driver pin: fairness pin: policy 'x' has no top-level driver: block/);
+  assert.doesNotMatch(none, /agy --model/);
+});
+
 // ── env-checks ────────────────────────────────────────────────────────────
 
 test("OUR_COMMAND_NAMES is exactly the shipped skill directories", () => {

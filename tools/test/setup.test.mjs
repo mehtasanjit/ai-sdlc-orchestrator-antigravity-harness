@@ -11,7 +11,8 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { parseArgs, mountPlan, registerProject, MOUNT_FILES, MOUNT_DIRS } from "../setup.mjs";
+import { parseArgs, mountPlan, registerProject, handoverLines, MOUNT_FILES, MOUNT_DIRS } from "../setup.mjs";
+import { projectStartCommand } from "../../plugin/agy/start-command.mjs";
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
 
@@ -59,7 +60,28 @@ test("the wizard runs non-interactively against an empty project and leaves it r
     assert.match(out, /Mount the plugin in this project/);
     assert.match(out, /Arm A: ANTHROPIC_API_KEY is set/);
     assert.match(out, /Start a NEW agy session|Setup incomplete/);
+    assert.match(out, /The run session starts with: agy --model gemini-3\.8-flash-high/);
+    if (/Setup complete/.test(out)) assert.ok(out.includes(`cd "${dir}" && agy --model gemini-3.8-flash-high\n`), out);
     assert.ok(!/plugin install/.test(out.replace(/Do not run `agy plugin install`/g, "")), "never tells anyone to install globally");
     assert.ok(!out.includes("sk-ant-dummy"), "never prints a key");
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test("the hand-over gives the exact start command with the project's own driver pin, and why", () => {
+  const dir = mkdtempSync(join(tmpdir(), "agy-setup-handover-"));
+  try {
+    const lines = handoverLines({ projectRoot: dir, start: projectStartCommand({ projectRoot: dir }) });
+    assert.match(lines[0], /^Start a NEW agy session in /);
+    assert.equal(lines[1], `  cd "${dir}" && agy --model gemini-3.8-flash-high`);
+    assert.match(lines[2], /^Without --model the chat runs on agy's default model.*checks it against gemini-3\.8-flash-high, so the model check fails\.$/);
+    assert.ok(lines.some((l) => l.includes("/mmo:greenfield")));
+    assert.ok(lines.some((l) => /run\.mjs" --brief=.*--dry-run$/.test(l)));
+
+    const policy = readFileSync(join(ROOT, "plugin", "config", "policies", "antigravity-flash38-plus-opus5.yaml"), "utf8")
+      .replace("name: antigravity-flash38-plus-opus5", "name: team-low")
+      .replace("reasoning: { effort: high }\n  # Gemini 3.8 Flash introductory", "reasoning: { effort: low }\n  # Gemini 3.8 Flash introductory");
+    writeFileSync(join(dir, "routing-policy.yaml"), policy);
+    const other = handoverLines({ projectRoot: dir, start: projectStartCommand({ projectRoot: dir }) });
+    assert.equal(other[1], `  cd "${dir}" && agy --model gemini-3.8-flash-low`);
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });

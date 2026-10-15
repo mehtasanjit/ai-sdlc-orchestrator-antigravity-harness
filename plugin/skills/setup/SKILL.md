@@ -60,7 +60,8 @@ The script reports three kinds of finding:
 
 Do not write a supplied credential anywhere. Tell the user to export it in the shell that launches
 agy (or run `gcloud auth application-default login` for the Google Cloud path — no env var
-involved) and to start a new session. Never write `MMO_SELECT` by hand; step 3 handles it.
+involved) and to start a new session with the start command from step 5. Never write `MMO_SELECT`
+by hand; step 3 handles it.
 
 # 3. Gemini door — auto-pick if only one works, ask only if both are available
 
@@ -132,12 +133,22 @@ shipped preset, which fails downstream. The picker above covers every real path.
 # 5. Print the next-steps banner
 
 The script from step 1 already prints this at the end of a successful run. If for any reason it
-did not (e.g. the run stopped short earlier), print it explicitly:
+did not (e.g. the run stopped short earlier), print it explicitly. Get the start command first; it
+derives the slug from this project's policy (its `driver:` block) the way `run.mjs` derives
+`--model`, and prints `agy --model gemini-3.8-flash-high` for the default policy:
+
+```bash
+node "${MMO_PLUGIN_ROOT}/agy/start-command.mjs" --project-root "$(pwd)"
+```
 
 ```
 ✓ Setup complete for this project.
 
-Try one of these in a NEW session in the same folder:
+Start a NEW session in this folder with exactly this command:
+
+  <start command>
+
+Then try one of these:
 
   `/mmo:greenfield`          — generate a new app from a brief (empty folder)
   `/mmo:brownfield`   — work on this existing repo (docs, bugfix, feature, refactor, …)
@@ -146,6 +157,11 @@ Try one of these in a NEW session in the same folder:
 
 Current policy: <policyName>   (change: `/mmo:policy` change)
 ```
+
+Give the start command exactly as printed, never plain `agy`. Say plainly why, in one sentence:
+without `--model` the chat runs on agy's default model, while the run prices the conductor at the
+pin's rates and checks it against the pin, so the model check fails. If the script exits non-zero,
+print its error and STOP: the policy has no usable driver pin, and no run can start on it.
 
 Say plainly why a NEW session is required: agy loads a plugin's skills, rules, hooks and MCP
 servers when a session begins. In this session the setup changes are on disk but not live.

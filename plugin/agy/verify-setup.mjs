@@ -26,6 +26,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { readMmoSelectFile, writeMmoSelectFile } from "./mmoSelect.mjs";
+import { projectStartCommand, whyThePin } from "./start-command.mjs";
 import { runChecks as runEnvChecks, renderText as renderEnvChecks } from "./env-checks.mjs";
 import { isMain } from "../scripts/lib/is-main.mjs";
 import { staleBuild } from "../scripts/lib/stale-build.mjs";
@@ -735,7 +736,7 @@ export function agentProbeHint(pluginRoot, env = {}, ok = true) {
   );
 }
 
-export function nextStepsBanner(cwd = process.cwd(), ok = true) {
+export function nextStepsBanner(cwd = process.cwd(), ok = true, start = projectStartCommand({ projectRoot: cwd })) {
   if (!ok) return null;
   let currentPolicy = null;
   try {
@@ -744,11 +745,17 @@ export function nextStepsBanner(cwd = process.cwd(), ok = true) {
   const policyLine = currentPolicy
     ? `\n  Current policy: ${currentPolicy}   (change: the policy skill)`
     : `\n  No policy set yet — the launcher defaults to ${DEFAULT_POLICY}.`;
+  const interactive = start.command
+    ? `  Interactive, how you use the harness: start a NEW agy session in this project on the\n` +
+      `  policy's driver pin, invoke a skill, and answer the gates yourself:\n` +
+      `    cd "${cwd}" && ${start.command}\n` +
+      `  ${whyThePin(start.slug)}\n` +
+      `  /plugins lists mmo, /mcp shows model-dispatch, /skills lists greenfield, brownfield, pass, policy and the rest.\n\n`
+    : `  ✗ No command to start a chat on the driver pin: ${start.error}\n\n`;
   return (
     `\n✓ Setup complete for this project.\n\n` +
-    `  Interactive: open \`agy\` in the repo root; /plugins lists mmo, /mcp shows model-dispatch,\n` +
-    `  /skills lists greenfield, brownfield, pass, policy and the rest.\n\n` +
-    `  Headless:    node plugin/agy/run.mjs --brief=<file> --project-root=<dir> --output-dir=<dir> --dry-run\n` +
+    interactive +
+    `  Headless, the cost check: node plugin/agy/run.mjs --brief=<file> --project-root=<dir> --output-dir=<dir> --dry-run\n` +
     policyLine +
     `\n  Sign-in is not checked here: \`agy models\` must list models before a run.`
   );
