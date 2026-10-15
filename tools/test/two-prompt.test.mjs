@@ -98,9 +98,12 @@ test("the start command's reason claims only the model check agy's record suppor
   assert.match(running, /checks the model it ran on against the pin's model/);
   assert.match(running, /A chat started at another effort passes/);
   assert.doesNotMatch(running, /or in the repo root, where the committed mount already applies/);
-  assert.match(running, /\[check 19\]\(verification\/p1-agy-runtime\.md\), pending/);
+  assert.match(running, /\[check 19\]\(verification\/p1-agy-runtime\.md\), 2026-10-15/);
+  assert.doesNotMatch(running, /\[check 19\]\(verification\/p1-agy-runtime\.md\), pending/);
   const row = read("docs/verification/p1-agy-runtime.md").split("\n").find((l) => l.startsWith("| 19 |"));
-  assert.match(row, /\*\*PENDING/, "check 19 stays pending until an interactive --model chat is read back");
+  assert.match(row, /\*\*PASS/, "check 19 passed on an interactive --model chat read back from agy's record");
+  assert.match(row, /f70d8c75-df7e-49ab-8da8-7d558a6159b5/, "the row names the conversation that proved it");
+  assert.match(row, /never the\s+effort/, "the row keeps the effort caveat");
 });
 
 test("re-checking a project names it, and a policy change hands over the new start command", () => {

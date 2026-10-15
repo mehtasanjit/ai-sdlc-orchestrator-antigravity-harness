@@ -28,7 +28,7 @@ What an interactive run's pin check can see:
 | The model, `gemini-3.8-flash` | agy's local conversation record, field `.1.19` ([check 18](verification/p1-agy-runtime.md)) | A chat started with plain `agy`: the record names agy's default model |
 | The effort, `high` | Nothing: `.1.19` reads `gemini-3.8-flash` on a `-high` run, and the collector reads no effort field | None. A chat started at another effort passes, so use the slug exactly as printed |
 
-Whether a chat started with `--model` conducts on that slug is [check 19](verification/p1-agy-runtime.md), pending: a plain `agy` chat on agy 1.3.5 conducted on `gemini-4-argon`, and no interactive run started with `--model` is recorded yet. Until it is, `pin.verified` in the run's manifest is what shows the chat held the pin's model.
+A chat started with `--model` conducts on that slug ([check 19](verification/p1-agy-runtime.md), 2026-10-15): a brownfield chat started with `agy --model gemini-3.8-flash-high` made 233 calls in its run window, all on `gemini-3.8-flash`, and its manifest recorded `pin.verified: true`. A chat started with plain `agy` conducted on `gemini-4-argon`. `pin.verified` in the run's manifest is what shows a chat held the pin's model.
 
 `/skills` lists `mmo:greenfield`, `mmo:brownfield`, `mmo:pass` and the rest; the bridge's tools are reached through `call_mcp_tool`. Invoke a skill and answer the gates yourself. Credentials come from the shell that launched `agy` (see [SETUP.md](../SETUP.md)).
 
