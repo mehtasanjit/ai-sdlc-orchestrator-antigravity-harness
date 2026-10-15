@@ -8,17 +8,27 @@ Two shapes. Interactive is how you use the harness: you invoke a skill in an agy
 
 ## Interactive
 
-Run `node tools/setup.mjs --project-root /path/to/your/project` once (README, "Setup — the two-prompt flow"); it mounts the plugin as `.agents/plugins/mmo/` in the project and prints the command that starts the chat. Start agy in the project — or in the repo root, where the committed mount already applies — on the policy's driver pin, and answer yes to the trust prompt:
+Run `node tools/setup.mjs --project-root /path/to/your/project` once (README, "Setup — the two-prompt flow"); it mounts the plugin as `.agents/plugins/mmo/` in the project and prints the command that starts the chat. Start agy in the project on the policy's driver pin, and answer yes to the trust prompt:
 
 ```bash
 cd /path/to/your/project && agy --model gemini-3.8-flash-high
 ```
 
-Without `--model` the chat runs on agy's default model, while the run prices the conductor at the pin's rates and checks it against the pin, so the model check fails (`pin.unverified_reason: model_mismatch`). `gemini-3.8-flash-high` is the default policy's slug. For the project's own policy, this prints the slug derived from its `driver:` block the way `run.mjs` derives `--model`:
+Without `--model` the chat runs on agy's default model, while the run prices the conductor at the pin's rates and checks the model it ran on against the pin's model, so the model check fails (`pin.unverified_reason: model_mismatch`). `gemini-3.8-flash-high` is the default policy's slug. For the project's own policy, either command below prints the slug derived from its `driver:` block the way `run.mjs` derives `--model`. Run them in the harness clone; `npm run verify` without `--project-root` checks the clone itself and prints no start command.
 
 ```bash
 node plugin/agy/start-command.mjs --project-root=/path/to/your/project
+npm run verify -- --project-root=/path/to/your/project
 ```
+
+What an interactive run's pin check can see:
+
+| Part of the slug | Read from | A wrong start it catches |
+|---|---|---|
+| The model, `gemini-3.8-flash` | agy's local conversation record, field `.1.19` ([check 18](verification/p1-agy-runtime.md)) | A chat started with plain `agy`: the record names agy's default model |
+| The effort, `high` | Nothing: `.1.19` reads `gemini-3.8-flash` on a `-high` run, and the collector reads no effort field | None. A chat started at another effort passes, so use the slug exactly as printed |
+
+Whether a chat started with `--model` conducts on that slug is [check 19](verification/p1-agy-runtime.md), pending: a plain `agy` chat on agy 1.3.5 conducted on `gemini-4-argon`, and no interactive run started with `--model` is recorded yet. Until it is, `pin.verified` in the run's manifest is what shows the chat held the pin's model.
 
 `/skills` lists `mmo:greenfield`, `mmo:brownfield`, `mmo:pass` and the rest; the bridge's tools are reached through `call_mcp_tool`. Invoke a skill and answer the gates yourself. Credentials come from the shell that launched `agy` (see [SETUP.md](../SETUP.md)).
 
@@ -73,7 +83,7 @@ Passed checks open the gate; they do not prove the run held the pin. `pin.verifi
 
 | `pin.unverified_reason` | Meaning |
 |---|---|
-| `model_mismatch` | agy named a model that is not the pin (`driver_model_mismatch` lists it). On an interactive run, the chat was started without `--model` |
+| `model_mismatch` | agy named a model that is not the pin (`driver_model_mismatch` lists it). On an interactive run, most often a chat started without `--model` |
 | `pending_checks` | A check in `pin.pending_checks` is pending, and the run went ahead under `--allow-unverified-pin` |
 | `no_model_observed` | Neither the stream nor agy's local conversation record named a model, so nothing shows which model conducted |
 

@@ -412,7 +412,7 @@ Every headless setting: [docs/running.md](docs/running.md).
 | Does the free practice run work? | Yes, on every `npm test` (see [Try it — one offline run](#try-it--one-offline-run)). |
 | Has it run for real? | Yes, twice, both inside the Antigravity app — the two runs in [What it costs](#what-it-costs). Each has a line-by-line cost audit: [greenfield](docs/verification/greenfield-001-cost-audit.md), [brownfield](docs/verification/brownfield-maps-screen-cost-audit.md). |
 | Were those bills right? | Each recorded price matches the vendor's published rate. Some calls were missing: a Claude call that timed out was booked at $0, and one that was cut off left no receipt. In the brownfield run, most coding tasks went to the expensive expert instead of the fast crew, because the policy did not name those task types. |
-| Has a headless run been done for real? | Not yet. So the conductor's own cost has never been measured from real numbers. |
+| Has a headless run been done for real? | Yes, twice on 14 October 2026: one new app and one bug fix in an existing project, with nobody watching. Both measured the conductor's own cost from the app's counters, and each figure matches the app's own record of the conversation to the token: [the two runs](docs/verification/headless-proof-runs-2026-10-14.md). |
 | Where are the published example runs? | None are in this repository yet; the first will be the [Ping Service](examples/quick-demo/) brief. The [Claude Code version](https://github.com/tl-ai-labs/ai-sdlc-orchestrator-claude-code-harness) ships two in `examples/quick-demo/passes/`. |
 
 Every capability claim about the Antigravity app is backed by a numbered check in [docs/verification/p1-agy-runtime.md](docs/verification/p1-agy-runtime.md).

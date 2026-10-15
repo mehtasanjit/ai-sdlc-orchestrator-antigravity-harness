@@ -39,7 +39,7 @@ routes it per policy, runs it, prices it and appends the telemetry row; you neve
 and never write the content yourself. There are two ways to hand a packet over, and which one you
 have depends on how this session was started:
 
-**Headless (`plugin/agy/run.mjs`, the measured runs).** The Antigravity CLI loads no plugin, MCP
+**Headless (`plugin/agy/run.mjs`, the cost check).** The Antigravity CLI loads no plugin, MCP
 server or hook in print mode (p1-agy-runtime.md check 1), so the bridge is *not* in your toolset.
 Write the TaskPacket to a JSON file and run:
 

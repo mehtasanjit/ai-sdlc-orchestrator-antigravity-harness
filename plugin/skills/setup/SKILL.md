@@ -153,15 +153,16 @@ Then try one of these:
   `/mmo:greenfield`          — generate a new app from a brief (empty folder)
   `/mmo:brownfield`   — work on this existing repo (docs, bugfix, feature, refactor, …)
   `/mmo:policy`       — change this project's model policy
-  `/mmo:pass`         — headless/scripted run (for CI or replays)
+  `/mmo:pass`         — the same run with every answer given up front as flags
 
 Current policy: <policyName>   (change: `/mmo:policy` change)
 ```
 
 Give the start command exactly as printed, never plain `agy`. Say plainly why, in one sentence:
 without `--model` the chat runs on agy's default model, while the run prices the conductor at the
-pin's rates and checks it against the pin, so the model check fails. If the script exits non-zero,
-print its error and STOP: the policy has no usable driver pin, and no run can start on it.
+pin's rates and checks the model it ran on against the pin's model, so the model check fails. If
+the script exits non-zero, print its error and STOP: the policy has no usable driver pin, and no
+run can start on it.
 
 Say plainly why a NEW session is required: agy loads a plugin's skills, rules, hooks and MCP
 servers when a session begins. In this session the setup changes are on disk but not live.
