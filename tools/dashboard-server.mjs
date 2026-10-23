@@ -104,15 +104,16 @@ function parseDriverSteps(events) {
   for (const su of Array.from(byIndex.values())) {
     if (su.step_type === "tool") {
       const params = su.tool_info?.parameters || {};
-      const target = params.CommandLine || params.Path || JSON.stringify(params);
-      const isDispatch = String(target).includes("dispatch.mjs");
+      const rawTarget = String(params.CommandLine || params.Path || JSON.stringify(params));
+      const target = rawTarget.split(REPO_ROOT + "/").join("");
+      const isDispatch = rawTarget.includes("dispatch.mjs");
       steps.push({
         step_index: su.step_index,
         type: isDispatch ? "dispatch" : "tool",
         state: su.state,
         name: su.tool_name,
         duration: su.duration_seconds ? `${su.duration_seconds.toFixed(2)}s` : "running...",
-        detail: String(target),
+        detail: target,
         output: su.tool_info?.output ? String(su.tool_info.output).slice(0, 600) : "",
       });
     } else if (su.step_type === "agent_response") {
