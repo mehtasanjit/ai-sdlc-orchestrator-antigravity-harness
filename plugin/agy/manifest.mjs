@@ -90,6 +90,9 @@ export function claudeWallet(env = process.env, login = null) {
 export function geminiDoor(policy, env = process.env) {
   const select = env.MMO_SELECT ?? env.SDLC_SELECT ?? "";
   const chosen = /gemini-flash=([^,\s]+)/.exec(select)?.[1] ?? policy?.select?.["gemini-flash"]?.default ?? null;
+  if (chosen === "flash-agy-cli") {
+    return { leaf: chosen, wallet: "agy-seat" };
+  }
   let backend = "vertex-adc";
   try { backend = resolveGeminiBackend({ env, keyEnvName: "GEMINI_API_KEY", adcFileExists: false }).backend; } catch { /* no credentials: the bridge would not have started */ }
   const wallet = chosen === "flash-agsdk-worker" || backend === "vertex-adc" ? "gcp" : "gemini-api-key";
@@ -182,7 +185,7 @@ export function cableSummary(dispatched) {
  * both sets lands on the `unclassified` line, never on a worker's.
  */
 export const CLAUDE_WORKER_ADAPTERS = new Set(["claude-agent-sdk", "claude-cli"]);
-export const GEMINI_WORKER_ADAPTERS = new Set(["mcp:model-dispatch", "antigravity-worker"]);
+export const GEMINI_WORKER_ADAPTERS = new Set(["mcp:model-dispatch", "antigravity-worker", "agy-cli"]);
 
 /**
  * The cost line one bridge event belongs to, from what the event itself
@@ -244,6 +247,9 @@ export function costLines({ dispatched, modeled, policy, pin, env = process.env,
   const gemini = on("gemini_workers");
   const unclassified = on("unclassified");
   const door = geminiDoor(policy, env);
+  const geminiWallets = lineWallet(gemini, { wallet: door.wallet });
+  const geminiSeatShare = (geminiWallets.wallets ?? []).filter((w) => w.wallet === "agy-seat");
+  const geminiKind = geminiWallets.wallet === "agy-seat" ? "modeled" : geminiSeatShare.length ? "mixed" : "cash";
   const claudeWallets = lineWallet(claude, wallet, { withArm: true });
   const seatShare = (claudeWallets.wallets ?? []).filter((w) => w.arm === "seat");
   const claudeKind = claudeWallets.arm === "seat" ? "modeled" : seatShare.length ? "mixed" : "cash";
@@ -268,7 +274,8 @@ export function costLines({ dispatched, modeled, policy, pin, env = process.env,
       ...driverRange(driverUsage),
       ...(unpriced.length ? { incomplete: true, unpriced_calls: unpriced } : {}),
     },
-    { line: "gemini_workers", kind: "cash", ...lineWallet(gemini, { wallet: door.wallet }), leaf: door.leaf, models: [...new Set(gemini.map((e) => e.model))], ...sum(gemini), ...attempts(gemini) },
+    { line: "gemini_workers", kind: geminiKind, ...geminiWallets, leaf: door.leaf, models: [...new Set(gemini.map((e) => e.model))], ...sum(gemini), ...attempts(gemini),
+      ...(geminiKind === "modeled" ? { basis: "MODELED: Gemini mechanical workers ran on the Antigravity CLI subscription seat (`agy -p`, wallet `agy-seat`) — tokens priced at the Gemini card, no invoice exists" } : {}) },
     { line: "claude_worker", kind: claudeKind, ...claudeWallets, models: [...new Set(claude.flatMap((e) => modelShares(e).map((s) => s.model)))], ...sum(claude), ...attempts(claude),
       cli_reported_cost_usd: r6(claude.reduce((s, e) => s + (e.cli_reported_cost_usd ?? 0), 0)),
       ...(claudeKind === "modeled" ? { basis: `MODELED: the Claude worker ran on a ${seatText(claudeWallets.subscription)} — tokens priced at the Anthropic card, no invoice exists` } : {}),
@@ -457,11 +464,13 @@ export function buildHarnessManifest({ runDir, policyName, runId, env = process.
       ...(driverLine.tokens_low ? { bound: "upper", low: driverLine.tokens_low } : {}),
     },
   };
-  // Claude calls on the seat are modeled too, so they leave the cash figure.
+  // Claude calls on the seat and Gemini calls on agy-seat are modeled too, so they leave the cash figure.
   const seat = claudeLine.kind !== "cash";
   const seatUsd = claudeLine.kind === "mixed" ? claudeLine.seat_modeled_usd : claudeLine.cost_usd;
+  const geminiSeat = geminiLine.kind === "modeled";
+  const geminiSeatUsd = geminiSeat ? geminiLine.cost_usd : 0;
   const cost = {
-    dispatched_cash_usd: seat ? r6(base.total_cost_usd - seatUsd) : base.total_cost_usd,
+    dispatched_cash_usd: r6(Math.max(0, base.total_cost_usd - (seat ? seatUsd : 0) - geminiSeatUsd)),
     driver_modeled_usd: driverLine.cost_usd,
     ...(driverLine.incomplete ? { driver_modeled_usd_is_floor: true } : {}),
     ...(driverLine.kind === "unmeasured" ? { driver_measured: false } : {}),

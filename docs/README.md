@@ -20,6 +20,7 @@ Direct, imperative. Each guide gets a specific job done.
 |---|---|
 | [Install & credentials](setup.md) | Setting up a fresh install: prerequisites, the two Claude arms and the seat, both Gemini doors, the per-project policy pick. |
 | [Run the harness](running.md) | The interactive skills, every flag on the headless driver, the pin gate, the resume loop, the offline smoke run. |
+| [Live tokenomics dashboard](live-dashboard.md) | Running `tools/dashboard-server.mjs` to watch the 3-tier agent roster, Conductor stream, and TaskPacket inspector in real time. |
 | [Bring your own brief](brief-template.md) | Writing a project brief in the section layout the requirements phase expects. |
 | [Brownfield walkthrough](brownfield.md) | Running `/mmo:brownfield` on an existing repo — the seven job types and the Gate 0 confirmation. |
 

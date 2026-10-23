@@ -3,6 +3,7 @@ import type { ModelAdapter } from "./ModelAdapter.js";
 import { GeminiFlashAdapter } from "./GeminiFlashAdapter.js";
 import { BuiltinAnthropicAdapter } from "./BuiltinAnthropicAdapter.js";
 import { AntigravityWorkerAdapter } from "./AntigravityWorkerAdapter.js";
+import { AgyCliAdapter } from "./AgyCliAdapter.js";
 import { ClaudeCliAdapter } from "./ClaudeCliAdapter.js";
 import { ClaudeAgentSdkAdapter } from "./ClaudeAgentSdkAdapter.js";
 import { log } from "../log.js";
@@ -14,6 +15,7 @@ import { log } from "../log.js";
  *   claude-cli         → Claude, via local `claude -p` subprocess (the previous default)
  *   mcp:model-dispatch → Gemini as a model (one completion call)
  *   antigravity-worker → Gemini as an agent (Antigravity SDK session)
+ *   agy-cli            → Gemini as a model via local `agy -p` subprocess (Google subscription seat)
  *
  * `claude-agent-sdk` and `claude-cli` reach the same three wallets by the
  * same doors — both inherit the bridge's environment, so ANTHROPIC_API_KEY,
@@ -47,6 +49,7 @@ const ADAPTER_FACTORIES: Record<string, (config: ModelConfig) => ModelAdapter> =
     return new GeminiFlashAdapter(config);
   },
   "antigravity-worker": (config) => new AntigravityWorkerAdapter(config),
+  "agy-cli": (config) => new AgyCliAdapter(config),
 };
 
 /** Every adapter id a policy may name, including the legacy compat alias. */

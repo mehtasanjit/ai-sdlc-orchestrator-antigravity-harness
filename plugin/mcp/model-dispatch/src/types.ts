@@ -551,7 +551,7 @@ export interface ExecutionResult {
  */
 export interface DispatchWallet {
   /** The manifest's wallet label; null when nothing the adapter saw settled it. */
-  name: "anthropic" | "gcp" | "claude-seat" | "gemini-api-key" | null;
+  name: "anthropic" | "gcp" | "claude-seat" | "gemini-api-key" | "agy-seat" | null;
   source: "reported" | "env" | "transport";
   /** Claude only: `A` Anthropic API key, `B` Vertex, `seat` claude.ai login. */
   arm?: "A" | "B" | "seat" | "unknown";

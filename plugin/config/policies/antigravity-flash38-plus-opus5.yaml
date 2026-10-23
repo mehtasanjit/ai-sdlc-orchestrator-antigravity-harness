@@ -88,13 +88,27 @@ models:
     pricing_last_verified: 2026-09-14
     worker_timeout_sec: 540
 
+  # Door 3: Gemini 3.8 Flash via local `agy -p` subprocess on the user's
+  # Antigravity subscription seat (wallet: agy-seat, $0 cash invoice).
+  - id: flash-agy-cli
+    adapter: agy-cli
+    model_name: gemini-3.8-flash
+    display_name: gemini-3.8-flash (agy -p seat)
+    pricing: { input: 0.75, input_cached: 0.075, output: 3.75 }
+    pricing_source: https://ai.google.dev/gemini-api/docs/pricing (AI Studio + Vertex global); https://cloud.google.com/vertex-ai/generative-ai/pricing (regional +10%)
+    pricing_last_verified: 2026-09-14
+    reasoning: { tier: low }
+    max_output_tokens_absolute: 8192
+    worker_timeout_sec: 300
+
 select:
   gemini-flash:
-    default: flash-completion
+    default: flash-agy-cli
     options:
+      - flash-agy-cli
       - flash-completion
       - flash-agsdk-worker
-    reason: "How the mechanical tier reaches Gemini 3.8: one completion call (cheap, predictable) or an agent session with tools and a workspace (costlier per packet, does its own reading and editing). Pick one per study and pin it."
+    reason: "How the mechanical tier reaches Gemini 3.8: local agy -p on the Antigravity subscription seat ($0 cash), one REST API completion call (GEMINI_API_KEY/ADC), or an Antigravity SDK agent session."
 
 rules:
   # The brownfield pre-check's dispatch smoke (brownfield-guide step 2). It
