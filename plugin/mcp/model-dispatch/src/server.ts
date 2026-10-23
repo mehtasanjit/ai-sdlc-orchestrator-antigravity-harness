@@ -187,26 +187,43 @@ function preflightDispatch(policy: Policy, authMode: AuthMode) {
   // Resolved Gemini configuration — the project and region the run will bill.
   const adcPath = defaultAdcPath();
   const adcFileExists = existsSync(adcPath);
+  const activeModels = policy.models.filter((m) => !notSelected.has(m.id));
+  const usesAgyCliOnly =
+    activeModels.some((m) => m.adapter === "agy-cli") &&
+    !activeModels.some(
+      (m) =>
+        m.adapter === "mcp:model-dispatch" ||
+        m.adapter === "mcp:gemini-flash-server" ||
+        m.adapter === "antigravity-worker",
+    );
   let gemini: Record<string, unknown>;
-  try {
-    const keyEnvName =
-      policy.models.find(
-        (m) => m.adapter === "mcp:model-dispatch" || m.adapter === "mcp:gemini-flash-server"
-      )?.auth?.env ?? "GEMINI_API_KEY";
-    const choice = selectGeminiBackend({ env: process.env, keyEnvName, adcFileExists });
+  if (usesAgyCliOnly) {
     gemini = {
-      backend: choice.backend,
-      reason: choice.reason,
+      backend: "agy-seat",
+      reason: "agy-cli adapter selected (Google Antigravity subscription seat via local `agy -p`)",
       adc_file: adcFileExists ? adcPath : null,
-      ...(choice.backend === "vertex-adc"
-        ? {
-            project: resolveGcpProject(process.env, adcPath),
-            location: resolveGcpLocation(process.env),
-          }
-        : {}),
     };
-  } catch (err: any) {
-    gemini = { backend: null, error: err?.message ?? String(err), adc_file: adcFileExists ? adcPath : null };
+  } else {
+    try {
+      const keyEnvName =
+        policy.models.find(
+          (m) => m.adapter === "mcp:model-dispatch" || m.adapter === "mcp:gemini-flash-server"
+        )?.auth?.env ?? "GEMINI_API_KEY";
+      const choice = selectGeminiBackend({ env: process.env, keyEnvName, adcFileExists });
+      gemini = {
+        backend: choice.backend,
+        reason: choice.reason,
+        adc_file: adcFileExists ? adcPath : null,
+        ...(choice.backend === "vertex-adc"
+          ? {
+              project: resolveGcpProject(process.env, adcPath),
+              location: resolveGcpLocation(process.env),
+            }
+          : {}),
+      };
+    } catch (err: any) {
+      gemini = { backend: null, error: err?.message ?? String(err), adc_file: adcFileExists ? adcPath : null };
+    }
   }
 
   for (const m of assessment.models) {
